@@ -3534,6 +3534,7 @@ private final class TapGainEngine: GainEngine {
         }
         self.configuration = configuration
         let ramp = TapLevelRamp()
+        let appliedGain = MixerRender.AppliedGain()
         let perAppEQ = MixerParametricEQ(sampleRate: sampleRate)
         if let initialEQ = AppVolumeMixer.consumeInitialEQConfiguration(forObjects: objects) {
             perAppEQ.update(gainsDB: initialEQ.gainsDB, preampDB: initialEQ.preampDB)
@@ -3573,6 +3574,7 @@ private final class TapGainEngine: GainEngine {
             guard configuration.canRender else {
                 MixerRender.silence(outputBuffers)
                 limiterBox.reset()
+                appliedGain.reset()
                 return
             }
             // The output clock keeps moving through a short or missing tap
@@ -3585,6 +3587,7 @@ private final class TapGainEngine: GainEngine {
                 // whatever the HAL left there plays otherwise (issue #326).
                 MixerRender.silence(outputBuffers)
                 limiterBox.noteSilentCycle()
+                appliedGain.reset()
                 return
             }
             let gain = box.value * ramp.next(toward: compensation.value, hostTime: now.pointee.mHostTime)
@@ -3592,10 +3595,14 @@ private final class TapGainEngine: GainEngine {
             // here on leaves the output written.
             let frames = MixerRender.render(source: inputBuffers[tapIndex],
                                             into: outputBuffers,
-                                            gain: gain)
+                                            gain: gain,
+                                            rampingFrom: appliedGain)
             // Draining delayed audio alone must not hide a stalled capture
             // from the engine's recovery check.
-            guard frames > 0 else { return }
+            guard frames > 0 else {
+                appliedGain.reset()
+                return
+            }
             limiterBox.processEQAndMeter(outputBuffers, frames: frames)
             cycles.increment()
         }) == noErr else {
