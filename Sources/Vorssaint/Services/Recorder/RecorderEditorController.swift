@@ -39,6 +39,7 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
     @Published private(set) var editPresets: [RecorderEditPreset] = []
     @Published private(set) var isUpdatingPreset = false
     @Published private(set) var audioWaveforms: [RecorderAudioSource: [Float]] = [:]
+    @Published private(set) var isTranscribingCaptions = false
     @Published var document: RecorderEditDocument {
         didSet { documentDidChange(from: oldValue) }
     }
@@ -1821,5 +1822,41 @@ final class RecorderEditorController: NSObject, NSWindowDelegate {
                 return event
             }
         }
+    }
+}
+
+extension RecorderEditorModel {
+    // MARK: - Studio & Transcript
+
+    @MainActor
+    func transcribeCaptions() async {
+        guard !isTranscribingCaptions else { return }
+        isTranscribingCaptions = true
+        defer { isTranscribingCaptions = false }
+        let segments = await RecorderSpeechTranscriber.transcribeAudio(at: take.videoURL)
+        guard !segments.isEmpty else { return }
+        var next = document
+        next.captions = segments
+        next.captionsEnabled = true
+        document = next
+    }
+
+    func toggleCaptionCut(_ id: UUID) {
+        guard let idx = document.captions.firstIndex(where: { $0.id == id }) else { return }
+        let oldRanges = Set(RecorderCaptionSegment.cutsFromDeletedCaptions(document.captions)
+            .map { "\(Int(($0.start * 1000).rounded())):\(Int(($0.end * 1000).rounded()))" })
+        var next = document
+        next.captions[idx].isCut.toggle()
+        let manualCuts = next.cuts.filter { cut in
+            let key = "\(Int((cut.start * 1000).rounded())):\(Int((cut.end * 1000).rounded()))"
+            return !oldRanges.contains(key)
+        }
+        let captionCuts = RecorderCaptionSegment.cutsFromDeletedCaptions(next.captions)
+        next.cuts = RecorderTimeline.normalized(cuts: manualCuts + captionCuts, duration: duration)
+        document = next
+    }
+
+    func exportCaptionsSRT() -> String {
+        RecorderCaptionSegment.formatSRT(document.captions)
     }
 }

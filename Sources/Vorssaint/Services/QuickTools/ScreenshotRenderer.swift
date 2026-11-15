@@ -697,21 +697,20 @@ enum ScreenshotRenderer {
         }
         guard !sides.isEmpty else { return nil }
 
-        // A node on each edge and every few pixels between: the fill then
-        // meets its surroundings right at its border, and neighboring nodes
-        // differ too little for the stretch to full size to show.
-        let cell = max(4, max(area.width, area.height) / 128)
+        // Fine patch mesh with edge-biased falloff so curved gradients and
+        // glossy panes heal seamlessly along all 4 boundaries.
+        let cell = max(2, max(area.width, area.height) / 160)
         let columns = Int((area.width / cell).rounded(.up)) + 1
         let rows = Int((area.height / cell).rounded(.up)) + 1
         let width = Float(area.width)
         let height = Float(area.height)
         let xs = (0..<columns).map { Float($0) / Float(columns - 1) * width }
         let ys = (0..<rows).map { Float($0) / Float(rows - 1) * height }
-        // 1 / distance blends each pair of opposite sides linearly. A missing
-        // side weighs nothing.
+        // Inverse power-distance falloff keeps each edge dominant right against
+        // its border while smoothly blending corners across all 4 sides.
         func weights(_ edge: EraseSide.Edge, _ distances: [Float]) -> [Float] {
             guard let side = sides[edge] else { return [Float](repeating: 0, count: distances.count) }
-            return distances.map { 1 / max(0.5, $0 + side.offset) }
+            return distances.map { 1.0 / powf(max(0.5, $0 + side.offset), 1.35) }
         }
         func colors(_ edge: EraseSide.Edge, _ positions: [Float], _ length: Float) -> [Float] {
             sides[edge]?.colors(at: positions, along: length)

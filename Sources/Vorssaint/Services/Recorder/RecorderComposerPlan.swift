@@ -257,7 +257,14 @@ extension RecorderComposer {
                     imageSprites: imageSprites,
                     imageOpacity: imageOpacity,
                     blurs: blurs,
-                    blurCovers: blurCovers)
+                    blurCovers: blurCovers,
+                    motionBlurEnabled: document.motionBlurEnabled,
+                    motionBlurStrength: document.motionBlurStrength,
+                    cameraBubble: document.cameraBubble,
+                    keystrokesEnabled: document.keystrokesEnabled,
+                    keystrokes: document.keystrokes,
+                    captionsEnabled: document.captionsEnabled,
+                    captions: document.captions)
     }
 
     // MARK: - Plate

@@ -25,8 +25,12 @@ struct RecorderInspector: View {
         FeatureStrings.screenshot(l10n.language)
     }
 
+    private var wave2: OverhaulWave2Strings {
+        OverhaulStrings.wave2(l10n.language)
+    }
+
     private enum Tab: String, CaseIterable {
-        case look, pointer, zoom
+        case look, pointer, zoom, studio
     }
 
     var body: some View {
@@ -60,6 +64,8 @@ struct RecorderInspector: View {
                         }
                     case .zoom:
                         zoomSection
+                    case .studio:
+                        studioSection
                     }
                 }
             }
@@ -76,6 +82,7 @@ struct RecorderInspector: View {
             Text(strings.lookLabel).tag(Tab.look)
             Text(strings.pointerSectionLabel).tag(Tab.pointer)
             Text(strings.zoomSectionLabel).tag(Tab.zoom)
+            Text(wave2.studioTabTitle).tag(Tab.studio)
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -810,6 +817,149 @@ struct RecorderInspector: View {
                     next.aspect = newValue
                     model.document = next
                 })
+    }
+
+    // MARK: - Studio
+
+    private var studioSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle(wave2.studioTabTitle)
+            Toggle(wave2.motionBlurTitle, isOn: boolBinding(\.motionBlurEnabled))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+            if model.document.motionBlurEnabled {
+                backgroundSlider(
+                    title: wave2.motionBlurTitle,
+                    value: model.document.motionBlurStrength,
+                    onChange: { value in
+                        var next = model.document
+                        next.motionBlurStrength = value
+                        model.document = next
+                    },
+                    onReset: {
+                        var next = model.document
+                        next.motionBlurStrength = 0.5
+                        model.document = next
+                    }
+                )
+            }
+
+            Picker(wave2.clickSFXTitle, selection: Binding(
+                get: { model.document.clickSFXStyle },
+                set: { newValue in
+                    var next = model.document
+                    next.clickSFXStyle = newValue
+                    model.document = next
+                }
+            )) {
+                Text("Off").tag(RecorderClickSFXStyle.off.rawValue)
+                Text("Soft").tag(RecorderClickSFXStyle.softTap.rawValue)
+                Text("Mechanical").tag(RecorderClickSFXStyle.mechanical.rawValue)
+                Text("Crisp").tag(RecorderClickSFXStyle.crispPop.rawValue)
+            }
+            .pickerStyle(.menu)
+
+            Toggle(wave2.keystrokeHUDTitle, isOn: boolBinding(\.keystrokesEnabled))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+
+            Divider().opacity(0.35)
+            sectionTitle(wave2.cameraBubbleTitle)
+            Toggle(wave2.cameraBubbleTitle, isOn: Binding(
+                get: { model.document.cameraBubble.isEnabled },
+                set: { enabled in
+                    var next = model.document
+                    next.cameraBubble.isEnabled = enabled
+                    model.document = next
+                }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            if model.document.cameraBubble.isEnabled {
+                Toggle(wave2.cameraAutoShrinkLabel, isOn: Binding(
+                    get: { model.document.cameraBubble.autoShrinkOnPointerNear },
+                    set: { shrink in
+                        var next = model.document
+                        next.cameraBubble.autoShrinkOnPointerNear = shrink
+                        model.document = next
+                    }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+            }
+
+            Divider().opacity(0.35)
+            sectionTitle(wave2.captionsTrackTitle)
+            Toggle(wave2.captionsTrackTitle, isOn: boolBinding(\.captionsEnabled))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+            HStack(spacing: 8) {
+                Button {
+                    Task { @MainActor in
+                        await model.transcribeCaptions()
+                    }
+                } label: {
+                    if model.isTranscribingCaptions {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(wave2.transcribeAudioButton)
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(model.isTranscribingCaptions)
+
+                if !model.document.captions.isEmpty {
+                    Button(wave2.exportSRTButton) {
+                        saveSRTPanel()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            if model.document.captions.isEmpty {
+                Text(wave2.captionsEmptyHint)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(model.document.captions) { segment in
+                        HStack(spacing: 6) {
+                            Button {
+                                model.toggleCaptionCut(segment.id)
+                            } label: {
+                                Image(systemName: segment.isCut ? "scissors.circle.fill" : "scissors")
+                                    .foregroundStyle(segment.isCut ? Color.orange : Color.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            Text(segment.text)
+                                .font(.system(size: 10.5))
+                                .strikethrough(segment.isCut)
+                                .foregroundStyle(segment.isCut ? .secondary : .primary)
+                                .lineLimit(2)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+                .padding(8)
+                .background(Color.white.opacity(0.035),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+    }
+
+    private func saveSRTPanel() {
+        let srt = model.exportCaptionsSRT()
+        guard !srt.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "captions.srt"
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            try? srt.write(to: url, atomically: true, encoding: .utf8)
+        }
     }
 
 }

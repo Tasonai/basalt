@@ -29,6 +29,13 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
 
     @Published var selectedID: UUID?
     @Published var editingTextID: UUID?
+    @Published var pixelRulerActive = false {
+        didSet {
+            if !pixelRulerActive { pixelRulerMeasurement = nil }
+        }
+    }
+    @Published private(set) var pixelRulerMeasurement: ScreenshotPixelRuler.Measurement?
+    @Published var smartRedactLastCount: Int?
     @Published var tool: ScreenshotSupport.Tool {
         didSet {
             UserDefaults.standard.set(tool.rawValue, forKey: DefaultsKey.screenshotLastTool)
@@ -641,6 +648,34 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
     private func pruneCarriedRuns() {
         let live = Set([ObjectIdentifier(baseImage)] + (undoStack + redoStack).map { ObjectIdentifier($0.image) })
         carriedRuns = carriedRuns.filter { live.contains($0.key) }
+    }
+
+    @discardableResult
+    func applySmartRedact() -> Int {
+        let matches = ScreenshotSmartRedact.detectRegions(in: baseImage)
+        guard !matches.isEmpty else {
+            smartRedactLastCount = 0
+            return 0
+        }
+        registerUndo()
+        for match in matches where !match.rect.isEmpty {
+            let annotation = ScreenshotSupport.Annotation(
+                tool: .redact,
+                rect: match.rect,
+                color: .black
+            )
+            annotations.append(annotation)
+        }
+        smartRedactLastCount = matches.count
+        return matches.count
+    }
+
+    func updatePixelRuler(at point: CGPoint?) {
+        guard pixelRulerActive, let point else {
+            if pixelRulerMeasurement != nil { pixelRulerMeasurement = nil }
+            return
+        }
+        pixelRulerMeasurement = ScreenshotPixelRuler.measureContrastSpan(in: baseImage, from: point)
     }
 
     private func restore(_ state: (image: CGImage, annotations: [ScreenshotSupport.Annotation])) {

@@ -154,6 +154,7 @@ enum ColorCopyFormat: String, CaseIterable, Identifiable {
     case rgb
     case hsl
     case swiftui
+    case oklch
 
     var id: String { rawValue }
 
@@ -164,6 +165,7 @@ enum ColorCopyFormat: String, CaseIterable, Identifiable {
         case .rgb: return "RGB"
         case .hsl: return "HSL"
         case .swiftui: return "SwiftUI"
+        case .oklch: return "OKLCH"
         }
     }
 
@@ -218,7 +220,44 @@ extension ColorValue {
             let rgb = String(format: "red: %.3f, green: %.3f, blue: %.3f", locale: posix, r, g, b)
             return a.map { "Color(\(rgb), opacity: \(String(format: "%.3f", locale: posix, $0)))" }
                 ?? "Color(\(rgb))"
+        case .oklch:
+            let posix = Locale(identifier: "en_US_POSIX")
+            let (l, c, h) = oklch(red: r, green: g, blue: b)
+            let base = String(format: "oklch(%.1f%% %.3f %.1f)",
+                              locale: posix, l * 100.0, c, h)
+            guard let alphaText else { return base }
+            return String(format: "oklch(%.1f%% %.3f %.1f / %@)",
+                          locale: posix, l * 100.0, c, h,
+                          alphaText)
         }
+    }
+
+    /// Converts sRGB (0...1) components to OKLCH (Lightness 0...1, Chroma >= 0, Hue 0..<360).
+    static func oklch(red: Double, green: Double, blue: Double) -> (lightness: Double, chroma: Double, hue: Double) {
+        func linearize(_ c: Double) -> Double {
+            c <= 0.04045 ? (c / 12.92) : pow((c + 0.055) / 1.055, 2.4)
+        }
+        let r = linearize(min(max(red, 0), 1))
+        let g = linearize(min(max(green, 0), 1))
+        let b = linearize(min(max(blue, 0), 1))
+
+        let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+        let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+        let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+
+        let l_ = cbrt(l)
+        let m_ = cbrt(m)
+        let s_ = cbrt(s)
+
+        let L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
+        let A = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
+        let B = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
+
+        let C = hypot(A, B)
+        var H = atan2(B, A) * 180.0 / .pi
+        if H < 0 { H += 360.0 }
+        if C < 0.00001 { H = 0 }
+        return (min(1, max(0, L)), C, H)
     }
 
     static func hsl(red: Double, green: Double, blue: Double) -> (hue: Double, saturation: Double, lightness: Double) {

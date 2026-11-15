@@ -93,6 +93,7 @@ enum LocalizationTests {
                 ("downloadOrganizer", { WhatsAppOrganizerStrings.localized($0) }),
                 ("shelfDelivery", { ShelfPromiseDeliveryStrings.localized($0) }),
                 ("overhaul", { OverhaulStrings.localized($0) }),
+                ("overhaulWave2", { OverhaulStrings.wave2($0) }),
             ]
             for (name, factory) in factories + additional {
                 check(factory(language), against: factory(.enUS),

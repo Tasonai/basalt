@@ -52,6 +52,14 @@ struct RecorderEditDocument: Codable, Equatable {
     var keepsMicrophone: Bool
     var systemAudioGain: Double
     var microphoneGain: Double
+    var motionBlurEnabled: Bool
+    var motionBlurStrength: Double
+    var clickSFXStyle: String
+    var cameraBubble: RecorderCameraBubbleConfig
+    var keystrokesEnabled: Bool
+    var keystrokes: [RecorderKeystrokeEvent]
+    var captionsEnabled: Bool
+    var captions: [RecorderCaptionSegment]
 
     init(trimStart: Double = 0,
          trimEnd: Double = 0,
@@ -77,7 +85,15 @@ struct RecorderEditDocument: Codable, Equatable {
          blurs: [RecorderBlurRegion] = [],
          keepsMicrophone: Bool = true,
          systemAudioGain: Double = 1,
-         microphoneGain: Double = 1) {
+         microphoneGain: Double = 1,
+         motionBlurEnabled: Bool = false,
+         motionBlurStrength: Double = 0.5,
+         clickSFXStyle: String = RecorderClickSFXStyle.off.rawValue,
+         cameraBubble: RecorderCameraBubbleConfig = .init(),
+         keystrokesEnabled: Bool = true,
+         keystrokes: [RecorderKeystrokeEvent] = [],
+         captionsEnabled: Bool = true,
+         captions: [RecorderCaptionSegment] = []) {
         self.trimStart = trimStart
         self.trimEnd = trimEnd
         self.quality = quality
@@ -103,6 +119,14 @@ struct RecorderEditDocument: Codable, Equatable {
         self.keepsMicrophone = keepsMicrophone
         self.systemAudioGain = systemAudioGain
         self.microphoneGain = microphoneGain
+        self.motionBlurEnabled = motionBlurEnabled
+        self.motionBlurStrength = min(1, max(0, motionBlurStrength))
+        self.clickSFXStyle = RecorderClickSFXStyle.sanitized(clickSFXStyle).rawValue
+        self.cameraBubble = cameraBubble
+        self.keystrokesEnabled = keystrokesEnabled
+        self.keystrokes = keystrokes
+        self.captionsEnabled = captionsEnabled
+        self.captions = captions
     }
 
     /// A document written before these fields existed still opens: every one
@@ -139,6 +163,20 @@ struct RecorderEditDocument: Codable, Equatable {
         keepsMicrophone = try container.decodeIfPresent(Bool.self, forKey: .keepsMicrophone) ?? true
         systemAudioGain = try container.decodeIfPresent(Double.self, forKey: .systemAudioGain) ?? 1
         microphoneGain = try container.decodeIfPresent(Double.self, forKey: .microphoneGain) ?? 1
+        motionBlurEnabled = try container.decodeIfPresent(Bool.self, forKey: .motionBlurEnabled) ?? false
+        motionBlurStrength = min(1, max(0, try container.decodeIfPresent(Double.self,
+                                                                       forKey: .motionBlurStrength) ?? 0.5))
+        clickSFXStyle = RecorderClickSFXStyle.sanitized(
+            try container.decodeIfPresent(String.self, forKey: .clickSFXStyle) ?? "off"
+        ).rawValue
+        cameraBubble = try container.decodeIfPresent(RecorderCameraBubbleConfig.self,
+                                                     forKey: .cameraBubble) ?? .init()
+        keystrokesEnabled = try container.decodeIfPresent(Bool.self, forKey: .keystrokesEnabled) ?? true
+        keystrokes = try container.decodeIfPresent([RecorderKeystrokeEvent].self,
+                                                   forKey: .keystrokes) ?? []
+        captionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .captionsEnabled) ?? true
+        captions = try container.decodeIfPresent([RecorderCaptionSegment].self,
+                                                 forKey: .captions) ?? []
     }
 
     // MARK: - Timeline
@@ -289,6 +327,13 @@ struct RecorderEditDocument: Codable, Equatable {
             || texts != other.texts
             || images != other.images
             || blurs != other.blurs
+            || motionBlurEnabled != other.motionBlurEnabled
+            || motionBlurStrength != other.motionBlurStrength
+            || cameraBubble != other.cameraBubble
+            || keystrokesEnabled != other.keystrokesEnabled
+            || keystrokes != other.keystrokes
+            || captionsEnabled != other.captionsEnabled
+            || captions != other.captions
     }
 
     /// Whether the finished video would run differently, which is what forces
@@ -303,6 +348,7 @@ struct RecorderEditDocument: Codable, Equatable {
             || keepsMicrophone != other.keepsMicrophone
             || systemAudioGain != other.systemAudioGain
             || microphoneGain != other.microphoneGain
+            || clickSFXStyle != other.clickSFXStyle
     }
 
     /// True once the person has actually changed something worth warning about
@@ -313,6 +359,9 @@ struct RecorderEditDocument: Codable, Equatable {
             || !keepsMicrophone || systemAudioGain != 1 || microphoneGain != 1
             || !cuts.isEmpty || !zoomSegments.isEmpty || !texts.isEmpty || !blurs.isEmpty
             || !images.isEmpty || exportTiming.speed != 1
+            || motionBlurEnabled || cameraBubble.isEnabled
+            || clickSFXStyle != RecorderClickSFXStyle.off.rawValue
+            || !captions.isEmpty
     }
 
     /// A damaged or hand-edited document can never wedge the editor: every
@@ -332,6 +381,8 @@ struct RecorderEditDocument: Codable, Equatable {
         document.zoomAmount = RecorderSupport.sanitizedZoomAmount(zoomAmount)
         document.systemAudioGain = RecorderSupport.sanitizedAudioGain(systemAudioGain)
         document.microphoneGain = RecorderSupport.sanitizedAudioGain(microphoneGain)
+        document.motionBlurStrength = min(1, max(0, motionBlurStrength.isFinite ? motionBlurStrength : 0.5))
+        document.clickSFXStyle = RecorderClickSFXStyle.sanitized(clickSFXStyle).rawValue
         let backdropStyle = resolvedBackdrop
         document.backdrop = backdropStyle.kind == .none ? "" : backdropStyle.encoded()
         document.cuts = RecorderTimeline.normalized(cuts: cuts, duration: duration)

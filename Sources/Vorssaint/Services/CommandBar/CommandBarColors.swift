@@ -16,6 +16,7 @@ enum CommandBarColors {
         "hex": (.hex, false),
         "rgb": (.rgb, false), "rgba": (.rgb, true),
         "hsl": (.hsl, false), "hsla": (.hsl, true),
+        "oklch": (.oklch, false),
         "swift": (.swiftui, false), "swiftui": (.swiftui, false),
     ]
 

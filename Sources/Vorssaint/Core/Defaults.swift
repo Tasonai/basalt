@@ -682,6 +682,7 @@ enum DefaultsKey {
     static let screenshotClipboardShortcut = "screenshotClipboardShortcut"
     static let screenshotFreeze = "screenshotFreeze"
     static let screenshotHideVorssaintWindows = "screenshotHideVorssaintWindows"
+    static let screenshotHideDesktopIcons = "screenshotHideDesktopIcons"
     static let screenshotSaveFolder = "screenshotSaveFolder"
     static let screenshotSaveSubfolder = "screenshotSaveSubfolder"
     static let screenshotFileNamePattern = "screenshotFileNamePattern"
@@ -1922,6 +1923,7 @@ enum Defaults {
         DefaultsKey.screenshotClipboardShortcut: GlobalShortcut.screenshotClipboardDefault.storageValue,
         DefaultsKey.screenshotFreeze: true,
         DefaultsKey.screenshotHideVorssaintWindows: true,
+        DefaultsKey.screenshotHideDesktopIcons: false,
         DefaultsKey.screenshotSaveFolder: "",
         DefaultsKey.screenshotSaveSubfolder: "",
         DefaultsKey.screenshotFileNamePattern: "",

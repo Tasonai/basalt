@@ -243,6 +243,7 @@ struct MetricsTests {
             }),
             ("emoji", { CommandBarEmojiContract.run(suite) }),
             ("wave1-overhaul", { Wave1OverhaulContract.run(suite) }),
+            ("wave2-overhaul", { Wave2OverhaulContract.run(suite) }),
         ]
         var selected = Set<String>()
         var listOnly = false

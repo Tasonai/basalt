@@ -574,3 +574,287 @@ struct OverhaulStrings {
         }
     }
 }
+
+/// Localized Wave 2 strings (Recorder Studio & Screenshot Pro).
+struct OverhaulWave2Strings: Sendable {
+    let studioTabTitle: String
+    let cameraBubbleTitle: String
+    let cameraAutoShrinkLabel: String
+    let keystrokeHUDTitle: String
+    let clickSFXTitle: String
+    let motionBlurTitle: String
+    let captionsTrackTitle: String
+    let transcribeAudioButton: String
+    let exportSRTButton: String
+    let captionsEmptyHint: String
+    let smartRedactButton: String
+    let smartRedactAppliedToast: String
+    let pixelRulerToolTitle: String
+    let hideDesktopIconsLabel: String
+
+    static func localized(_ language: AppLanguage) -> OverhaulWave2Strings {
+        switch language {
+        case .enUS:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Studio",
+                cameraBubbleTitle: "Camera bubble",
+                cameraAutoShrinkLabel: "Auto-shrink near cursor",
+                keystrokeHUDTitle: "Keystroke HUD",
+                clickSFXTitle: "Click sound",
+                motionBlurTitle: "Motion blur",
+                captionsTrackTitle: "Transcript & captions",
+                transcribeAudioButton: "Transcribe audio",
+                exportSRTButton: "Export SRT",
+                captionsEmptyHint: "Run on-device speech recognition to edit or trim by spoken lines.",
+                smartRedactButton: "Smart Redact",
+                smartRedactAppliedToast: "Redacted %d sensitive items",
+                pixelRulerToolTitle: "Pixel ruler",
+                hideDesktopIconsLabel: "Hide desktop icons in captures"
+            )
+        case .ru:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Студия",
+                cameraBubbleTitle: "Круглая камера",
+                cameraAutoShrinkLabel: "Уменьшать рядом с курсором",
+                keystrokeHUDTitle: "Клавиши на экране",
+                clickSFXTitle: "Звук кликов",
+                motionBlurTitle: "Размытие движения",
+                captionsTrackTitle: "Титры и расшифровка",
+                transcribeAudioButton: "Распознать речь",
+                exportSRTButton: "Экспорт SRT",
+                captionsEmptyHint: "Распознайте речь локально, чтобы править титры и вырезать паузы.",
+                smartRedactButton: "Умное скрытие",
+                smartRedactAppliedToast: "Скрыто объектов: %d",
+                pixelRulerToolTitle: "Линейка px",
+                hideDesktopIconsLabel: "Скрывать значки рабочего стола на снимках"
+            )
+        case .ptBR:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Estúdio",
+                cameraBubbleTitle: "Bolha da câmera",
+                cameraAutoShrinkLabel: "Reduzir perto do cursor",
+                keystrokeHUDTitle: "Teclas na tela",
+                clickSFXTitle: "Som do clique",
+                motionBlurTitle: "Desfoque de movimento",
+                captionsTrackTitle: "Legendas e transcrição",
+                transcribeAudioButton: "Transcrever áudio",
+                exportSRTButton: "Exportar SRT",
+                captionsEmptyHint: "Transcreva localmente para editar legendas e cortar trechos falados.",
+                smartRedactButton: "Ocultação inteligente",
+                smartRedactAppliedToast: "%d dados sensíveis ocultados",
+                pixelRulerToolTitle: "Régua de pixels",
+                hideDesktopIconsLabel: "Ocultar ícones da mesa nas capturas"
+            )
+        case .tr:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Stüdyo",
+                cameraBubbleTitle: "Kamera balonu",
+                cameraAutoShrinkLabel: "İmlece yaklaşınca küçült",
+                keystrokeHUDTitle: "Tuş göstergesi",
+                clickSFXTitle: "Tıklama sesi",
+                motionBlurTitle: "Hareket bulanıklığı",
+                captionsTrackTitle: "Altyazı ve döküm",
+                transcribeAudioButton: "Sesi yazıya dök",
+                exportSRTButton: "SRT dışa aktar",
+                captionsEmptyHint: "Cümlelere göre kesmek ve düzenlemek için cihazda konuşma tanımayı başlatın.",
+                smartRedactButton: "Akıllı Gizle",
+                smartRedactAppliedToast: "%d hassas öğe gizlendi",
+                pixelRulerToolTitle: "Piksel cetveli",
+                hideDesktopIconsLabel: "Yakalarken masaüstü simgelerini gizle"
+            )
+        case .es:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Estudio",
+                cameraBubbleTitle: "Burbuja de cámara",
+                cameraAutoShrinkLabel: "Reducir cerca del cursor",
+                keystrokeHUDTitle: "Teclas en pantalla",
+                clickSFXTitle: "Sonido de clic",
+                motionBlurTitle: "Desenfoque de movimiento",
+                captionsTrackTitle: "Transcripción y textos",
+                transcribeAudioButton: "Transcribir audio",
+                exportSRTButton: "Exportar SRT",
+                captionsEmptyHint: "Ejecuta el reconocimiento local para editar o recortar por frases.",
+                smartRedactButton: "Censura inteligente",
+                smartRedactAppliedToast: "%d elementos sensibles ocultos",
+                pixelRulerToolTitle: "Regla de píxeles",
+                hideDesktopIconsLabel: "Ocultar iconos del escritorio al capturar"
+            )
+        case .sk:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Štúdio",
+                cameraBubbleTitle: "Bublina kamery",
+                cameraAutoShrinkLabel: "Zmenšiť pri kurzore",
+                keystrokeHUDTitle: "Klávesy na obrazovke",
+                clickSFXTitle: "Zvuk kliknutia",
+                motionBlurTitle: "Rozmazanie pohybu",
+                captionsTrackTitle: "Titulky a prepis",
+                transcribeAudioButton: "Prepísať reč",
+                exportSRTButton: "Exportovať SRT",
+                captionsEmptyHint: "Spustite lokálne rozpoznávanie reči na úpravu a strih podľa viet.",
+                smartRedactButton: "Chytré skrytie",
+                smartRedactAppliedToast: "Skrytých položiek: %d",
+                pixelRulerToolTitle: "Pixelové pravítko",
+                hideDesktopIconsLabel: "Skryť ikony plochy pri snímke"
+            )
+        case .de:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Studio",
+                cameraBubbleTitle: "Kamera-Blase",
+                cameraAutoShrinkLabel: "Am Zeiger verkleinern",
+                keystrokeHUDTitle: "Tasten-HUD",
+                clickSFXTitle: "Klick-Sound",
+                motionBlurTitle: "Bewegungsunschärfe",
+                captionsTrackTitle: "Transkript & Texte",
+                transcribeAudioButton: "Audio transkribieren",
+                exportSRTButton: "SRT exportieren",
+                captionsEmptyHint: "Lokale Spracherkennung starten, um Textzeilen zu schneiden.",
+                smartRedactButton: "Smart-Schwärzen",
+                smartRedactAppliedToast: "%d sensible Bereiche verdeckt",
+                pixelRulerToolTitle: "Pixel-Lineal",
+                hideDesktopIconsLabel: "Schreibtischsymbole bei Aufnahmen ausblenden"
+            )
+        case .fr:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Studio",
+                cameraBubbleTitle: "Bulle caméra",
+                cameraAutoShrinkLabel: "Réduire près du curseur",
+                keystrokeHUDTitle: "Affichage des touches",
+                clickSFXTitle: "Son du clic",
+                motionBlurTitle: "Flou de mouvement",
+                captionsTrackTitle: "Transcription et légendes",
+                transcribeAudioButton: "Transcrire l'audio",
+                exportSRTButton: "Exporter SRT",
+                captionsEmptyHint: "Lancez la dictée locale pour éditer ou couper par phrase.",
+                smartRedactButton: "Masquage intelligent",
+                smartRedactAppliedToast: "%d éléments sensibles masqués",
+                pixelRulerToolTitle: "Règle en pixels",
+                hideDesktopIconsLabel: "Masquer les icônes du bureau lors des captures"
+            )
+        case .it:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Studio",
+                cameraBubbleTitle: "Bolla webcam",
+                cameraAutoShrinkLabel: "Riduci vicino al cursore",
+                keystrokeHUDTitle: "Tasti su schermo",
+                clickSFXTitle: "Suono clic",
+                motionBlurTitle: "Sfocatura movimento",
+                captionsTrackTitle: "Trascrizione e testi",
+                transcribeAudioButton: "Trascrivi audio",
+                exportSRTButton: "Esporta SRT",
+                captionsEmptyHint: "Avvia il riconoscimento locale per tagliare o modificare le frasi.",
+                smartRedactButton: "Oscura dati",
+                smartRedactAppliedToast: "%d dati sensibili oscurati",
+                pixelRulerToolTitle: "Righello pixel",
+                hideDesktopIconsLabel: "Nascondi icone scrivania nelle catture"
+            )
+        case .ja:
+            return OverhaulWave2Strings(
+                studioTabTitle: "スタジオ",
+                cameraBubbleTitle: "カメラバブル",
+                cameraAutoShrinkLabel: "カーソル付近で縮小",
+                keystrokeHUDTitle: "キー入力表示",
+                clickSFXTitle: "クリック効果音",
+                motionBlurTitle: "モーションブラー",
+                captionsTrackTitle: "文字起こし・キャプション",
+                transcribeAudioButton: "音声を文字起こし",
+                exportSRTButton: "SRT 書き出し",
+                captionsEmptyHint: "オンデバイス音声認識を実行して発話区間を編集・カットできます。",
+                smartRedactButton: "スマート墨消し",
+                smartRedactAppliedToast: "%d 件の機密情報を隠しました",
+                pixelRulerToolTitle: "ピクセル定規",
+                hideDesktopIconsLabel: "キャプチャ時にデスクトップアイコンを隠す"
+            )
+        case .ko:
+            return OverhaulWave2Strings(
+                studioTabTitle: "스튜디오",
+                cameraBubbleTitle: "카메라 버블",
+                cameraAutoShrinkLabel: "커서 근처에서 축소",
+                keystrokeHUDTitle: "키 입력 표시",
+                clickSFXTitle: "클릭 효과음",
+                motionBlurTitle: "모션 블러",
+                captionsTrackTitle: "전사 및 자막 트랙",
+                transcribeAudioButton: "음성 받아쓰기",
+                exportSRTButton: "SRT 내보내기",
+                captionsEmptyHint: "기기 내 음성 인식을 실행해 발화 단위로 편집하고 자르세요.",
+                smartRedactButton: "스마트 가리기",
+                smartRedactAppliedToast: "민감한 항목 %d개 가림",
+                pixelRulerToolTitle: "픽셀 눈금자",
+                hideDesktopIconsLabel: "캡처 시 데스크톱 아이콘 숨기기"
+            )
+        case .uk:
+            return OverhaulWave2Strings(
+                studioTabTitle: "Студія",
+                cameraBubbleTitle: "Бульбашка камери",
+                cameraAutoShrinkLabel: "Зменшувати біля курсора",
+                keystrokeHUDTitle: "Клавіші на екрані",
+                clickSFXTitle: "Звук кліку",
+                motionBlurTitle: "Розмиття руху",
+                captionsTrackTitle: "Розшифровка й титри",
+                transcribeAudioButton: "Розпізнати мову",
+                exportSRTButton: "Експорт SRT",
+                captionsEmptyHint: "Запустіть локальне розпізнавання мови для редагування за репліками.",
+                smartRedactButton: "Розумне приховування",
+                smartRedactAppliedToast: "Приховано елементів: %d",
+                pixelRulerToolTitle: "Лінійка пікселів",
+                hideDesktopIconsLabel: "Ховати значки робочого столу на знімках"
+            )
+        case .zhHans:
+            return OverhaulWave2Strings(
+                studioTabTitle: "工作室",
+                cameraBubbleTitle: "摄像头气泡",
+                cameraAutoShrinkLabel: "靠近指针时缩小",
+                keystrokeHUDTitle: "按键显示",
+                clickSFXTitle: "点击音效",
+                motionBlurTitle: "动态模糊",
+                captionsTrackTitle: "字幕与转录",
+                transcribeAudioButton: "转录音频",
+                exportSRTButton: "导出 SRT",
+                captionsEmptyHint: "运行本地语音识别，按口述片段编辑或粗剪。",
+                smartRedactButton: "智能打码",
+                smartRedactAppliedToast: "已隐藏 %d 处敏感内容",
+                pixelRulerToolTitle: "像素标尺",
+                hideDesktopIconsLabel: "截图时隐藏桌面图标"
+            )
+        case .zhTW:
+            return OverhaulWave2Strings(
+                studioTabTitle: "工作室",
+                cameraBubbleTitle: "攝影機泡泡",
+                cameraAutoShrinkLabel: "靠近游標時縮小",
+                keystrokeHUDTitle: "按鍵顯示",
+                clickSFXTitle: "點擊音效",
+                motionBlurTitle: "動態模糊",
+                captionsTrackTitle: "字幕與轉錄",
+                transcribeAudioButton: "轉錄音訊",
+                exportSRTButton: "匯出 SRT",
+                captionsEmptyHint: "執行裝置端語音辨識，依口述片段編輯或剪輯。",
+                smartRedactButton: "智慧遮蔽",
+                smartRedactAppliedToast: "已遮蔽 %d 項敏感資訊",
+                pixelRulerToolTitle: "像素尺規",
+                hideDesktopIconsLabel: "擷取時隱藏桌面圖示"
+            )
+        case .zhHK:
+            return OverhaulWave2Strings(
+                studioTabTitle: "工作室",
+                cameraBubbleTitle: "鏡頭泡泡",
+                cameraAutoShrinkLabel: "靠近游標時縮小",
+                keystrokeHUDTitle: "按鍵顯示",
+                clickSFXTitle: "點擊音效",
+                motionBlurTitle: "動態模糊",
+                captionsTrackTitle: "字幕與轉錄",
+                transcribeAudioButton: "轉錄音訊",
+                exportSRTButton: "匯出 SRT",
+                captionsEmptyHint: "執行本機語音識別，按說話片段編輯同剪接。",
+                smartRedactButton: "智能遮蔽",
+                smartRedactAppliedToast: "已遮蔽 %d 項敏感資料",
+                pixelRulerToolTitle: "像素間尺",
+                hideDesktopIconsLabel: "擷取時隱藏桌面圖示"
+            )
+        }
+    }
+}
+
+extension OverhaulStrings {
+    static func wave2(_ language: AppLanguage) -> OverhaulWave2Strings {
+        OverhaulWave2Strings.localized(language)
+    }
+}

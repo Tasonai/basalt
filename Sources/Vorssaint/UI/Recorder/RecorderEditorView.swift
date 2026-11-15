@@ -374,6 +374,32 @@ struct RecorderEditorView: View {
                         .frame(height: 30)
                 }
             }
+            if !model.document.captions.isEmpty {
+                timelineRow(OverhaulStrings.wave2(l10n.language).captionsTrackTitle) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(model.document.captions) { seg in
+                                Button {
+                                    model.toggleCaptionCut(seg.id)
+                                } label: {
+                                    Text(seg.text)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .strikethrough(seg.isCut)
+                                        .lineLimit(1)
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 3)
+                                        .background(
+                                            (seg.isCut ? Color.orange.opacity(0.22) : Color.accentColor.opacity(0.18)),
+                                            in: Capsule()
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .frame(height: 28)
+                }
+            }
             if model.hasAudio(.system) {
                 timelineRow(strings.systemAudioTrackLabel) {
                     RecorderAudioLane(model: model, source: .system)

@@ -297,10 +297,16 @@ struct ScreenshotEditorView: View {
         .onContinuousHover { phase in
             switch phase {
             case .active(let location):
-                updateHoverCursor(at: imagePoint(from: location, zoom: zoom))
+                let pt = imagePoint(from: location, zoom: zoom)
+                updateHoverCursor(at: pt)
+                model.updatePixelRuler(at: pt)
             case .ended:
+                model.updatePixelRuler(at: nil)
                 NSCursor.arrow.set()
             }
+        }
+        .overlay(alignment: .topLeading) {
+            pixelRulerOverlay(zoom: zoom)
         }
         .overlay(alignment: .topLeading) {
             textEditorOverlay(zoom: zoom)
@@ -577,6 +583,40 @@ struct ScreenshotEditorView: View {
                 .allowsHitTesting(false)
                 .transition(.opacity.combined(with: .scale(scale: 0.92)))
             }
+        }
+    }
+
+    @ViewBuilder
+    private func pixelRulerOverlay(zoom: CGFloat) -> some View {
+        if model.pixelRulerActive, let m = model.pixelRulerMeasurement {
+            let pad = model.backdropPaddingPixels
+            let leftPx = (CGFloat(m.leftEdgeX) + pad) * zoom
+            let rightPx = (CGFloat(m.rightEdgeX) + pad) * zoom
+            let topPx = (CGFloat(m.topEdgeY) + pad) * zoom
+            let bottomPx = (CGFloat(m.bottomEdgeY) + pad) * zoom
+            let ox = (m.origin.x + pad) * zoom
+            let oy = (m.origin.y + pad) * zoom
+            ZStack(alignment: .topLeading) {
+                Path { path in
+                    path.move(to: CGPoint(x: leftPx, y: oy))
+                    path.addLine(to: CGPoint(x: rightPx, y: oy))
+                    path.move(to: CGPoint(x: ox, y: topPx))
+                    path.addLine(to: CGPoint(x: ox, y: bottomPx))
+                }
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+
+                Text("\(m.width) × \(m.height) px")
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.78), in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 1)
+                    }
+                    .offset(x: ox + 10, y: max(6, oy - 24))
+            }
+            .allowsHitTesting(false)
         }
     }
 
@@ -929,6 +969,34 @@ struct ScreenshotEditorView: View {
                 qrControl
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.95).combined(with: .opacity))
             }
+
+            Divider().frame(height: 16).padding(.horizontal, 3)
+
+            Button {
+                commitEditingTextIfNeeded()
+                let found = model.applySmartRedact()
+                QuickToolHUD.show(
+                    icon: "eye.slash.fill",
+                    message: String(format: OverhaulStrings.wave2(l10n.language).smartRedactAppliedToast, found)
+                )
+            } label: {
+                Image(systemName: "wand.and.stars")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .screenshotSafeHelp(OverhaulStrings.wave2(l10n.language).smartRedactButton)
+            .accessibilityLabel(OverhaulStrings.wave2(l10n.language).smartRedactButton)
+
+            Button {
+                model.pixelRulerActive.toggle()
+            } label: {
+                Image(systemName: "ruler")
+                    .frame(width: 24, height: 24)
+                    .foregroundStyle(model.pixelRulerActive ? Color.accentColor : Color.primary)
+            }
+            .buttonStyle(.borderless)
+            .screenshotSafeHelp(OverhaulStrings.wave2(l10n.language).pixelRulerToolTitle)
+            .accessibilityLabel(OverhaulStrings.wave2(l10n.language).pixelRulerToolTitle)
 
             Divider().frame(height: 16).padding(.horizontal, 3)
 

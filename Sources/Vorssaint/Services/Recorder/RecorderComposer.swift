@@ -64,6 +64,13 @@ final class RecorderComposer {
         /// Areas kept unreadable and, for each frame, whether each one is on.
         let blurs: [RecorderBlurRegion]
         let blurCovers: [[Bool]]
+        let motionBlurEnabled: Bool
+        let motionBlurStrength: Double
+        let cameraBubble: RecorderCameraBubbleConfig
+        let keystrokesEnabled: Bool
+        let keystrokes: [RecorderKeystrokeEvent]
+        let captionsEnabled: Bool
+        let captions: [RecorderCaptionSegment]
     }
 
     private let plan: Plan
@@ -99,6 +106,25 @@ final class RecorderComposer {
             content = drawPointer(on: content, index: index)
         }
         content = zoomed(content, index: index)
+        if plan.motionBlurEnabled, index > 0,
+           plan.positions.indices.contains(index),
+           plan.positions.indices.contains(index - 1) {
+            let prev = plan.positions[index - 1]
+            let curr = plan.positions[index]
+            let zoomFactor = plan.zoom.indices.contains(index) ? plan.zoom[index] : 1.0
+            let strength = max(0, min(1, plan.motionBlurStrength)) * 2.5
+            let velocity = CGVector(
+                dx: (curr.x - prev.x) * zoomFactor * strength,
+                dy: (curr.y - prev.y) * zoomFactor * strength
+            )
+            if hypot(velocity.dx, velocity.dy) > 0.5 {
+                content = VorssaintMetalShaders.shared.applyDirectionalMotionBlur(
+                    to: content,
+                    velocity: velocity,
+                    samples: 9
+                )
+            }
+        }
         content = fitted(content)
 
         if let mask = plan.mask {
@@ -113,6 +139,9 @@ final class RecorderComposer {
         }
         content = drawImages(on: content, index: index)
         content = drawTexts(on: content, index: index)
+        content = drawCameraBubble(on: content, index: index)
+        content = drawKeystrokeHUD(on: content, at: seconds)
+        content = drawCaptions(on: content, at: seconds)
         return content.cropped(to: CGRect(origin: .zero, size: plan.canvasSize))
     }
 
@@ -158,6 +187,116 @@ final class RecorderComposer {
                 .composited(over: result)
         }
         return result
+    }
+
+    private func drawCameraBubble(on content: CIImage, index: Int) -> CIImage {
+        let cfg = plan.cameraBubble
+        guard cfg.isEnabled else { return content }
+        let pointerNorm: CGPoint? = {
+            guard plan.positions.indices.contains(index),
+                  plan.sourceSize.width > 0, plan.sourceSize.height > 0
+            else { return nil }
+            let pt = plan.positions[index]
+            return CGPoint(x: pt.x / plan.sourceSize.width, y: pt.y / plan.sourceSize.height)
+        }()
+        let scale = cfg.effectiveScale(pointerNormalized: pointerNorm)
+        let minor = min(plan.canvasSize.width, plan.canvasSize.height)
+        let diameter = max(44, minor * CGFloat(cfg.diameterFraction) * scale)
+        let center = CGPoint(
+            x: cfg.normalizedCenter.x * plan.canvasSize.width,
+            y: (1.0 - cfg.normalizedCenter.y) * plan.canvasSize.height
+        )
+        let size = CGSize(width: ceil(diameter + 8), height: ceil(diameter + 8))
+        guard let ctx = CGContext(data: nil,
+                                  width: Int(size.width),
+                                  height: Int(size.height),
+                                  bitsPerComponent: 8,
+                                  bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return content }
+        let circleRect = CGRect(x: 4, y: 4, width: diameter, height: diameter)
+        ctx.setFillColor(CGColor(srgbRed: 0.12, green: 0.13, blue: 0.16, alpha: 0.88))
+        ctx.fillEllipse(in: circleRect)
+        ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85))
+        ctx.setLineWidth(2.5)
+        ctx.strokeEllipse(in: circleRect)
+        guard let cg = ctx.makeImage() else { return content }
+        let ox = center.x - size.width / 2
+        let oy = center.y - size.height / 2
+        return CIImage(cgImage: cg)
+            .transformed(by: CGAffineTransform(translationX: ox, y: oy))
+            .composited(over: content)
+    }
+
+    private func drawKeystrokeHUD(on content: CIImage, at seconds: Double) -> CIImage {
+        guard plan.keystrokesEnabled, !plan.keystrokes.isEmpty else { return content }
+        let active = RecorderKeystrokeEvent.activeEvents(in: plan.keystrokes, at: seconds)
+        guard !active.isEmpty else { return content }
+        let text = active.map(\.formattedCapString).joined(separator: "  ")
+        guard let pill = renderStudioPill(text: text, fontSize: max(18, plan.canvasSize.height * 0.026)) else {
+            return content
+        }
+        let ox = (plan.canvasSize.width - CGFloat(pill.width)) / 2
+        let oy = plan.captionsEnabled && RecorderCaptionSegment.activeCaption(in: plan.captions, at: seconds) != nil
+            ? plan.canvasSize.height * 0.13
+            : plan.canvasSize.height * 0.06
+        return CIImage(cgImage: pill)
+            .transformed(by: CGAffineTransform(translationX: ox, y: oy))
+            .composited(over: content)
+    }
+
+    private func drawCaptions(on content: CIImage, at seconds: Double) -> CIImage {
+        guard plan.captionsEnabled,
+              let segment = RecorderCaptionSegment.activeCaption(in: plan.captions, at: seconds),
+              let pill = renderStudioPill(text: segment.text, fontSize: max(18, plan.canvasSize.height * 0.028))
+        else { return content }
+        let ox = (plan.canvasSize.width - CGFloat(pill.width)) / 2
+        let oy = plan.canvasSize.height * 0.055
+        return CIImage(cgImage: pill)
+            .transformed(by: CGAffineTransform(translationX: ox, y: oy))
+            .composited(over: content)
+    }
+
+    private func renderStudioPill(text: String, fontSize: CGFloat) -> CGImage? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ]
+        let attr = NSAttributedString(string: trimmed, attributes: attrs)
+        let maxW = max(120, plan.canvasSize.width * 0.78)
+        let measured = attr.boundingRect(with: CGSize(width: maxW, height: 200),
+                                         options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let padX: CGFloat = fontSize * 0.9
+        let padY: CGFloat = fontSize * 0.45
+        let w = max(44, Int(ceil(measured.width + padX * 2)))
+        let h = max(28, Int(ceil(measured.height + padY * 2)))
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: w,
+            pixelsHigh: h,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        let bgRect = NSRect(x: 0, y: 0, width: w, height: h)
+        let path = NSBezierPath(roundedRect: bgRect, xRadius: CGFloat(h) / 2, yRadius: CGFloat(h) / 2)
+        NSColor(calibratedWhite: 0.07, alpha: 0.84).setFill()
+        path.fill()
+        NSColor(calibratedWhite: 1.0, alpha: 0.16).setStroke()
+        path.lineWidth = 1.5
+        path.stroke()
+        attr.draw(in: NSRect(x: padX, y: padY, width: measured.width + 2, height: measured.height + 2))
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.cgImage
     }
 
     /// Blurs go into the picture before anything else is drawn on it, so the

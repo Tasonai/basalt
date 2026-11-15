@@ -215,4 +215,19 @@ enum ScreenshotCapturePolicy {
         return AttachedCapturePlan(windowIDs: [targetID] + attachedIDs,
                                    bounds: plan.bounds)
     }
+
+    /// Finder draws desktop icons in window layers at or below the desktop-icon
+    /// window level under `com.apple.finder`. Leaving those windows out keeps
+    /// the wallpaper while hiding cluttered desktop files during captures.
+    static func desktopIconWindowIDs(in windows: [(id: CGWindowID, ownerBundleID: String?, layer: Int)],
+                                     desktopIconLayerMax: Int = Int(CGWindowLevelForKey(.desktopIconWindow))) -> Set<CGWindowID> {
+        let floorLayer = Int(CGWindowLevelForKey(.desktopWindow))
+        return Set(windows.compactMap { entry in
+            guard entry.ownerBundleID == "com.apple.finder",
+                  entry.layer > floorLayer,
+                  entry.layer <= desktopIconLayerMax
+            else { return nil }
+            return entry.id
+        })
+    }
 }

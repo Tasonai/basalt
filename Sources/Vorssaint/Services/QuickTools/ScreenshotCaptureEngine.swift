@@ -145,7 +145,18 @@ enum ScreenshotCaptureEngine {
             ownWindowIDs: ownWindowIDs,
             protectedWindowIDs: protectedWindowIDs,
             islandWindowIDs: islandIDs)
-        return content.windows.filter { excludedIDs.contains($0.windowID) }
+        var extraExcluded: Set<CGWindowID> = []
+        if UserDefaults.standard.bool(forKey: DefaultsKey.screenshotHideDesktopIcons) {
+            let candidates = content.windows.map {
+                (id: $0.windowID,
+                 ownerBundleID: $0.owningApplication?.bundleIdentifier,
+                 layer: Int($0.windowLayer))
+            }
+            extraExcluded = ScreenshotCapturePolicy.desktopIconWindowIDs(in: candidates)
+        }
+        return content.windows.filter {
+            excludedIDs.contains($0.windowID) || extraExcluded.contains($0.windowID)
+        }
     }
 
     private static func captureDisplay(_ display: SCDisplay,
