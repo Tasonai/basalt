@@ -63,9 +63,25 @@ struct RecorderEditorView: View {
 
     private var topBand: some View {
         HStack(spacing: 8) {
-            BrandMark(width: 24, tint: Color(white: 0.92))
+            Image(systemName: "record.circle")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SemanticCategoryPalette.color(for: .tools, scheme: .dark))
+                .frame(width: 24, height: 24)
+                .background(SemanticCategoryPalette.color(for: .tools, scheme: .dark).opacity(0.16),
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             Text(strings.editorTitle)
                 .font(.system(size: 13, weight: .semibold))
+            if !outputSizeLabel.isEmpty {
+                Text(outputSizeLabel)
+                    .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.white.opacity(0.06), in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 0.75)
+                    }
+            }
             Button {
                 RecentCaptureService.shared.showHistoryWindow()
             } label: {

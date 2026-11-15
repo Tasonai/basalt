@@ -1133,16 +1133,29 @@ enum ScreenshotRenderer {
                                              blue: single.blue, alpha: 1))
                 context.fill(CGRect(origin: .zero, size: size))
             } else if components.count >= 2 {
-                let colors = components.map {
-                    CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: 1)
-                } as CFArray
-                if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                             colors: colors,
-                                             locations: [0, 1]) {
-                    context.drawLinearGradient(gradient,
-                                               start: CGPoint(x: 0, y: size.height),
-                                               end: CGPoint(x: size.width, y: 0),
-                                               options: [])
+                if components.count == 2,
+                   size.width >= 64, size.height >= 64,
+                   size.width <= 4096, size.height <= 4096,
+                   let first = components.first, let last = components.last,
+                   let dithered = VorssaintMetalShaders.shared.makeDitheredGradientImage(
+                       width: Int(size.width.rounded()),
+                       height: Int(size.height.rounded()),
+                       start: first,
+                       end: last
+                   ) {
+                    context.draw(dithered, in: CGRect(origin: .zero, size: size))
+                } else {
+                    let colors = components.map {
+                        CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: 1)
+                    } as CFArray
+                    if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                                 colors: colors,
+                                                 locations: [0, 1]) {
+                        context.drawLinearGradient(gradient,
+                                                   start: CGPoint(x: 0, y: size.height),
+                                                   end: CGPoint(x: size.width, y: 0),
+                                                   options: [])
+                    }
                 }
             }
         case .image(let backdropImage):

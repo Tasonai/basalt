@@ -342,11 +342,17 @@ struct SettingsView: View {
             Section {
                 if !collapsedSectionIDs.contains(section.id) {
                     ForEach(section.items) { item in
+                        let itemTint = SemanticCategoryPalette.color(forSymbol: item.icon)
                         HStack(spacing: 9) {
                             Image(systemName: item.icon)
+                                .font(.system(size: 11.5, weight: .semibold))
                                 .foregroundStyle(selectedID == item.id
-                                    ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
-                                .frame(width: 18)
+                                    ? AnyShapeStyle(.primary) : AnyShapeStyle(itemTint))
+                                .frame(width: 20, height: 20)
+                                .background(
+                                    (selectedID == item.id ? Color.white.opacity(0.14) : itemTint.opacity(0.13)),
+                                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                )
                             Text(item.title)
                         }
                         .tag(item.id)

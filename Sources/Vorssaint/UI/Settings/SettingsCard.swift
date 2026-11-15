@@ -42,14 +42,18 @@ struct SettingsRow<Accessory: View>: View {
     let title: String
     let badge: String?
     let caption: String?
+    let tint: Color?
     let accessory: Accessory
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     init(symbol: String?, title: String, badge: String? = nil, caption: String? = nil,
-         @ViewBuilder accessory: () -> Accessory) {
+         tint: Color? = nil, @ViewBuilder accessory: () -> Accessory) {
         self.symbol = symbol
         self.title = title
         self.badge = badge
         self.caption = caption
+        self.tint = tint
         self.accessory = accessory()
     }
 
@@ -86,14 +90,22 @@ struct SettingsRow<Accessory: View>: View {
         }
     }
 
+    private var resolvedTint: Color {
+        tint ?? SemanticCategoryPalette.color(
+            forSymbol: symbol,
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
+    }
+
     @ViewBuilder
     private var iconTile: some View {
         if let symbol {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(resolvedTint)
                 .frame(width: 26, height: 26)
-                .background(Color.accentColor.opacity(0.12),
+                .background(resolvedTint.opacity(colorScheme == .dark ? 0.16 : 0.12),
                             in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         } else {
             // The menu bar draws the glyph white on a dark bar; the badge keeps

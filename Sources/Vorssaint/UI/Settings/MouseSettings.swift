@@ -368,6 +368,12 @@ struct MouseSettings: View {
             }
             if smoothScrollEnabled {
                 VStack(alignment: .leading, spacing: 10) {
+                    MouseScrollCurvePreview(
+                        step: SmoothScrollSupport.sanitizedStep(smoothScrollStep),
+                        response: SmoothScrollSupport.sanitizedResponse(smoothScrollResponse),
+                        coast: SmoothScrollSupport.sanitizedCoast(smoothScrollCoast),
+                        strings: OverhaulStrings.localized(l10n.language)
+                    )
                     sliderRow(l10n.s.smoothScrollStepLabel,
                               value: smoothScrollStepBinding,
                               range: Double(SmoothScrollSupport.stepRange.lowerBound)

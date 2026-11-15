@@ -1780,8 +1780,24 @@ final class NotchService: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
     }
 
+    private func currentModuleStatuses() -> NotchLiveModuleStatus {
+        NotchLiveModuleStatus(
+            hasActiveCallOrCamera: false,
+            isTimerRunning: NotchTimerService.shared.session.isRunning,
+            isMediaPlaying: NotchMusicService.shared.playback?.isPlaying == true,
+            isAgentRunning: NotchAgentSupport.showsLiveActivity() && !AgentUsageService.shared.snapshot.live.isEmpty,
+            hasUnreadNotifications: !NotchNotificationService.shared.items.isEmpty,
+            hasShelfItems: !ShelfService.shared.items.isEmpty
+        )
+    }
+
     var filteredSections: [NotchModule] {
-        NotchSupport.filteredModules(modules, query: sectionQuery) { module in
+        let ordered = NotchSupport.orderedModules(
+            base: modules,
+            statuses: currentModuleStatuses(),
+            smartOrder: NotchSupport.usesSmartContextualOrder()
+        )
+        return NotchSupport.filteredModules(ordered, query: sectionQuery) { module in
             let language = L10n.shared.language
             let music = module == .music ? FeatureStrings.notch(language).music : ""
             return [module.title(language), module.rawValue, music].joined(separator: " ")
@@ -4695,8 +4711,8 @@ extension NotchService {
             scheduleMascotVisit(after: NotchMascotSupport.nextVisitDelay())
             return
         }
-        // Low Power Mode keeps it at rest, and a pending visit simply comes later.
-        guard asked || !ProcessInfo.processInfo.isLowPowerModeEnabled else {
+        // Low Power Mode or macOS Focus keeps it at rest, and a pending visit simply comes later.
+        guard asked || (!ProcessInfo.processInfo.isLowPowerModeEnabled && !NotchSupport.suppressesAmbientVisits()) else {
             scheduleMascotVisit(after: NotchMascotSupport.nextVisitDelay())
             return
         }

@@ -28,6 +28,7 @@ struct OnboardingView: View {
     @AppStorage(DefaultsKey.onboardingStep) private var index = 0
     @State private var selectedFeatures: Set<AppFeature>
     @State private var selectedPreset: FeaturePreset?
+    @State private var selectedWorkspace: FeatureWorkspaceProfile?
 
     init(mode: OnboardingMode = .full, onFinish: @escaping () -> Void) {
         self.mode = mode
@@ -82,7 +83,8 @@ struct OnboardingView: View {
         switch current {
         case .welcome: WelcomeStep()
         case .purpose: PurposeStep(selectedFeatures: $selectedFeatures,
-                                   selectedPreset: $selectedPreset)
+                                   selectedPreset: $selectedPreset,
+                                   selectedWorkspace: $selectedWorkspace)
         case .permissions: SelectedPermissionsStep(features: selectedFeatures,
                                                    permissions: setupPermissions)
         case .done: DoneStep()
@@ -117,7 +119,7 @@ struct OnboardingView: View {
                     if current == .purpose {
                         FeatureRuntime.shared.replaceAvailable(
                             with: selectedFeatures,
-                            enabling: selectedPreset?.enableKeys ?? [])
+                            enabling: selectedWorkspace?.enableKeys ?? selectedPreset?.enableKeys ?? [])
                     }
                     withAnimation(.easeInOut(duration: 0.2)) { index += 1 }
                 }
@@ -139,27 +141,132 @@ struct OnboardingView: View {
 
 private struct WelcomeStep: View {
     @ObservedObject private var l10n = L10n.shared
+    @AppStorage(DefaultsKey.notchMascotStyle) private var mascotStyleRaw = NotchMascotStyle.minimal.rawValue
+    @AppStorage(DefaultsKey.notchMascotShape) private var mascotShapeRaw = NotchMascotShape.ball.rawValue
+    @AppStorage(DefaultsKey.notchMascotPalette) private var mascotPaletteRaw = NotchMascotPalette.pearl.rawValue
+    @State private var mascotReaction: NotchMascotReaction? = .wakeUp
+
+    private var currentLook: NotchMascotLook {
+        NotchMascotLook(
+            style: NotchMascotStyle(rawValue: mascotStyleRaw) ?? .minimal,
+            shape: NotchMascotShape(rawValue: mascotShapeRaw) ?? .ball,
+            palette: NotchMascotPalette(rawValue: mascotPaletteRaw) ?? .pearl
+        )
+    }
+
+    private var mascotCustomizationBar: some View {
+        let overhaul = OverhaulStrings.localized(l10n.language)
+        return HStack(spacing: 12) {
+            Text(overhaul.mascotCustomizeTitle)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            paletteSwatches
+            styleButtons
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .fill(Color.primary.opacity(0.045))
+        )
+        .hairlineSpecularBorder(cornerRadius: DesignRadius.innerGroup, opacity: 0.14)
+    }
+
+    private var paletteSwatches: some View {
+        HStack(spacing: 6) {
+            ForEach(NotchMascotPalette.allCases) { palette in
+                let selected = palette.rawValue == mascotPaletteRaw
+                Button {
+                    mascotPaletteRaw = palette.rawValue
+                    triggerMascot(.love)
+                } label: {
+                    Circle()
+                        .fill(Color(.sRGB, red: palette.light.red, green: palette.light.green, blue: palette.light.blue))
+                        .frame(width: 18, height: 18)
+                        .overlay(
+                            Circle()
+                                .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.18), lineWidth: selected ? 2.2 : 0.8)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var styleButtons: some View {
+        let mascotText = FeatureStrings.notchMascot(l10n.language)
+        return HStack(spacing: 4) {
+            ForEach(NotchMascotStyle.allCases) { style in
+                let active = style.rawValue == mascotStyleRaw
+                Button(style == .minimal ? mascotText.minimal : mascotText.robot) {
+                    mascotStyleRaw = style.rawValue
+                    triggerMascot(.perk)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .tint(active ? SemanticCategoryTone.dynamicIsland.badgeColor : .secondary)
+            }
+        }
+    }
+
+    private func triggerMascot(_ reaction: NotchMascotReaction) {
+        if mascotReaction == reaction {
+            mascotReaction = nil
+            DispatchQueue.main.async { mascotReaction = reaction }
+        } else {
+            mascotReaction = reaction
+        }
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             ZStack {
                 Theme.spaceGradient
                 VStack(spacing: 10) {
-                    BrandMark(width: 130)
-                    Text(AppInfo.name)
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundStyle(.white)
+                    HStack(spacing: 16) {
+                        Button {
+                            triggerMascot(.love)
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.black.opacity(0.32))
+                                    .frame(width: 78, height: 78)
+                                    .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 1))
+                                NotchMascotView(
+                                    look: currentLook,
+                                    mood: .happy,
+                                    size: 54,
+                                    followsDrag: true,
+                                    reaction: mascotReaction
+                                )
+                                .frame(width: 68, height: 68)
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            BrandMark(width: 108)
+                            Text(AppInfo.name)
+                                .font(.system(size: 26, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+
                     Text(l10n.s.obStepWelcomeBody)
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.85))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 40)
                 }
-                .padding(.top, 12)
+                .padding(.top, 10)
             }
-            .frame(height: 220)
+            .frame(height: 210)
 
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
+                mascotCustomizationBar
+
                 Picker(l10n.s.obLanguageLabel, selection: $l10n.language) {
                     ForEach(AppLanguage.allCases) { language in
                         Text(language.displayName).tag(language)
@@ -214,7 +321,9 @@ private struct PurposeStep: View {
     @ObservedObject private var l10n = L10n.shared
     @Binding var selectedFeatures: Set<AppFeature>
     @Binding var selectedPreset: FeaturePreset?
+    @Binding var selectedWorkspace: FeatureWorkspaceProfile?
     @State private var hoveredPreset: FeaturePreset?
+    @State private var hoveredWorkspace: FeatureWorkspaceProfile?
     @State private var hoveredFeature: AppFeature?
 
     private var hub: FeatureHubStrings { FeatureStrings.hub(l10n.language) }
@@ -224,6 +333,13 @@ private struct PurposeStep: View {
             StepHeader(icon: "sparkles.rectangle.stack",
                        title: l10n.s.obPurposeTitle,
                        subtitle: l10n.s.obPurposeBody)
+
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                ForEach(FeatureWorkspaceProfile.allCases) { profile in
+                    workspaceCard(profile)
+                }
+            }
+            .padding(.horizontal, 28)
 
             VStack(spacing: 8) {
                 ForEach(FeaturePreset.allCases) { preset in
@@ -290,11 +406,61 @@ private struct PurposeStep: View {
         }
     }
 
+    private func workspaceCard(_ profile: FeatureWorkspaceProfile) -> some View {
+        let selected = selectedWorkspace == profile
+        let hovered = hoveredWorkspace == profile
+        let accent = profile.tone.badgeColor
+        return Button {
+            selectedWorkspace = profile
+            selectedPreset = nil
+            selectedFeatures = profile.features
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: profile.symbolName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: DesignRadius.iconTile, style: .continuous)
+                            .fill(accent.gradient)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(profile.title(in: l10n.language))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(profile.subtitle(in: l10n.language))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(accent)
+                }
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
+                    .fill(selected ? accent.opacity(0.14) : Color.primary.opacity(hovered ? 0.075 : 0.045))
+            )
+            .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: selected ? 0.34 : 0.16)
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredWorkspace = $0 ? profile : (hoveredWorkspace == profile ? nil : hoveredWorkspace) }
+        .animation(DesignMotion.snappy, value: selected)
+    }
+
     private func bundleCard(_ preset: FeaturePreset) -> some View {
         let selected = selectedPreset == preset
         let isHovered = hoveredPreset == preset
         return Button {
             selectedPreset = preset
+            selectedWorkspace = nil
             selectedFeatures = preset.features
         } label: {
             HStack(spacing: 12) {
@@ -358,6 +524,7 @@ private struct PurposeStep: View {
         let blocked = feature.installBlockedReason
         let card = Button {
             selectedPreset = nil
+            selectedWorkspace = nil
             if selected {
                 selectedFeatures.remove(feature)
                 if feature == .notch {
@@ -492,9 +659,10 @@ private struct SelectedPermissionsStep: View {
             }
             .padding(16)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
                     .fill(Color.primary.opacity(0.05))
             )
+            .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.18)
             .padding(.horizontal, 28)
             .animation(.easeOut(duration: 0.16), value: showingOtherPermissions)
 
@@ -515,9 +683,10 @@ private struct SelectedPermissionsStep: View {
             }
             .padding(16)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
                     .fill(Color.primary.opacity(0.05))
             )
+            .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.18)
             .padding(.horizontal, 28)
             .animation(.easeOut(duration: 0.16), value: showingOtherPermissions)
 
@@ -547,32 +716,121 @@ private struct SelectedPermissionsStep: View {
 
 private struct DoneStep: View {
     @ObservedObject private var l10n = L10n.shared
+    @AppStorage(DefaultsKey.notchMascotStyle) private var mascotStyleRaw = NotchMascotStyle.minimal.rawValue
+    @AppStorage(DefaultsKey.notchMascotShape) private var mascotShapeRaw = NotchMascotShape.ball.rawValue
+    @AppStorage(DefaultsKey.notchMascotPalette) private var mascotPaletteRaw = NotchMascotPalette.pearl.rawValue
+    @State private var mascotReaction: NotchMascotReaction? = .celebrate
+
+    private var currentLook: NotchMascotLook {
+        NotchMascotLook(
+            style: NotchMascotStyle(rawValue: mascotStyleRaw) ?? .minimal,
+            shape: NotchMascotShape(rawValue: mascotShapeRaw) ?? .ball,
+            palette: NotchMascotPalette(rawValue: mascotPaletteRaw) ?? .pearl
+        )
+    }
+
+    private func triggerReaction(_ next: NotchMascotReaction, feedback: NSHapticFeedbackManager.FeedbackPattern = .levelChange) {
+        if mascotReaction == next {
+            mascotReaction = nil
+            DispatchQueue.main.async { mascotReaction = next }
+        } else {
+            mascotReaction = next
+        }
+        NSHapticFeedbackManager.defaultPerformer.perform(feedback, performanceTime: .default)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
+        let overhaul = OverhaulStrings.localized(l10n.language)
+        return VStack(spacing: 0) {
             ZStack {
                 Theme.spaceGradient
-                VStack(spacing: 14) {
-                    BrandMark(width: 150)
+                VStack(spacing: 12) {
+                    BrandMark(width: 112)
                     Text(l10n.s.obStepDoneTitle)
-                        .font(.system(size: 26, weight: .bold))
+                        .font(.system(size: 25, weight: .bold))
                         .foregroundStyle(.white)
                     Text(l10n.s.obStepDoneBody)
                         .font(.system(size: 12.5))
                         .foregroundStyle(.white.opacity(0.85))
                 }
             }
-            .frame(height: 300)
+            .frame(height: 195)
 
-            VStack(spacing: 10) {
-                Image(systemName: "menubar.arrow.up.rectangle")
-                    .font(.system(size: 26))
-                    .foregroundStyle(.secondary)
-                Text(l10n.s.obDoneHint)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 60)
+            VStack(spacing: 12) {
+                HStack(spacing: 14) {
+                    Button {
+                        triggerReaction(.love)
+                    } label: {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
+                                .fill(Color.black.opacity(0.88))
+                                .frame(width: 72, height: 64)
+                                .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.25)
+                            NotchMascotView(
+                                look: currentLook,
+                                mood: .happy,
+                                size: 48,
+                                followsDrag: true,
+                                reaction: mascotReaction
+                            )
+                            .frame(width: 64, height: 56)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(overhaul.sandboxTitle)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(overhaul.sandboxSubtitle)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            Button(overhaul.sandboxTryPet) {
+                                triggerReaction(.love)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button(overhaul.sandboxTryPalette) {
+                                let all = NotchMascotPalette.allCases
+                                if let idx = all.firstIndex(where: { $0.rawValue == mascotPaletteRaw }) {
+                                    mascotPaletteRaw = all[(idx + 1) % all.count].rawValue
+                                } else {
+                                    mascotPaletteRaw = all.first?.rawValue ?? NotchMascotPalette.pearl.rawValue
+                                }
+                                triggerReaction(.perk, feedback: .alignment)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button(overhaul.sandboxTrySnap) {
+                                triggerReaction(.celebrate)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(SemanticCategoryTone.dynamicIsland.badgeColor)
+                            .controlSize(.small)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
+                        .fill(Color.primary.opacity(0.05))
+                )
+                .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.18)
+                .padding(.horizontal, 28)
+
+                VStack(spacing: 8) {
+                    Image(systemName: "menubar.arrow.up.rectangle")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.secondary)
+                    Text(l10n.s.obDoneHint)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 60)
+                }
             }
             .padding(.top, 36)
 

@@ -101,15 +101,48 @@ struct ScreenshotEditorView: View {
         }
     }
 
-    /// The window's crown: the brand centered like the menu bar panel, the
-    /// actions on the right, the trash for a capture not worth keeping.
+    /// The window's crown: focused canvas dimensions and live zoom pill on the
+    /// left, editing actions on the right.
     private var topBand: some View {
-        ZStack {
-            BrandMark(width: 40, tint: Color(white: 0.92))
-            HStack {
-                Spacer()
-                actionCluster
+        let zoomPct = max(1, Int((model.currentDisplayZoom * 100).rounded()))
+        let sizeText = "\(Int(contentPixelSize.width)) × \(Int(contentPixelSize.height)) px"
+        return HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Label {
+                    Text(sizeText)
+                        .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.82))
+                } icon: {
+                    Image(systemName: "photo.artframe")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(SemanticCategoryPalette.color(for: .tools, scheme: .dark))
+                }
+                .padding(.horizontal, 9)
+                .frame(height: 26)
+                .background(Color.white.opacity(0.06), in: Capsule())
+                .overlay {
+                    Capsule().strokeBorder(Color.white.opacity(0.09), lineWidth: 0.75)
+                }
+
+                Button {
+                    model.zoomOverride = nil
+                } label: {
+                    Text("\(zoomPct)%")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(model.zoomOverride == nil ? .white.opacity(0.68) : Color.accentColor)
+                        .padding(.horizontal, 8)
+                        .frame(height: 26)
+                        .background(Color.white.opacity(model.zoomOverride == nil ? 0.045 : 0.10), in: Capsule())
+                        .overlay {
+                            Capsule().strokeBorder(Color.white.opacity(0.09), lineWidth: 0.75)
+                        }
+                }
+                .buttonStyle(.plain)
+                .screenshotSafeHelp(OverhaulStrings.localized(l10n.language).resetZoomHelp)
+                .accessibilityLabel(OverhaulStrings.localized(l10n.language).resetZoomHelp)
             }
+            Spacer(minLength: 8)
+            actionCluster
         }
         .frame(height: 38)
     }

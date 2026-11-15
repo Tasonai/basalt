@@ -45,6 +45,8 @@ struct NotchSettings: View {
     @AppStorage(DefaultsKey.notchHideInFullscreen) private var hideInFullscreen = false
     @AppStorage(DefaultsKey.notchHoverInFullscreen) private var hoverInFullscreen = false
     @AppStorage(DefaultsKey.notchHideUntilHover) private var hideUntilHover = false
+    @AppStorage(DefaultsKey.notchRespectFocusMode) private var respectFocusMode = true
+    @AppStorage(DefaultsKey.notchSmartContextualOrder) private var smartContextualOrder = true
     @AppStorage(DefaultsKey.notchHiddenShowsActivity) private var hiddenShowsActivity = false
     @AppStorage(DefaultsKey.notchCoversMenus) private var coversMenus = true
     @AppStorage(DefaultsKey.notchHoverDelay) private var hoverDelay = NotchSupport.defaultHoverDelay
@@ -735,6 +737,9 @@ struct NotchSettings: View {
                 switchRow("waveform.path", text.hapticFeedback, isOn: $hapticFeedback)
                 switchRow("speaker.wave.1", l10n.language == .ru ? "Акустический щелчок" : "Acoustic micro-click", isOn: $acousticFeedback)
                 switchRow("rectangle.split.2x1", l10n.language == .ru ? "Раздельный остров при двух активностях" : "Split Island for dual activity", isOn: $splitCapsule)
+                let overhaul = OverhaulStrings.localized(l10n.language)
+                switchRow("moon.fill", overhaul.focusModeTitle, caption: overhaul.focusModeCaption, isOn: $respectFocusMode)
+                switchRow("sparkles.square.filled.on.square", overhaul.smartOrderTitle, caption: overhaul.smartOrderCaption, isOn: $smartContextualOrder)
                 SettingsRow(symbol: "arrow.uturn.backward", title: editor.reopening) {
                     Picker(editor.reopening, selection: Binding(get: {
                         guard returnHome else { return "" }

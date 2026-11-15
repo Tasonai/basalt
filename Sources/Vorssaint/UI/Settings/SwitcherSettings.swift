@@ -127,6 +127,12 @@ struct SwitcherSettings: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(FeatureStrings.notchEditor(l10n.language).layout)
                         .font(.subheadline.weight(.medium))
+                    SwitcherLayoutLivePreview(
+                        isSimple: switcherSimpleMode,
+                        isIcons: switcherIconRowMode,
+                        showShortcutHints: switcherShowShortcutHints,
+                        strings: OverhaulStrings.localized(l10n.language)
+                    )
                     HStack(spacing: 10) {
                         SwitcherLayoutChoice(layout: .windows, title: pages.switcherLayoutWindows,
                                              caption: pages.switcherLayoutWindowsCaption, selected: layout == .windows) {

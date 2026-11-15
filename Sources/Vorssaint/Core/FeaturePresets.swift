@@ -160,3 +160,96 @@ extension AppFeature {
         }
     }
 }
+
+/// Role-focused workspace profiles shown in Onboarding (Step 2) alongside the
+/// core FeaturePresets so users can adopt a tailored setup without mutating
+/// FeaturePreset.allCases.
+enum FeatureWorkspaceProfile: String, CaseIterable, Identifiable {
+    case minimalist, creator, developer, fullPower
+
+    var id: String { rawValue }
+
+    var symbolName: String {
+        switch self {
+        case .minimalist: return "sparkles"
+        case .creator: return "video.badge.waveform"
+        case .developer: return "terminal"
+        case .fullPower: return "bolt.shield"
+        }
+    }
+
+    var tone: SemanticCategoryTone {
+        switch self {
+        case .minimalist: return .dynamicIsland
+        case .creator: return .tools
+        case .developer: return .mouseKeyboard
+        case .fullPower: return .brand
+        }
+    }
+
+    func title(in language: AppLanguage) -> String {
+        let s = OverhaulStrings.localized(language)
+        switch self {
+        case .minimalist: return s.workspaceMinimalistName
+        case .creator: return s.workspaceCreatorName
+        case .developer: return s.workspaceDeveloperName
+        case .fullPower: return s.workspaceFullPowerName
+        }
+    }
+
+    func subtitle(in language: AppLanguage) -> String {
+        let s = OverhaulStrings.localized(language)
+        switch self {
+        case .minimalist: return s.workspaceMinimalistDesc
+        case .creator: return s.workspaceCreatorDesc
+        case .developer: return s.workspaceDeveloperDesc
+        case .fullPower: return s.workspaceFullPowerDesc
+        }
+    }
+
+    var features: Set<AppFeature> {
+        switch self {
+        case .minimalist:
+            return [.notch, .notchMascot, .notchNotifications, .notchTimer,
+                    .clipboardHistory, .keepAwake, .brightness]
+        case .creator:
+            return [.notch, .notchMascot, .notchNotifications, .notchLyrics,
+                    .clipboardHistory, .screenRecorder, .screenshot, .screenOCR,
+                    .colorPicker, .cameraPreview, .shelf, .mixer, .mediaTools]
+        case .developer:
+            return [.notch, .notchMascot, .notchNotifications, .notchAgents,
+                    .clipboardHistory, .commandBar, .textSnippets, .windowLayout,
+                    .switcher, .portManager, .homebrew, .killProcess,
+                    .monitorCPU, .monitorMemory]
+        case .fullPower:
+            return Set(AppFeature.allCases)
+        }
+    }
+
+    var enableKeys: [String] {
+        switch self {
+        case .minimalist:
+            return [DefaultsKey.notchEnabled, DefaultsKey.notchMascotEnabled,
+                    DefaultsKey.notchNotificationsEnabled, DefaultsKey.clipboardHistoryEnabled,
+                    DefaultsKey.brightnessControlEnabled]
+        case .creator:
+            return [DefaultsKey.notchEnabled, DefaultsKey.notchMascotEnabled,
+                    DefaultsKey.clipboardHistoryEnabled, DefaultsKey.screenshotShortcutEnabled,
+                    DefaultsKey.recorderShortcutEnabled, DefaultsKey.shelfEnabled]
+        case .developer:
+            return [DefaultsKey.notchEnabled, DefaultsKey.notchMascotEnabled,
+                    DefaultsKey.notchAgentsEnabled, DefaultsKey.clipboardHistoryEnabled,
+                    DefaultsKey.commandBarShortcutEnabled, DefaultsKey.textSnippetsEnabled,
+                    DefaultsKey.windowLayoutShortcutsEnabled, DefaultsKey.windowEdgeSnapEnabled,
+                    DefaultsKey.switcherEnabled]
+        case .fullPower:
+            return [DefaultsKey.notchEnabled, DefaultsKey.notchMascotEnabled,
+                    DefaultsKey.notchNotificationsEnabled, DefaultsKey.notchAgentsEnabled,
+                    DefaultsKey.clipboardHistoryEnabled, DefaultsKey.commandBarShortcutEnabled,
+                    DefaultsKey.textSnippetsEnabled, DefaultsKey.windowLayoutShortcutsEnabled,
+                    DefaultsKey.windowEdgeSnapEnabled, DefaultsKey.switcherEnabled,
+                    DefaultsKey.screenshotShortcutEnabled, DefaultsKey.recorderShortcutEnabled,
+                    DefaultsKey.shelfEnabled, DefaultsKey.brightnessControlEnabled]
+        }
+    }
+}

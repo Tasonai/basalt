@@ -3219,3 +3219,73 @@ enum NotchTranslucentTint {
         }
     }
 }
+
+/// Live activity snapshot used to surface currently active modules first in the
+/// Dynamic Island section gallery without altering user preferences.
+struct NotchLiveModuleStatus: Equatable {
+    var hasActiveCallOrCamera = false
+    var isTimerRunning = false
+    var isMediaPlaying = false
+    var isAgentRunning = false
+    var hasUnreadNotifications = false
+    var hasShelfItems = false
+}
+
+extension NotchSupport {
+    static func respectsFocusMode(in defaults: UserDefaults = .standard) -> Bool {
+        (defaults.object(forKey: DefaultsKey.notchRespectFocusMode) as? Bool) ?? true
+    }
+
+    static func usesSmartContextualOrder(in defaults: UserDefaults = .standard) -> Bool {
+        (defaults.object(forKey: DefaultsKey.notchSmartContextualOrder) as? Bool) ?? true
+    }
+
+    /// Reads macOS Focus assertion state conservatively from the user's
+    /// DoNotDisturb database when accessible; returns `false` if absent or
+    /// unreadable without invoking subprocesses or private SPIs.
+    static func isSystemFocusActive(assertionsURL: URL? = nil) -> Bool {
+        let url = assertionsURL ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/DoNotDisturb/DB/Assertions.json", isDirectory: false)
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = json["data"] as? [[String: Any]] else {
+            return false
+        }
+        return entries.contains { entry in
+            guard let records = entry["storeAssertionRecords"] as? [[String: Any]] else { return false }
+            return !records.isEmpty
+        }
+    }
+
+    static func suppressesAmbientVisits(in defaults: UserDefaults = .standard,
+                                      focusActive: Bool = isSystemFocusActive()) -> Bool {
+        respectsFocusMode(in: defaults) && focusActive
+    }
+
+    /// Orders modules so currently active live surfaces (call/camera, timer,
+    /// music, AI agents, unread notices, active shelf) appear immediately after
+    /// the primary controls hub while preserving relative user order within tiers.
+    static func orderedModules(base: [NotchModule],
+                               statuses: NotchLiveModuleStatus,
+                               smartOrder: Bool = true) -> [NotchModule] {
+        guard smartOrder, base.count > 1 else { return base }
+        func priority(for module: NotchModule) -> Int {
+            switch module {
+            case .controls: return 100
+            case .camera: return statuses.hasActiveCallOrCamera ? 90 : 0
+            case .timer: return statuses.isTimerRunning ? 85 : 0
+            case .music: return statuses.isMediaPlaying ? 80 : 0
+            case .agents: return statuses.isAgentRunning ? 75 : 0
+            case .notifications: return statuses.hasUnreadNotifications ? 70 : 0
+            case .files: return statuses.hasShelfItems ? 65 : 0
+            default: return 0
+            }
+        }
+        return base.enumerated().sorted { lhs, rhs in
+            let lp = priority(for: lhs.element)
+            let rp = priority(for: rhs.element)
+            if lp != rp { return lp > rp }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+}

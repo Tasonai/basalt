@@ -139,6 +139,14 @@ enum NotchMascotReaction: String, CaseIterable {
     case ready
     /// Music started: smiling eyes and a bob to the beat.
     case groove
+    /// Quick AI finished thinking and is ready with an answer.
+    case aiReady
+    /// Final seconds countdown beat on a timer or event.
+    case countdown
+    /// A 2FA/OTP code was copied in one click.
+    case codeCopied
+    /// Cleaner or Trash watcher has a tidy-up suggestion.
+    case sweep
 
     /// About how long it plays, so the companion stays out for all of it
     /// when it comes out over an activity to play it.
@@ -156,6 +164,10 @@ enum NotchMascotReaction: String, CaseIterable {
         case .hush: return 1.0
         case .ready: return 1.0
         case .groove: return 1.6
+        case .aiReady: return 1.1
+        case .countdown: return 1.0
+        case .codeCopied: return 0.95
+        case .sweep: return 1.2
         }
     }
 }
@@ -164,7 +176,7 @@ enum NotchMascotReaction: String, CaseIterable {
 /// island reacts to, each with the reaction it brings.
 enum NotchMascotMoment: String, CaseIterable, Identifiable {
     case visit, timerStarted, timeIsUp, music, agents, eventStarts, downloadFinished, downloadFailed, screenshot,
-         micMuted, keepAwake, charging, lowBattery, unlocked
+         micMuted, keepAwake, charging, lowBattery, unlocked, aiReady, countdownBeat, codeCopied, sweep
 
     var id: String { rawValue }
 
@@ -185,6 +197,10 @@ enum NotchMascotMoment: String, CaseIterable, Identifiable {
         case .charging: return .love
         case .lowBattery: return .yawn
         case .unlocked: return .wakeUp
+        case .aiReady: return .aiReady
+        case .countdownBeat: return .countdown
+        case .codeCopied: return .codeCopied
+        case .sweep: return .sweep
         }
     }
 
@@ -210,6 +226,10 @@ enum NotchMascotMoment: String, CaseIterable, Identifiable {
         case .charging: return "bolt"
         case .lowBattery: return "battery.25percent"
         case .unlocked: return "lock.open"
+        case .aiReady: return "wand.and.stars"
+        case .countdownBeat: return "hourglass"
+        case .codeCopied: return "number.square"
+        case .sweep: return "paintbrush"
         }
     }
 }

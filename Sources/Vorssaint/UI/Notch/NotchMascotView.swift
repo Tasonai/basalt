@@ -511,6 +511,9 @@ final class NotchMascotRig: NSObject {
             case .perk, .bounce: flashFace(.alert, duration: 1)
             case .ready: flashFace(.determined, duration: 1)
             case .groove: flashFace(.happy, duration: 1.4)
+            case .aiReady, .sweep: flashFace(.happy, duration: 1.0)
+            case .countdown: flashFace(.determined, duration: 1.0)
+            case .codeCopied: flashFace(.wink, duration: 0.95)
             }
             return
         }
@@ -630,6 +633,19 @@ final class NotchMascotRig: NSObject {
             land.keyTimes = times
             land.duration = reaction.length
             squasher.add(land, forKey: "squash")
+        case .aiReady:
+            flashFace(.happy, duration: reaction.length)
+            hop(height: max(3, lift * 0.85))
+            pop()
+        case .countdown:
+            flashFace(.determined, duration: reaction.length)
+            hop(height: max(2, lift * 0.45))
+        case .codeCopied:
+            flashFace(.wink, duration: reaction.length)
+            pop()
+        case .sweep:
+            flashFace(.happy, duration: reaction.length)
+            wobble()
         }
     }
 
@@ -998,6 +1014,20 @@ final class NotchMascotHostView: NSView {
         guard followsPointer else { return }
         follow(event)
         notePetting(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let center = mascot.root.position
+        let reach = mascot.size / 2 + 4
+        if followsPointer, abs(point.x - center.x) <= reach, abs(point.y - center.y) <= reach, !mascot.isVisiting {
+            mascot.react(.love, lift: 0)
+            if NotchSupport.usesHapticFeedback() {
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            }
+            return
+        }
+        super.mouseDown(with: event)
     }
 
     override func mouseExited(with event: NSEvent) {

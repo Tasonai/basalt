@@ -28,6 +28,8 @@ struct FeatureHubSettings: View {
     @State private var expandedGroups = Set(FeatureGroup.allCases)
     @State private var islandExtensionsExpanded = true
     @State private var presetsExpanded = true
+    @State private var extrasExpanded = false
+    @AppStorage(DefaultsKey.whatsAppDownloadsEnabled) private var whatsAppDownloadsEnabled = false
     /// Installed switches never once turned on, read when the page appears
     /// and after every install change rather than on every redraw.
     @State private var neverUsed: [AppFeature] = []
@@ -93,6 +95,7 @@ struct FeatureHubSettings: View {
                     ForEach(FeatureGroup.allCases.filter { $0 != .dynamicIsland }, id: \.self) { group in
                         groupCard(group)
                     }
+                    extrasCard
                     VStack(alignment: .leading, spacing: 4) {
                         Text(hub.footerNote)
                         Text(hub.energyHelp)
@@ -303,6 +306,59 @@ struct FeatureHubSettings: View {
     /// Three one-click starting points. Nobody arrives wanting 67 decisions;
     /// a preset shapes the app in one move and everything else stays one
     /// click away in the list below.
+    private var extrasCard: some View {
+        let copy = OverhaulStrings.localized(l10n.language)
+        let wa = FeatureStrings.whatsAppDownloads(l10n.language)
+        return SettingsCard {
+            DisclosureGroup(isExpanded: $extrasExpanded) {
+                if extrasExpanded {
+                    Divider()
+                        .padding(.leading, settingsRowTextInset)
+                    SettingsRow(
+                        symbol: "arrow.down.circle",
+                        title: wa.title,
+                        caption: wa.hubDescription,
+                        tint: SemanticCategoryTone.clipboardFiles.badgeColor
+                    ) {
+                        HStack(spacing: 10) {
+                            if whatsAppDownloadsEnabled {
+                                Button {
+                                    SettingsRouter.shared.cleanerTool = "whatsApp"
+                                    SettingsRouter.shared.request(FeatureSettingsDestination(.cleaner))
+                                } label: {
+                                    Label(l10n.s.cleanerName, systemImage: "arrow.up.forward.app")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            Toggle("", isOn: $whatsAppDownloadsEnabled)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "slider.horizontal.2.square.on.square")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 24, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: DesignRadius.iconTile, style: .continuous)
+                                .fill(SemanticCategoryTone.clipboardFiles.badgeColor.gradient)
+                        )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(copy.extrasGroupTitle)
+                            .font(.headline)
+                        Text(copy.extrasGroupCaption)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
     private var presetsCard: some View {
         SettingsCard {
             DisclosureGroup(hub.presetsTitle, isExpanded: $presetsExpanded) {
@@ -416,23 +472,24 @@ struct FeatureHubSettings: View {
     }
 
     private func groupHeader(_ group: FeatureGroup, installed: Int, total: Int) -> some View {
-        HStack(spacing: 10) {
+        let groupColor = SemanticCategoryPalette.color(for: group)
+        return HStack(spacing: 10) {
             Image(systemName: group.symbolName)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(groupColor)
                 .frame(width: 26, height: 26)
-                .background(Color.accentColor.opacity(0.12),
+                .background(groupColor.opacity(0.14),
                             in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             Text(groupTitle(group)).font(.headline)
             Spacer(minLength: 12)
             Text("\(installed)/\(total)")
                 .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
-                .foregroundStyle(installed > 0 ? Color.accentColor : Color.secondary)
+                .foregroundStyle(installed > 0 ? groupColor : Color.secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2.5)
                 .background(
                     Capsule()
-                        .fill(installed > 0 ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06))
+                        .fill(installed > 0 ? groupColor.opacity(0.13) : Color.primary.opacity(0.06))
                 )
         }
     }

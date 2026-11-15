@@ -362,6 +362,13 @@ struct WindowLayoutSettings: View {
     /// ten-view ViewBuilder limit.
     @ViewBuilder
     private var placementSections: some View {
+        Section {
+            WindowSnapZonePreview(
+                screenGap: max(0, screenGap),
+                edgeSnapEnabled: edgeSnapEnabled,
+                strings: OverhaulStrings.localized(l10n.language)
+            )
+        }
         Section(text.halves) {
             ForEach(Self.halfActions) { action in
                 actionRow(action)

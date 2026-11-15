@@ -80,8 +80,10 @@ private struct NotchNotificationRow: View {
     let item: NotchSystemNotification
     @ObservedObject var service: NotchNotificationService
     let text: NotchNotificationStrings
+    @ObservedObject private var l10n = L10n.shared
     @State private var feedback: String?
     @State private var isHovered = false
+    @State private var copiedOTP = false
 
     private var showsActions: Bool {
         isHovered || service.openingID == item.id
@@ -121,6 +123,21 @@ private struct NotchNotificationRow: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            if let otp = NotchNotificationSupport.extractVerificationCode(from: item.content) {
+                let overhaul = OverhaulStrings.localized(l10n.language)
+                NotchPillButton(
+                    title: copiedOTP ? overhaul.otpCopiedBadge : "\(overhaul.copyOTPButton): \(otp)",
+                    prominent: true
+                ) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(otp, forType: .string)
+                    copiedOTP = true
+                    if NotchSupport.usesHapticFeedback() {
+                        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+                    }
+                    NotchService.shared.reactMascot(.codeCopied)
+                }
+            }
             if let message = feedback ?? (service.unavailableID == item.id ? text.unavailable : nil) {
                 Text(message).font(.caption).foregroundStyle(.orange).lineLimit(1)
             }
@@ -142,6 +159,7 @@ struct NotchNotificationPreviewView: View {
     @ObservedObject var service: NotchService
     @ObservedObject private var notifications = NotchNotificationService.shared
     @ObservedObject private var l10n = L10n.shared
+    @State private var copiedOTP = false
     private var text: NotchNotificationStrings { FeatureStrings.notchNotifications(l10n.language) }
     private var item: NotchSystemNotification? {
         notifications.items.first { $0.id == notice.notificationID }
@@ -183,9 +201,25 @@ struct NotchNotificationPreviewView: View {
                     .textSelection(.enabled)
             }
             HStack(spacing: 8) {
-                if let item, notifications.canOpen(item) {
+                let openAvailable = item.map { notifications.canOpen($0) } ?? false
+                if openAvailable {
                     NotchPillButton(title: text.open, prominent: true) { service.activateNotice(notice) }
                         .disabled(notifications.openingID != nil)
+                }
+                if let otp = NotchNotificationSupport.extractVerificationCode(from: content) {
+                    let overhaul = OverhaulStrings.localized(l10n.language)
+                    NotchPillButton(
+                        title: copiedOTP ? overhaul.otpCopiedBadge : "\(overhaul.copyOTPButton): \(otp)",
+                        prominent: !openAvailable
+                    ) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(otp, forType: .string)
+                        copiedOTP = true
+                        if NotchSupport.usesHapticFeedback() {
+                            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+                        }
+                        service.reactMascot(.codeCopied)
+                    }
                 }
                 if notifications.openingID == notice.notificationID { ProgressView().controlSize(.small) }
                 Spacer(minLength: 8)

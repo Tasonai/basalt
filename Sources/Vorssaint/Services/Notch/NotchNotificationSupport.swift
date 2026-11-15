@@ -238,3 +238,84 @@ enum NotchNotificationPreviewLayout {
         return min(ceil(measured) + 1, line * CGFloat(max(1, lines)) + 1)
     }
 }
+
+extension NotchNotificationSupport {
+    private static let otpKeywords = [
+        "code", "otp", "verification", "verify", "passcode", "2fa", "mfa", "pin",
+        "one-time", "totp", "auth", "token", "login", "sign in", "sign-in",
+        "код", "парол", "подтвержд", "провероч", "вход",
+        "código", "codigo", "code de", "bestätigungscode", "codice",
+        "認証", "確認コード", "인증", "확인 코드", "验证码", "驗證碼", "动态码",
+    ]
+
+    private static let immediateCodeCueRegex = try? NSRegularExpression(
+        pattern: "(?:code|otp|pin|passcode|код|пароль|código|codigo|验证码|驗證碼|인증|認証)\\s*[:#\\-—is]*\\s*$",
+        options: [.caseInsensitive]
+    )
+
+    /// Extracts a 4-8 digit OTP/2FA verification code (including `NNN-NNN`) from
+    /// a notification when OTP context keywords are present, while rejecting
+    /// dates, years, URL ports, phone numbers, currency values, and percentages.
+    static func extractVerificationCode(from content: NotchNotificationContent) -> String? {
+        let combined = [content.title, content.subtitle, content.body]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        guard !combined.isEmpty else { return nil }
+        let lower = combined.lowercased()
+        guard otpKeywords.contains(where: { lower.contains($0) }) else { return nil }
+
+        // Strip URLs so paths or ports (e.g. :8080/123456) never masquerade as OTPs.
+        let sanitized: String
+        if let urlRegex = try? NSRegularExpression(pattern: "https?://\\S+", options: .caseInsensitive) {
+            let full = NSRange(combined.startIndex..<combined.endIndex, in: combined)
+            sanitized = urlRegex.stringByReplacingMatches(in: combined, options: [], range: full, withTemplate: " ")
+        } else {
+            sanitized = combined
+        }
+
+        // First look for hyphenated 6-digit codes such as 482-910.
+        if let hyphenRegex = try? NSRegularExpression(pattern: "(?<![0-9+\\-])([0-9]{3})-([0-9]{3})(?![0-9\\-])") {
+            let full = NSRange(sanitized.startIndex..<sanitized.endIndex, in: sanitized)
+            if let match = hyphenRegex.firstMatch(in: sanitized, options: [], range: full),
+               let r1 = Range(match.range(at: 1), in: sanitized),
+               let r2 = Range(match.range(at: 2), in: sanitized) {
+                return String(sanitized[r1]) + String(sanitized[r2])
+            }
+        }
+
+        guard let tokenRegex = try? NSRegularExpression(pattern: "(?<![0-9])([0-9]{4,8})(?![0-9])") else {
+            return nil
+        }
+        let full = NSRange(sanitized.startIndex..<sanitized.endIndex, in: sanitized)
+        let matches = tokenRegex.matches(in: sanitized, options: [], range: full)
+        let ns = sanitized as NSString
+        for match in matches {
+            let r = match.range(at: 1)
+            let token = ns.substring(with: r)
+            let beforeChar = r.location > 0 ? ns.character(at: r.location - 1) : 32
+            let afterIdx = r.location + r.length
+            let afterChar = afterIdx < ns.length ? ns.character(at: afterIdx) : 32
+
+            // Reject phone (+12345), currency ($1234), %, decimal numbers (12.3456 / 1234.56), or hyphenated date/phone tails.
+            if [43, 36, 163, 165, 8364, 8381, 8377].contains(Int(beforeChar)) { continue }
+            if [37, 45, 47].contains(Int(afterChar)) { continue }
+            if beforeChar == 47 || beforeChar == 45 { continue }
+            let afterNextDigit = afterChar == 46 && (afterIdx + 1 < ns.length)
+                && (48...57).contains(Int(ns.character(at: afterIdx + 1)))
+            let beforePrevDigit = beforeChar == 46 && r.location >= 2
+                && (48...57).contains(Int(ns.character(at: r.location - 2)))
+            if afterNextDigit || beforePrevDigit { continue }
+
+            // Reject plausible 4-digit calendar years (1990..2099) unless directly preceded by an explicit OTP cue.
+            if token.count == 4, let value = Int(token), (1990...2099).contains(value) {
+                let prefixStart = max(0, r.location - 24)
+                let prefix = ns.substring(with: NSRange(location: prefixStart, length: r.location - prefixStart))
+                let cueRange = NSRange(location: 0, length: (prefix as NSString).length)
+                let hasCue = immediateCodeCueRegex?.firstMatch(in: prefix, options: [], range: cueRange) != nil
+                if !hasCue { continue }
+            }
+            return token
+        }
+        return nil
+    }
+}

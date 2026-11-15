@@ -200,6 +200,7 @@ struct MenuPanelView: View {
                 .environment(\.colorScheme, .dark)
             }
             .frame(width: size.width, height: max(0, size.height - 96))
+            .overlayScrollEdgeFade(contentHeight: navigableContentHeight, viewportHeight: max(0, size.height - 96))
             footer
         }
         .frame(width: size.width, height: size.height, alignment: .top)
@@ -219,6 +220,7 @@ struct MenuPanelView: View {
                 .frame(width: 308)
             }
             .frame(width: 308, height: navigableScrollHeight)
+            .overlayScrollEdgeFade(contentHeight: navigableContentHeight, viewportHeight: navigableScrollHeight)
 
             footer
         }
@@ -240,6 +242,7 @@ struct MenuPanelView: View {
                         .frame(width: 308)
                 }
                 .frame(width: 308, height: metricScrollHeight)
+                .overlayScrollEdgeFade(contentHeight: metricContentHeight, viewportHeight: metricScrollHeight)
             }
 
             footer

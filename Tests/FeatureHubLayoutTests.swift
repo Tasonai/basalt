@@ -36,6 +36,7 @@ enum FeatureHubLayoutTests {
             Text("Dynamic Island").frame(height: 900).id(FeatureGroup.dynamicIsland)
         }
         var presetsCard: some View { Text("Presets").frame(height: 180) }
+        var extrasCard: some View { EmptyView() }
         func groupCard(_ group: FeatureGroup) -> some View {
             SettingsCard {
                 Text(group.rawValue)

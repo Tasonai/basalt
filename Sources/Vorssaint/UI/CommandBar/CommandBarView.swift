@@ -506,6 +506,7 @@ struct CommandBarView: View {
                 .frame(maxHeight: Self.listCeiling)
                 .fixedSize(horizontal: false, vertical: service.rows.count <= 14)
                 .frame(minHeight: service.rows.count > 14 ? Self.listCeiling : nil)
+                .notchScrollEdgeFade(axis: .vertical, length: 14)
                 .onChange(of: service.selectedIndex) { _, index in
                     guard service.rows.indices.contains(index) else { return }
                     proxy.scrollTo(service.rows[index].id)
@@ -896,6 +897,7 @@ struct CommandBarView: View {
                 .padding(.horizontal, 17)
             }
             .frame(maxHeight: Self.listCeiling - 90)
+            .notchScrollEdgeFade(axis: .vertical, length: 12)
             Divider().padding(.horizontal, 17)
             uninstallHomebrewStatus
             uninstallReviewFooter

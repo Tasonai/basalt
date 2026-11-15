@@ -118,6 +118,10 @@ struct NotchMascotStrings {
         case .charging: return FeatureStrings.notch(language).charging
         case .lowBattery: return FeatureStrings.notch(language).lowBattery
         case .unlocked: return unlocked
+        case .aiReady: return OverhaulStrings.localized(language).momentAIReady
+        case .countdownBeat: return OverhaulStrings.localized(language).momentCountdown
+        case .codeCopied: return OverhaulStrings.localized(language).momentCodeCopied
+        case .sweep: return OverhaulStrings.localized(language).momentSweep
         }
     }
 

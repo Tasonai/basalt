@@ -619,6 +619,10 @@ if (( TEST )); then
         Sources/Vorssaint/Services/Uninstall/UninstallerSupport.swift
         Sources/Vorssaint/Services/ManagedDownloads/WhatsAppDownloadSupport.swift
         Sources/Vorssaint/Core/SecureInputSupport.swift
+        Sources/Vorssaint/Core/OverhaulStrings.swift
+        Sources/Vorssaint/UI/DesignSystem/SemanticCategoryPalette.swift
+        Sources/Vorssaint/UI/DesignSystem/DesignTokens.swift
+        Sources/Vorssaint/UI/DesignSystem/VorssaintMetalShaders.swift
         Tests/*.swift
         build/generated-tests/*.swift
     )

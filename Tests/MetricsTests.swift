@@ -242,6 +242,7 @@ struct MetricsTests {
                 WallpaperThumbnailTests.run(suite)
             }),
             ("emoji", { CommandBarEmojiContract.run(suite) }),
+            ("wave1-overhaul", { Wave1OverhaulContract.run(suite) }),
         ]
         var selected = Set<String>()
         var listOnly = false
