@@ -103,19 +103,35 @@ struct CleanerView: View {
     @State private var scheduleHovered = false
     @State private var whatsAppHovered = false
     @State private var showSpaceLens = false
+    @State private var spaceLensBreadcrumbs: [(title: String, url: URL?)] = []
+    @State private var spaceLensGroupFilter: DisplayGroup? = nil
+    @State private var drilledDirectoryNodes: [SpaceLensNode] = []
+    @State private var selectedSpaceTileID: String? = nil
+    @State private var spaceLensScanning = false
     @ObservedObject private var trashWatcher = TrashWatcherService.shared
     /// Tightens paddings for the panel and launcher.
     var compact = false
 
     var body: some View {
-        content
-            .frame(maxWidth: .infinity)
+        VStack(spacing: 0) {
+            trashWatcherBanner
+            content
+        }
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
     private var content: some View {
         switch cleaner.phase {
-        case .idle: settingsScrolling(idleState)
+        case .idle:
+            if showSpaceLens, !spaceLensBreadcrumbs.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    spaceLensToggleBar
+                    spaceLensMapView
+                }
+            } else {
+                settingsScrolling(idleState)
+            }
         case .scanning: settingsScrolling(busyState(l10n.s.cleanerScanning, detail: scanningDetail))
         case .results:
             VStack(alignment: .leading, spacing: 6) {
@@ -131,6 +147,63 @@ struct CleanerView: View {
         }
     }
 
+    @ViewBuilder
+    private var trashWatcherBanner: some View {
+        if let trashed = trashWatcher.detectedAppName {
+            let leftovers = trashWatcher.detectedLeftovers
+            HStack(spacing: 10) {
+                MascotCameoBadge(
+                    mood: .determined,
+                    reaction: .sweep,
+                    tone: .tools,
+                    size: 26
+                )
+                VStack(alignment: .leading, spacing: 2) {
+                    if leftovers.isEmpty {
+                        Text(trashed)
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                    } else {
+                        Text(String(format: OverhaulStrings.wave4(l10n.language).trashLeftoversFoundFormat,
+                                    leftovers.count, trashed))
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                        Text(prettyPath(leftovers[0]))
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 4)
+                if !leftovers.isEmpty {
+                    Button(OverhaulStrings.wave4(l10n.language).cleanLeftoversButton) {
+                        trashWatcher.removeDetectedLeftovers()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.mini)
+                }
+                Button("Dismiss") {
+                    trashWatcher.clear()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
+            .padding(.horizontal, compact ? 10 : 14)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.orange.opacity(0.10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.orange.opacity(0.28), lineWidth: 1)
+                    )
+            )
+            .padding(.horizontal, compact ? 10 : 18)
+            .padding(.top, 8)
+        }
+    }
+
     private var spaceLensToggleBar: some View {
         HStack(spacing: 8) {
             if let trashed = trashWatcher.detectedAppName, !trashWatcher.detectedLeftovers.isEmpty {
@@ -142,6 +215,16 @@ struct CleanerView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 4)
+            Button {
+                chooseSpaceLensFolder()
+            } label: {
+                Label(OverhaulV2Strings.localized(l10n.language).spaceLensRootLabel,
+                      systemImage: "folder.badge.gearshape")
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+
             Button {
                 withAnimation(.easeOut(duration: 0.16)) {
                     showSpaceLens.toggle()
@@ -158,46 +241,296 @@ struct CleanerView: View {
         .padding(.top, 6)
     }
 
-    private var spaceLensMapView: some View {
-        GeometryReader { proxy in
-            let nodes = DisplayGroup.allCases.enumerated().map { idx, grp in
-                SpaceLensNode(id: "\(grp.rawValue)",
-                              title: title(for: grp),
-                              bytes: items(for: grp).reduce(Int64(0)) { $0 + $1.size },
-                              categoryIndex: idx)
-            }
-            let rect = CGRect(origin: .zero, size: CGSize(width: max(120, proxy.size.width),
-                                                          height: max(140, proxy.size.height)))
-            let tiles = SpaceLensTreemap.layout(nodes: nodes, in: rect)
-            ZStack(alignment: .topLeading) {
-                ForEach(tiles) { tile in
-                    let groups = FeatureGroup.allCases
-                    let color = SemanticCategoryPalette.color(for: groups[tile.categoryIndex % max(1, groups.count)])
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(color.opacity(0.26))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(color.opacity(0.55), lineWidth: 1)
-                        )
-                        .overlay(alignment: .topLeading) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(tile.title)
-                                    .font(.system(size: 10.5, weight: .semibold))
-                                    .lineLimit(1)
-                                Text(Self.byteString(tile.bytes))
-                                    .font(.system(size: 9.5).monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(6)
-                        }
-                        .frame(width: max(4, tile.rect.width - 4), height: max(4, tile.rect.height - 4))
-                        .offset(x: tile.rect.minX + 2, y: tile.rect.minY + 2)
-                }
+    private var currentSpaceLensNodes: [SpaceLensNode] {
+        if !spaceLensBreadcrumbs.isEmpty {
+            return drilledDirectoryNodes
+        }
+        if let group = spaceLensGroupFilter {
+            return items(for: group).enumerated().map { idx, item in
+                var isDirObj: ObjCBool = false
+                let exists = FileManager.default.fileExists(atPath: item.url.path, isDirectory: &isDirObj)
+                return SpaceLensNode(
+                    id: item.url.path,
+                    title: item.name,
+                    bytes: item.size,
+                    categoryIndex: idx,
+                    url: item.url,
+                    isDirectory: exists && isDirObj.boolValue
+                )
             }
         }
-        .frame(minHeight: compact ? 180 : 280)
+        return DisplayGroup.allCases.enumerated().map { idx, grp in
+            SpaceLensNode(
+                id: "group-\(grp.rawValue)",
+                title: title(for: grp),
+                bytes: items(for: grp).reduce(Int64(0)) { $0 + $1.size },
+                categoryIndex: idx
+            )
+        }
+    }
+
+    private var selectedSpaceTileURL: URL? {
+        guard let selectedSpaceTileID else { return nil }
+        return currentSpaceLensNodes.first(where: { $0.id == selectedSpaceTileID })?.url
+    }
+
+    private var spaceLensMapView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            spaceLensNavigationHeader
+
+            let nodes = currentSpaceLensNodes
+            if spaceLensScanning {
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(l10n.s.cleanerScanning)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: compact ? 160 : 240)
+            } else if nodes.allSatisfy({ $0.bytes <= 0 }) {
+                VStack(spacing: 6) {
+                    Image(systemName: "internaldrive")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.tertiary)
+                    Text(OverhaulStrings.wave4(l10n.language).spaceLensTitle)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: compact ? 160 : 240)
+            } else {
+                GeometryReader { proxy in
+                    let rect = CGRect(origin: .zero, size: CGSize(width: max(120, proxy.size.width),
+                                                                  height: max(140, proxy.size.height)))
+                    let tiles = SpaceLensTreemap.layout(nodes: nodes, in: rect)
+                    ZStack(alignment: .topLeading) {
+                        ForEach(tiles) { tile in
+                            spaceLensTileView(tile)
+                        }
+                    }
+                }
+                .frame(minHeight: compact ? 180 : 260)
+            }
+        }
         .padding(.horizontal, compact ? 10 : 18)
         .padding(.bottom, 12)
+        .focusable()
+        .onKeyPress(.space) {
+            guard let url = selectedSpaceTileURL else { return .ignored }
+            ShelfQuickLookCoordinator.shared.toggle(urls: [url])
+            return .handled
+        }
+    }
+
+    private var spaceLensNavigationHeader: some View {
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    Button(OverhaulStrings.wave4(l10n.language).spaceLensTitle) {
+                        resetSpaceLensRoot()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+
+                    if let group = spaceLensGroupFilter {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8.5, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                        Button(title(for: group)) {
+                            spaceLensBreadcrumbs = []
+                            drilledDirectoryNodes = []
+                            selectedSpaceTileID = nil
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+
+                    ForEach(Array(spaceLensBreadcrumbs.enumerated()), id: \.offset) { index, crumb in
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8.5, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                        Button(crumb.title) {
+                            popSpaceLensBreadcrumb(to: index)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            if let selectedURL = selectedSpaceTileURL {
+                Button {
+                    ShelfQuickLookCoordinator.shared.toggle(urls: [selectedURL])
+                } label: {
+                    Image(systemName: "eye")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Quick Look")
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([selectedURL])
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help(l10n.s.cleanerRevealInFinder)
+            }
+
+            if !spaceLensBreadcrumbs.isEmpty || spaceLensGroupFilter != nil {
+                Button(OverhaulV2Strings.localized(l10n.language).spaceLensUpButton) {
+                    stepUpSpaceLensLevel()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func spaceLensTileView(_ tile: SpaceLensTile) -> some View {
+        let groups = FeatureGroup.allCases
+        let color = SemanticCategoryPalette.color(for: groups[tile.categoryIndex % max(1, groups.count)])
+        let isSelected = selectedSpaceTileID == tile.id
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(color.opacity(isSelected ? 0.36 : 0.24))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor : color.opacity(0.55), lineWidth: isSelected ? 1.8 : 1)
+            )
+            .overlay(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 3) {
+                        if tile.isDirectory || tile.id.hasPrefix("group-") {
+                            Image(systemName: "folder.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(tile.title)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    Text(Self.byteString(tile.bytes))
+                        .font(.system(size: 9.5).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(6)
+            }
+            .frame(width: max(4, tile.rect.width - 4), height: max(4, tile.rect.height - 4))
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                if let url = tile.url {
+                    if tile.isDirectory {
+                        drillIntoDirectory(url, title: tile.title)
+                    } else {
+                        ShelfQuickLookCoordinator.shared.toggle(urls: [url])
+                    }
+                }
+            }
+            .onTapGesture {
+                handleSpaceLensTileTap(tile)
+            }
+            .contextMenu {
+                if let url = tile.url {
+                    if tile.isDirectory {
+                        Button(OverhaulStrings.wave4(l10n.language).spaceLensTitle) {
+                            drillIntoDirectory(url, title: tile.title)
+                        }
+                    }
+                    Button("Quick Look") {
+                        ShelfQuickLookCoordinator.shared.toggle(urls: [url])
+                    }
+                    Button(l10n.s.cleanerRevealInFinder) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                }
+            }
+            .offset(x: tile.rect.minX + 2, y: tile.rect.minY + 2)
+    }
+
+    private func handleSpaceLensTileTap(_ tile: SpaceLensTile) {
+        selectedSpaceTileID = tile.id
+        if spaceLensBreadcrumbs.isEmpty, spaceLensGroupFilter == nil,
+           tile.id.hasPrefix("group-"),
+           let raw = Int(tile.id.replacingOccurrences(of: "group-", with: "")),
+           let group = DisplayGroup(rawValue: raw) {
+            spaceLensGroupFilter = group
+            selectedSpaceTileID = nil
+            return
+        }
+        if tile.isDirectory, let url = tile.url {
+            drillIntoDirectory(url, title: tile.title)
+        }
+    }
+
+    private func resetSpaceLensRoot() {
+        spaceLensGroupFilter = nil
+        spaceLensBreadcrumbs = []
+        drilledDirectoryNodes = []
+        selectedSpaceTileID = nil
+        spaceLensScanning = false
+        if case .idle = cleaner.phase {
+            showSpaceLens = false
+        }
+    }
+
+    private func stepUpSpaceLensLevel() {
+        selectedSpaceTileID = nil
+        if spaceLensBreadcrumbs.count > 1 {
+            popSpaceLensBreadcrumb(to: spaceLensBreadcrumbs.count - 2)
+        } else if !spaceLensBreadcrumbs.isEmpty {
+            spaceLensBreadcrumbs = []
+            drilledDirectoryNodes = []
+            if case .idle = cleaner.phase {
+                showSpaceLens = false
+            }
+        } else {
+            spaceLensGroupFilter = nil
+        }
+    }
+
+    private func popSpaceLensBreadcrumb(to index: Int) {
+        guard index >= 0, index < spaceLensBreadcrumbs.count else { return }
+        spaceLensBreadcrumbs = Array(spaceLensBreadcrumbs.prefix(index + 1))
+        selectedSpaceTileID = nil
+        if let url = spaceLensBreadcrumbs.last?.url {
+            loadDirectoryNodes(at: url)
+        }
+    }
+
+    private func drillIntoDirectory(_ url: URL, title: String) {
+        spaceLensBreadcrumbs.append((title: title, url: url))
+        selectedSpaceTileID = nil
+        loadDirectoryNodes(at: url)
+    }
+
+    private func loadDirectoryNodes(at url: URL) {
+        spaceLensScanning = true
+        Task.detached(priority: .userInitiated) {
+            let children = SpaceLensDirectoryScanner.scanChildren(at: url, maxEntries: 24)
+            await MainActor.run {
+                drilledDirectoryNodes = children
+                spaceLensScanning = false
+            }
+        }
+    }
+
+    private func chooseSpaceLensFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, let url = panel.url {
+            showSpaceLens = true
+            spaceLensGroupFilter = nil
+            spaceLensBreadcrumbs = [(title: url.lastPathComponent, url: url)]
+            selectedSpaceTileID = nil
+            loadDirectoryNodes(at: url)
+        }
     }
 
     /// On the Settings page every detail must host a scroll container: the
@@ -339,9 +672,18 @@ struct CleanerView: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 380)
-            Button(l10n.s.cleanerScan) { cleaner.scan(attended: true) }
+            HStack(spacing: 10) {
+                Button(l10n.s.cleanerScan) { cleaner.scan(attended: true) }
+                    .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
+                Button {
+                    chooseSpaceLensFolder()
+                } label: {
+                    Label(OverhaulV2Strings.localized(l10n.language).spaceLensRootLabel, systemImage: "square.grid.2x2")
+                }
                 .controlSize(.large)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
+            }
             scheduleCard
             screenshotsCard
             if !compact, !whatsAppEnabled { whatsAppOptInCard }

@@ -78,6 +78,19 @@
 	<string>Vorssaint organizes confirmed WhatsApp downloads in a destination folder you explicitly choose. The Cleaner also looks for forgotten screenshots when you save screenshots here.</string>
 	<key>NSCameraUseContinuityCameraDeviceType</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.vorssaint.utils.url</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>vorssaint</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Vorssaint</string>
 	<key>NSPrincipalClass</key>

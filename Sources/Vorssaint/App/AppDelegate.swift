@@ -177,6 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if AppFeature.monitorPower.isAvailable, PowerSampler.hasInternalBattery {
             MaxCapacityProbe.shared.refreshIfStale()
         }
+        TrashWatcherService.shared.startWatchingTrash()
+        MediaAutoOptimizerService.shared.syncWithPreferences()
         UpdateService.shared.startAutomaticChecks()
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
@@ -364,7 +366,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if AppFeature.clipboardHistory.isAvailable {
             ClipboardHistoryService.shared.flushBeforeTermination()
         }
+        TrashWatcherService.shared.stopWatchingTrash()
+        MediaAutoOptimizerService.shared.stop()
         KeepAwakeManager.shared.deactivate(reason: .quit)
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            _ = VorssaintAutomationRouter.shared.handle(url: url)
+        }
     }
 
     /// The lifeline when the menu bar icon goes missing. Opening the app again

@@ -24,6 +24,7 @@ enum BreakdownKind {
 struct SystemSection: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var monitor = SystemMonitor.shared
+    @ObservedObject private var telemetryRing = TelemetryHistoryRing.shared
     @Environment(\.colorScheme) private var colorScheme
     var collapsible = true
     let showConnectedDevices: () -> Void
@@ -50,6 +51,7 @@ struct SystemSection: View {
     @AppStorage(DefaultsKey.panelSystemOrder) private var systemOrderRaw = ""
     @AppStorage(DefaultsKey.telemetryHorizon) private var telemetryHorizonRaw = TelemetryHorizon.oneMinute.rawValue
     @State private var draggingBlock: Block?
+    @State private var hoveredTelemetryNormalizedX: Double? = nil
 
     private var telemetryHorizon: TelemetryHorizon {
         TelemetryHorizon(rawValue: telemetryHorizonRaw) ?? .oneMinute
@@ -61,28 +63,32 @@ struct SystemSection: View {
                      resetAction: resetPanelDefaults) { editing in
             VStack(alignment: .leading, spacing: 10) {
                 if !editing {
-                    HStack(spacing: 4) {
-                        Text(OverhaulStrings.wave4(l10n.language).telemetryHorizonLabel)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 4)
-                        ForEach(TelemetryHorizon.allCases) { horizon in
-                            Button {
-                                telemetryHorizonRaw = horizon.rawValue
-                            } label: {
-                                Text(horizon.rawValue)
-                                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                                    .foregroundStyle(telemetryHorizon == horizon ? Color.accentColor : Color.secondary)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(
-                                        Capsule().fill(telemetryHorizon == horizon
-                                                       ? Color.accentColor.opacity(0.16)
-                                                       : Color.primary.opacity(0.05))
-                                    )
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 4) {
+                            Text(OverhaulStrings.wave4(l10n.language).telemetryHorizonLabel)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 4)
+                            ForEach(TelemetryHorizon.allCases) { horizon in
+                                Button {
+                                    hoveredTelemetryNormalizedX = nil
+                                    telemetryHorizonRaw = horizon.rawValue
+                                } label: {
+                                    Text(horizon.rawValue)
+                                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(telemetryHorizon == horizon ? Color.accentColor : Color.secondary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            Capsule().fill(telemetryHorizon == horizon
+                                                           ? Color.accentColor.opacity(0.16)
+                                                           : Color.primary.opacity(0.05))
+                                        )
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
+                        telemetryScrubBar
                     }
                 }
                 let currentBlocks = blocks(editing: editing)
@@ -104,14 +110,7 @@ struct SystemSection: View {
             }
             .panelCard()
         }
-        .onReceive(monitor.$snapshot) { snap in
-            TelemetryHistoryRing.shared.record(TelemetryPoint(
-                timestamp: Date().timeIntervalSince1970,
-                cpu: (snap.cpuUsage ?? 0) * 100.0,
-                gpu: (snap.gpuUsage ?? 0) * 100.0,
-                memory: snap.memoryPressure == .critical ? 90 : (snap.memoryPressure == .warning ? 70 : 40),
-                networkBytesPerSec: 0
-            ))
+        .onReceive(monitor.$snapshot) { _ in
             guard let kind = expanded,
                   Date().timeIntervalSince(lastBreakdownRefresh) >= kind.processRefreshInterval(
                       configuredMonitorInterval: monitorInterval
@@ -411,13 +410,19 @@ struct SystemSection: View {
             if sysCPU, cpuAvailable {
                 usageRow(label: l10n.s.cpuLabel, fraction: monitor.snapshot.cpuUsage,
                          kind: .cpu, editing: editing, visible: $sysCPU)
-                if graphCPU, monitor.snapshot.cpuHistory.count >= 2 {
-                    Sparkline(values: monitor.snapshot.cpuHistory,
+                let cpuSeries = telemetrySeries(for: .cpu, fallback: monitor.snapshot.cpuHistory)
+                if graphCPU, cpuSeries.count >= 2 {
+                    Sparkline(values: cpuSeries,
                               color: .accentColor,
                               maxValue: 1,
-                              showsZeroBaseline: true)
+                              showsZeroBaseline: true,
+                              hoveredNormalizedX: hoveredTelemetryNormalizedX,
+                              onHoverNormalizedX: { hoveredTelemetryNormalizedX = $0 })
                         .frame(height: 30)
                         .graphCeilingLabel(MetricFormat.percent(1))
+                }
+                if expanded == .cpu {
+                    clusterBreakdownView
                 }
                 // The apps list folds only under the per-core bars; without
                 // them CPU expands straight to its apps, like GPU and Memory.
@@ -449,11 +454,14 @@ struct SystemSection: View {
             if sysGPU, gpuAvailable {
                 usageRow(label: l10n.s.gpuLabel, fraction: monitor.snapshot.gpuUsage,
                          kind: .gpu, editing: editing, visible: $sysGPU)
-                if graphGPU, monitor.snapshot.gpuHistory.count >= 2 {
-                    Sparkline(values: monitor.snapshot.gpuHistory,
+                let gpuSeries = telemetrySeries(for: .gpu, fallback: monitor.snapshot.gpuHistory)
+                if graphGPU, gpuSeries.count >= 2 {
+                    Sparkline(values: gpuSeries,
                               color: PanelMetricColor.cyan(for: colorScheme),
                               maxValue: 1,
-                              showsZeroBaseline: true)
+                              showsZeroBaseline: true,
+                              hoveredNormalizedX: hoveredTelemetryNormalizedX,
+                              onHoverNormalizedX: { hoveredTelemetryNormalizedX = $0 })
                         .frame(height: 30)
                         .graphCeilingLabel(MetricFormat.percent(1))
                 }
@@ -489,6 +497,131 @@ struct SystemSection: View {
     static func uptimeString() -> String {
         let total = SystemInfo.wallClockUptimeSeconds() ?? Int(ProcessInfo.processInfo.systemUptime)
         return MetricFormat.uptime(total)
+    }
+
+    private func telemetrySeries(for metric: TelemetryMetricKind, fallback: [Double]) -> [Double] {
+        let series = telemetryRing.series(for: metric, horizon: telemetryHorizon)
+        if series.count >= 2 {
+            return series
+        }
+        if telemetryHorizon == .oneMinute {
+            return fallback
+        }
+        return series
+    }
+
+    @ViewBuilder
+    private var telemetryScrubBar: some View {
+        let hint = OverhaulV2Strings.localized(l10n.language).telemetryScrubHint
+        if let normalizedX = hoveredTelemetryNormalizedX,
+           let sample = telemetryRing.scrubPoint(for: telemetryHorizon, normalizedX: normalizedX) {
+            HStack(spacing: 8) {
+                Text(Self.scrubTimestampString(sample.timestamp, horizon: telemetryHorizon))
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 4)
+                Text("CPU \(String(format: "%.0f%%", locale: MetricFormat.locale, sample.cpu))")
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.accentColor)
+                Text("GPU \(String(format: "%.0f%%", locale: MetricFormat.locale, sample.gpu))")
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(PanelMetricColor.cyan(for: colorScheme))
+                Text("RAM \(String(format: "%.0f%%", locale: MetricFormat.locale, sample.memory))")
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(PanelMetricColor.mint(for: colorScheme))
+            }
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+        } else {
+            HStack(spacing: 4) {
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                Text(hint)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 2)
+        }
+    }
+
+    @ViewBuilder
+    private var clusterBreakdownView: some View {
+        let rawLoads: [Double] = !monitor.latestCoreLoads.isEmpty
+            ? monitor.latestCoreLoads
+            : monitor.snapshot.cpuCoreUsage.compactMap { $0.map { min(100.0, max(0.0, $0 * 100.0)) } }
+        let gpuPct = (monitor.snapshot.gpuUsage ?? 0) * 100.0
+        let cluster: AppleSiliconClusterEstimator.Breakdown? = !rawLoads.isEmpty
+            ? AppleSiliconClusterEstimator.estimate(
+                coreLoads: rawLoads,
+                efficiencyCoreCount: monitor.efficiencyCoreCount,
+                gpuLoad: gpuPct
+            )
+            : monitor.snapshot.cpuUsage.map { cpu in
+                AppleSiliconClusterEstimator.estimate(
+                    coreLoads: Array(repeating: cpu * 100.0, count: max(2, monitor.efficiencyCoreCount + 2)),
+                    efficiencyCoreCount: monitor.efficiencyCoreCount,
+                    gpuLoad: gpuPct
+                )
+            }
+        if let cluster {
+            VStack(alignment: .leading, spacing: 4) {
+                clusterBarRow(label: "E-Core", percent: cluster.eCorePercent, color: PanelMetricColor.mint(for: colorScheme))
+                clusterBarRow(label: "P-Core", percent: cluster.pCorePercent, color: .accentColor)
+                clusterBarRow(label: "ANE", percent: cluster.aneActivityPercent, color: PanelMetricColor.cyan(for: colorScheme))
+            }
+            .padding(.leading, 14)
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func clusterBarRow(label: String, percent: Double, color: Color) -> some View {
+        let clamped = min(100.0, max(0.0, percent))
+        return HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .leading)
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.08))
+                    Capsule()
+                        .fill(color)
+                        .frame(width: max(2, geometry.size.width * CGFloat(clamped / 100.0)))
+                }
+            }
+            .frame(height: 4)
+            Text(String(format: "%.0f%%", locale: MetricFormat.locale, clamped))
+                .font(.system(size: 10, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .frame(width: 34, alignment: .trailing)
+        }
+    }
+
+    private static let scrubSecondFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    private static let scrubMinuteFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
+    private static func scrubTimestampString(_ timestamp: TimeInterval, horizon: TelemetryHorizon) -> String {
+        let date = Date(timeIntervalSince1970: timestamp)
+        return (horizon == .twentyFourHours ? scrubMinuteFormatter : scrubSecondFormatter).string(from: date)
     }
 
     private static let memoryFormatter: ByteCountFormatter = {
@@ -573,12 +706,15 @@ struct SystemSection: View {
                 memorySecondaryRow(l10n.s.memoryCompressed, monitor.snapshot.memoryCompressed)
                 memorySecondaryRow(l10n.s.memoryCachedFiles, monitor.snapshot.memoryCached)
                 memorySecondaryRow(l10n.s.memorySwapUsed, monitor.snapshot.memorySwapUsed)
-                let memoryHistory = MonitorMemoryMetric.current.history(in: monitor.snapshot)
-                if graphMemory, memoryHistory.count >= 2 {
-                    Sparkline(values: memoryHistory,
+                let fallbackMemoryHistory = MonitorMemoryMetric.current.history(in: monitor.snapshot)
+                let memorySeries = telemetrySeries(for: .memory, fallback: fallbackMemoryHistory)
+                if graphMemory, memorySeries.count >= 2 {
+                    Sparkline(values: memorySeries,
                               color: PanelMetricColor.mint(for: colorScheme),
                               maxValue: 1,
-                              showsZeroBaseline: true)
+                              showsZeroBaseline: true,
+                              hoveredNormalizedX: hoveredTelemetryNormalizedX,
+                              onHoverNormalizedX: { hoveredTelemetryNormalizedX = $0 })
                         .frame(height: 30)
                         .graphCeilingLabel(MetricFormat.percent(1))
                 }

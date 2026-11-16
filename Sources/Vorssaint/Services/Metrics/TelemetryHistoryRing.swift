@@ -14,6 +14,13 @@ enum TelemetryHorizon: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+enum TelemetryMetricKind: String, CaseIterable, Equatable, Sendable {
+    case cpu
+    case gpu
+    case memory
+    case network
+}
+
 struct TelemetryPoint: Equatable, Sendable {
     let timestamp: TimeInterval
     let cpu: Double
@@ -53,6 +60,13 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
             append(sample, to: &dayRing, capacity: Self.dayCapacity)
         }
         os_unfair_lock_unlock(&lock)
+        if Thread.isMainThread {
+            objectWillChange.send()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.objectWillChange.send()
+            }
+        }
     }
 
     func points(for horizon: TelemetryHorizon) -> [TelemetryPoint] {
@@ -62,6 +76,22 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
         case .oneMinute: return minuteRing
         case .oneHour: return hourRing
         case .twentyFourHours: return dayRing
+        }
+    }
+
+    func series(for metric: TelemetryMetricKind, horizon: TelemetryHorizon) -> [Double] {
+        let list = points(for: horizon)
+        guard !list.isEmpty else { return [] }
+        switch metric {
+        case .cpu:
+            return list.map { min(1.0, max(0.0, $0.cpu / 100.0)) }
+        case .gpu:
+            return list.map { min(1.0, max(0.0, $0.gpu / 100.0)) }
+        case .memory:
+            return list.map { min(1.0, max(0.0, $0.memory / 100.0)) }
+        case .network:
+            let peak = max(list.map(\.networkBytesPerSec).max() ?? 0, 1.0)
+            return list.map { min(1.0, max(0.0, $0.networkBytesPerSec / peak)) }
         }
     }
 

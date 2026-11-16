@@ -885,16 +885,47 @@ enum MenuBarRenderer {
         let minimumValue = MenuBarMetricSpacing.current == .compact
             ? MenuBarSpacingSupport.compactReserve(label: label, value: value)
             : reservedValue
+        let isCompactTwoRow = (UserDefaults.standard.string(forKey: DefaultsKey.menuBarLabelStyle) ?? "compact") == "compact"
+        let showMiniSparkline = style == .dense
+            && warning == .none
+            && UserDefaults.standard.bool(forKey: "menuBarMiniSparklineEnabled")
+        let sparkSamples: [Double] = {
+            guard showMiniSparkline else { return [] }
+            let upper = label.uppercased()
+            let kind: TelemetryMetricKind?
+            if upper.hasPrefix("CPU") {
+                kind = .cpu
+            } else if upper.hasPrefix("GPU") {
+                kind = .gpu
+            } else if upper.hasPrefix("RAM") || upper.hasPrefix("MEM") {
+                kind = .memory
+            } else if upper.hasPrefix("NET") {
+                kind = .network
+            } else {
+                kind = nil
+            }
+            guard let kind else { return [] }
+            let raw = TelemetryHistoryRing.shared.series(for: kind, horizon: .oneMinute)
+            guard raw.count >= 2 else { return [] }
+            return Array(raw.suffix(8))
+        }()
+        let sparkKey = sparkSamples.map { String(Int((min(1, max(0, $0)) * 8).rounded())) }.joined(separator: ",")
         let pressureKey = pressure.map(String.init(describing:)) ?? "none"
-        let cacheKey = "metric|\(label)|\(value)|\(minimumValue)|\(style)|\(pressureKey)|\(warning)" as NSString
+        let cacheKey = "metric|\(label)|\(value)|\(minimumValue)|\(style)|\(pressureKey)|\(warning)|\(isCompactTwoRow)|\(sparkKey)" as NSString
         if let cached = blockImageCache.object(forKey: cacheKey) { return cached }
 
-        let labelFont = NSFont.systemFont(ofSize: style == .readable ? 7.2 : 6.6, weight: .medium)
-        let valueFont = NSFont.monospacedDigitSystemFont(ofSize: style == .readable ? 13.0 : 12.0,
-                                                         weight: .semibold)
+        let displayLabel = isCompactTwoRow ? label.uppercased() : label
+        let labelFont = NSFont.systemFont(
+            ofSize: style == .readable ? 7.2 : (isCompactTwoRow ? 6.8 : 6.6),
+            weight: isCompactTwoRow ? .semibold : .medium
+        )
+        let valueFont = NSFont.monospacedDigitSystemFont(
+            ofSize: style == .readable ? 13.0 : (isCompactTwoRow ? 12.2 : 12.0),
+            weight: .semibold
+        )
         let sizingLabelAttrs: [NSAttributedString.Key: Any] = [.font: labelFont]
         let sizingValueAttrs: [NSAttributedString.Key: Any] = [.font: valueFont]
-        let labelSize = (label as NSString).size(withAttributes: sizingLabelAttrs)
+        let labelSize = (displayLabel as NSString).size(withAttributes: sizingLabelAttrs)
         let valueSize = (value as NSString).size(withAttributes: sizingValueAttrs)
         let minimumValueSize = (minimumValue as NSString).size(withAttributes: sizingValueAttrs)
         let dotDiameter: CGFloat = pressure == nil ? 0 : (style == .readable ? 5.2 : 4.8)
@@ -902,29 +933,55 @@ enum MenuBarRenderer {
         let reservedValueWidth = max(valueSize.width, minimumValueSize.width)
         let reservedGroupWidth = dotDiameter + dotGap + reservedValueWidth
         let drawnGroupWidth = dotDiameter + dotGap + valueSize.width
-        let width = ceil(max(labelSize.width, reservedGroupWidth) + (style == .readable ? 2 : 0.5))
-        let height: CGFloat = style == .readable ? 23 : 21
+        let sparkWidth: CGFloat = sparkSamples.isEmpty ? 0 : 16
+        let sparkGap: CGFloat = sparkSamples.isEmpty ? 0 : 3
+        let textAreaWidth = max(labelSize.width, reservedGroupWidth)
+        let width = ceil(textAreaWidth + sparkGap + sparkWidth + (style == .readable ? 2 : 0.5))
+        let height: CGFloat = style == .readable ? 23 : (isCompactTwoRow ? 22 : 21)
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
             NSColor.clear.setFill()
             rect.fill()
-            let labelAttrs = dynamicTextAttributes(font: labelFont)
+            var labelAttrs = dynamicTextAttributes(font: labelFont)
+            if isCompactTwoRow, warning == .none {
+                labelAttrs[.foregroundColor] = NSColor.labelColor.withAlphaComponent(0.75)
+            }
             var valueAttrs = dynamicTextAttributes(font: valueFont)
             if let warningColor = nsColor(for: warning) { valueAttrs[.foregroundColor] = warningColor }
-            (label as NSString).draw(at: NSPoint(x: (width - labelSize.width) / 2,
-                                     y: style == .readable ? 12.9 : 12.0),
-                                     withAttributes: labelAttrs)
-            var valueX = (width - drawnGroupWidth) / 2
+            let drawOriginX: CGFloat = 0
+            (displayLabel as NSString).draw(at: NSPoint(x: drawOriginX + (textAreaWidth - labelSize.width) / 2,
+                                             y: style == .readable ? 12.9 : (isCompactTwoRow ? 12.6 : 12.0)),
+                                             withAttributes: labelAttrs)
+            var valueX = drawOriginX + (textAreaWidth - drawnGroupWidth) / 2
             if let pressure {
                 let dotRect = NSRect(x: valueX,
-                                     y: style == .readable ? 4.1 : 3.5,
+                                     y: style == .readable ? 4.1 : (isCompactTwoRow ? 4.0 : 3.5),
                                      width: dotDiameter,
                                      height: dotDiameter)
                 nsColor(for: pressure).setFill()
                 NSBezierPath(ovalIn: dotRect).fill()
                 valueX += dotDiameter + dotGap
             }
-            (value as NSString).draw(at: NSPoint(x: valueX, y: style == .readable ? -0.4 : -0.8),
+            (value as NSString).draw(at: NSPoint(x: valueX, y: style == .readable ? -0.4 : (isCompactTwoRow ? -0.2 : -0.8)),
                                      withAttributes: valueAttrs)
+            if !sparkSamples.isEmpty {
+                let sparkX = textAreaWidth + sparkGap
+                let sparkH: CGFloat = 14
+                let sparkY = (height - sparkH) / 2
+                let count = sparkSamples.count
+                let barW: CGFloat = max(1.2, (sparkWidth - CGFloat(max(0, count - 1)) * 0.8) / CGFloat(count))
+                let spacing: CGFloat = count > 1 ? (sparkWidth - barW * CGFloat(count)) / CGFloat(count - 1) : 0
+                NSColor.labelColor.withAlphaComponent(0.22).setFill()
+                NSBezierPath(roundedRect: NSRect(x: sparkX, y: sparkY, width: sparkWidth, height: 1), xRadius: 0.5, yRadius: 0.5).fill()
+                NSColor.labelColor.withAlphaComponent(0.78).setFill()
+                for (index, sample) in sparkSamples.enumerated() {
+                    let clamped = min(1, max(0, CGFloat(sample)))
+                    let barH = max(2, sparkH * clamped)
+                    let bx = sparkX + CGFloat(index) * (barW + spacing)
+                    NSBezierPath(roundedRect: NSRect(x: bx, y: sparkY, width: barW, height: barH),
+                                 xRadius: 0.5,
+                                 yRadius: 0.5).fill()
+                }
+            }
             return true
         }
         image.isTemplate = false
@@ -1026,7 +1083,8 @@ enum MenuBarRenderer {
 
     private static func networkBlockImage(down: String, up: String, style: MenuBarBlockStyle) -> NSImage {
         let uploadFirst = UserDefaults.standard.bool(forKey: DefaultsKey.menuBarNetworkUploadFirst)
-        let cacheKey = "network|\(down)|\(up)|\(style)|\(uploadFirst)" as NSString
+        let compact = MenuBarLabelStyle.current == .compact
+        let cacheKey = "network|\(down)|\(up)|\(style)|\(uploadFirst)|\(compact)" as NSString
         if let cached = blockImageCache.object(forKey: cacheKey) { return cached }
 
         let lines = uploadFirst ? ["↑\(up)", "↓\(down)"] : ["↓\(down)", "↑\(up)"]
@@ -1039,7 +1097,8 @@ enum MenuBarRenderer {
     private static func diskActivityBlockImage(read: String,
                                                write: String,
                                                style: MenuBarBlockStyle) -> NSImage {
-        let cacheKey = "diskActivity|\(read)|\(write)|\(style)" as NSString
+        let compact = MenuBarLabelStyle.current == .compact
+        let cacheKey = "diskActivity|\(read)|\(write)|\(style)|\(compact)" as NSString
         if let cached = blockImageCache.object(forKey: cacheKey) { return cached }
 
         return stackedRatesImage(lines: ["R\(read)", "W\(write)"],
@@ -1052,10 +1111,11 @@ enum MenuBarRenderer {
                                           reservedLines: [String],
                                           cacheKey: NSString,
                                           style: MenuBarBlockStyle) -> NSImage {
+        let isCompactTwoRow = MenuBarLabelStyle.current == .compact
         let font = NSFont.monospacedSystemFont(ofSize: networkBlockFontSize(style: style),
                                                weight: .semibold)
         let lineHeight = networkBlockLineHeight(style: style)
-        let height: CGFloat = style == .readable ? 22 : 20
+        let height: CGFloat = style == .readable ? 22 : (isCompactTwoRow ? 22 : 20)
         let imageSize = NSSize(width: rateBlockWidth(style: style), height: height)
         let image = NSImage(size: imageSize, flipped: false) { rect in
             NSColor.clear.setFill()
@@ -1269,6 +1329,10 @@ enum MenuBarRenderer {
         case (false, true): return "999°"
         case (false, false): return ""
         }
+    }
+
+    static var isCompactTwoRowMode: Bool {
+        MenuBarLabelStyle.current == .compact
     }
 
     static func twoRowCompactSummary(cpuPercent: Double, networkBytesPerSec: Double) -> String {

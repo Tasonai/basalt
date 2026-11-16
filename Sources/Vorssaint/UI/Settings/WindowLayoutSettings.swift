@@ -29,6 +29,7 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowLayoutSideRepeatCyclesThirds) private var sideRepeatCyclesThirds = false
     @AppStorage(DefaultsKey.windowCustomGridColumns) private var customGridColumns = 3
     @AppStorage(DefaultsKey.windowCustomGridRows) private var customGridRows = 2
+    @AppStorage(TitlebarScrollTap.preferenceKey) private var titlebarScrollGesturesEnabled = false
     @ObservedObject private var workspaceStore = WindowWorkspaceStore.shared
     @State private var newWorkspaceName = ""
     @State private var directionalError: String?
@@ -40,6 +41,10 @@ struct WindowLayoutSettings: View {
 
     private var text: WindowLayoutFeatureStrings {
         FeatureStrings.windowLayout(l10n.language)
+    }
+
+    private var v2Strings: OverhaulV2Strings {
+        OverhaulV2Strings.localized(l10n.language)
     }
 
     var body: some View {
@@ -152,6 +157,17 @@ struct WindowLayoutSettings: View {
                             Toggle(text.gestureRaiseWindow, isOn: $gestureRaiseWindow)
                         }
                         .padding(.leading, settingsRowTextInset)
+                    }
+                    Divider()
+                    SettingsRow(symbol: "hand.draw",
+                                title: v2Strings.titlebarGesturesEnable,
+                                caption: titlebarGestureHelpCaption) {
+                        Toggle(v2Strings.titlebarGesturesEnable, isOn: $titlebarScrollGesturesEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: titlebarScrollGesturesEnabled) { _, _ in
+                                TitlebarScrollTap.shared.syncWithPreferences()
+                            }
                     }
                 }
 
@@ -329,51 +345,114 @@ struct WindowLayoutSettings: View {
         OverhaulStrings.wave4(l10n.language)
     }
 
+    private var titlebarGestureHelpCaption: String {
+        switch l10n.language {
+        case .enUS:
+            return "Scroll or swipe inside a window\u{2019}s top 30pt titlebar to minimize (down), maximize (up), or snap left/right."
+        case .ru:
+            return "Проведите или прокрутите на верхней 30pt-шапке окна: вниз (свернуть), вверх (развернуть), влево/вправо (половина экрана)."
+        case .ptBR:
+            return "Role ou deslize na barra de título (30pt): para baixo minimiza, para cima maximiza e esquerda/direita encaixa na metade."
+        case .tr:
+            return "Pencerenin üst 30pt başlık çubuğunda kaydırın: aşağı simge durumuna küçültür, yukarı büyütür, sol/sağ yarıya yaslar."
+        case .es:
+            return "Desliza o haz scroll en la barra de título (30pt): abajo minimiza, arriba maximiza e izquierda/derecha ajusta a la mitad."
+        case .sk:
+            return "Posuňte alebo otočte kolieskom v hornom 30pt záhlaví okna: nadol minimalizuje, nahor maximalizuje, vľavo/vpravo prichytí na polovicu."
+        case .de:
+            return "In der oberen 30pt-Titelleiste scrollen oder wischen: nach unten minimiert, nach oben maximiert, links/rechts rastet halb ein."
+        case .fr:
+            return "Faites défiler sur la barre de titre (30pt)\u{00A0}: vers le bas réduit, vers le haut agrandit, gauche/droite place à moitié."
+        case .it:
+            return "Scorri sulla barra del titolo (30pt): giù riduce a icona, su massimizza, sinistra/destra aggancia a metà."
+        case .ja:
+            return "ウィンドウ上端 30pt のタイトルバー上でスクロール／スワイプして最小化（下）、最大化（上）、左右半分にスナップします。"
+        case .ko:
+            return "창 상단 30pt 제목 표시줄에서 스크롤/스와이프하여 최소화(아래), 최대화(위), 좌/우 절반 스냅을 실행합니다."
+        case .uk:
+            return "Прокрутіть або змахніть у верхній 30pt-смужці заголовка: вниз згортає, вгору розгортає, вліво/вправо прикріплює на половину."
+        case .zhHans:
+            return "在窗口顶部 30pt 标题栏区域滚动或滑动：向下最小化，向上最大化，向左/右半屏贴靠。"
+        case .zhTW:
+            return "在視窗頂部 30pt 標題列區域捲動或滑動：向下最小化，向上最大化，向左/右半螢幕貼齊。"
+        case .zhHK:
+            return "喺視窗頂部 30pt 標題列區域捲動或滑動：向下縮到最小，向上放到最大，向左/右半螢幕貼齊。"
+        }
+    }
+
     private var workspacesAndGridSection: some View {
         SettingsCard(title: wave4Strings.workspacesTitle) {
             HStack(spacing: 10) {
                 Text(wave4Strings.customSnapGridLabel)
                 Spacer()
                 Picker("", selection: $customGridColumns) {
+                    Text("2x2").tag(2)
                     Text("3x2").tag(3)
                     Text("4x2").tag(4)
                     Text("6x2").tag(6)
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 150)
+                .frame(width: 190)
+                Button {
+                    CustomSnapGridOverlayController.shared.show()
+                } label: {
+                    Label(v2Strings.customSnapOverlayButton, systemImage: "square.grid.3x2")
+                }
+                .controlSize(.small)
+                .disabled(!permissions.accessibility)
             }
             Divider()
             HStack(spacing: 8) {
                 TextField(wave4Strings.workspacesTitle, text: $newWorkspaceName)
                     .textFieldStyle(.roundedBorder)
                 Button(wave4Strings.saveWorkspaceButton) {
-                    let grid = CustomSnapGridSpec(columns: customGridColumns, rows: customGridRows)
-                    let rect = grid.cellFrame(in: CGRect(x: 0, y: 0, width: 1, height: 1),
-                                              colRange: 0...0, rowRange: 0...0)
-                    let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "com.apple.Finder"
-                    workspaceStore.savePreset(
-                        name: newWorkspaceName,
-                        slots: [WindowWorkspaceSlot(bundleID: bundle,
-                                                    normalizedX: rect.minX,
-                                                    normalizedY: rect.minY,
-                                                    normalizedWidth: rect.width,
-                                                    normalizedHeight: rect.height)]
-                    )
+                    let captured = WindowLayoutService.shared.captureCurrentWorkspaceSlots()
+                    let slots: [WindowWorkspaceSlot]
+                    if !captured.isEmpty {
+                        slots = captured
+                    } else {
+                        let grid = CustomSnapGridSpec(columns: customGridColumns, rows: customGridRows)
+                        let rect = grid.cellFrame(in: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                                  colRange: 0...0, rowRange: 0...0)
+                        let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "com.apple.Finder"
+                        slots = [WindowWorkspaceSlot(bundleID: bundle,
+                                                     normalizedX: rect.minX,
+                                                     normalizedY: rect.minY,
+                                                     normalizedWidth: rect.width,
+                                                     normalizedHeight: rect.height)]
+                    }
+                    workspaceStore.savePreset(name: newWorkspaceName, slots: slots)
                     newWorkspaceName = ""
+                    VorssaintHaptics.alignment()
                 }
             }
             ForEach(workspaceStore.presets) { preset in
                 Divider()
-                HStack {
+                HStack(spacing: 8) {
                     Text(preset.name)
+                    Text("\(preset.slots.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.14)))
                     Spacer()
+                    Button {
+                        WindowLayoutService.shared.applyWorkspacePreset(preset)
+                    } label: {
+                        Label(v2Strings.workspaceRestoreAction, systemImage: "play.fill")
+                    }
+                    .controlSize(.small)
+                    .disabled(!permissions.accessibility)
                     Button(role: .destructive) {
                         workspaceStore.deletePreset(id: preset.id)
                     } label: {
                         Image(systemName: "trash")
                     }
                     .buttonStyle(.borderless)
+                    .help(l10n.s.actionRemove)
+                    .accessibilityLabel(l10n.s.actionRemove)
                 }
             }
         }

@@ -53,6 +53,8 @@ struct MediaWorkspaceView: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var media: MediaService
     @ObservedObject private var featureRuntime = FeatureRuntime.shared
+    @ObservedObject private var autoOptimizer = MediaAutoOptimizerService.shared
+    @AppStorage(MediaAutoOptimizerService.enabledDefaultsKey) private var autoOptimizeEnabled = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.notchPresentation) private var inNotch
 
@@ -295,11 +297,71 @@ struct MediaWorkspaceView: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: compact ? 9 : 12) {
+            autoOptimizeBannerCard
             fileCard
             optionsCard
             actionRow
             statusCard
         }
+    }
+
+    private var autoOptimizeBannerCard: some View {
+        let v2 = OverhaulV2Strings.localized(l10n.language)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Toggle(isOn: Binding(
+                    get: { autoOptimizeEnabled },
+                    set: { newValue in
+                        autoOptimizeEnabled = newValue
+                        autoOptimizer.setEnabled(newValue)
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(v2.clopAutoOptimizeToggle)
+                            .font(.system(size: compact ? 11 : 11.5, weight: .semibold))
+                        if !compact {
+                            Text(v2.clopAutoOptimizeCaption)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+
+                Spacer(minLength: 4)
+
+                if let summary = autoOptimizer.lastSavingsSummary {
+                    HStack(spacing: 6) {
+                        Label(
+                            String(format: v2.clopSavedBadgeFormat, locale: MetricFormat.locale,
+                                   summary.savedPercent, summary.fileName),
+                            systemImage: "sparkles"
+                        )
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.green)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                        Button(v2.clopUndoButton) {
+                            _ = autoOptimizer.undoLastOptimization()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, compact ? 10 : 12)
+        .padding(.vertical, compact ? 7 : 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.primary.opacity(colorScheme == .dark ? 0.06 : 0.04))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+        )
     }
 
     @ViewBuilder private var inputDropTarget: some View {

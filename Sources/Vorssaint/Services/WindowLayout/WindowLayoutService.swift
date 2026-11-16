@@ -153,6 +153,7 @@ final class WindowLayoutService: ObservableObject {
 
         // Its key pauses for a listed app like the ones above.
         PointerDisplayService.shared.syncWithPreferences()
+        TitlebarScrollTap.shared.syncWithPreferences()
     }
 
     private func syncIgnoredAppsActivationObserver(inputsEnabled: Bool) {
@@ -180,6 +181,7 @@ final class WindowLayoutService: ObservableObject {
         unregisterDirectionalHotkey()
         stopGestureTap()
         stopEdgeSnapTap()
+        TitlebarScrollTap.shared.stop()
         if let ignoredAppsActivationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(ignoredAppsActivationObserver)
             self.ignoredAppsActivationObserver = nil
@@ -2717,6 +2719,258 @@ final class WindowLayoutService: ObservableObject {
         var size = CGSize.zero
         guard AXValueGetValue(axValue, .cgSize, &size) else { return nil }
         return size
+    }
+
+    // MARK: - Workspaces, Custom Snap Grid & Titlebar Gestures
+
+    func captureCurrentWorkspaceSlots() -> [WindowWorkspaceSlot] {
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { return [] }
+        let screenFrames = screens.map(\.frame)
+        let visibleFrames = screens.map(\.visibleFrame)
+        let ownBundleID = Bundle.main.bundleIdentifier
+
+        var appsByPID: [pid_t: NSRunningApplication] = [:]
+        for app in NSWorkspace.shared.runningApplications {
+            guard !app.isTerminated,
+                  app.activationPolicy == .regular,
+                  app.bundleIdentifier != ownBundleID,
+                  let bundleID = app.bundleIdentifier,
+                  !bundleID.isEmpty else { continue }
+            appsByPID[app.processIdentifier] = app
+        }
+
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                 kCGNullWindowID) as? [[String: Any]] ?? []
+        var slots: [WindowWorkspaceSlot] = []
+        for window in windows {
+            guard (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
+                  (window[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? true,
+                  let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  let app = appsByPID[pid],
+                  let bundleID = app.bundleIdentifier,
+                  let bounds = WindowServerSupport.bounds(from: window),
+                  bounds.width > 80,
+                  bounds.height > 80 else { continue }
+
+            let appKitRect = appKitFrame(fromAX: WindowLayoutFrame(origin: bounds.origin, size: bounds.size))
+            if let slot = WindowWorkspaceSlot.normalizedSlot(bundleID: bundleID,
+                                                             windowFrame: appKitRect,
+                                                             screenFrames: screenFrames,
+                                                             visibleFrames: visibleFrames) {
+                slots.append(slot)
+            }
+        }
+        return slots
+    }
+
+    func applyWorkspacePreset(_ preset: WindowWorkspacePreset) {
+        guard AXIsProcessTrusted() else {
+            _ = finish(.failure(.missingAccessibility))
+            return
+        }
+        let visibleFrames = NSScreen.screens.map(\.visibleFrame)
+        guard !visibleFrames.isEmpty, !preset.slots.isEmpty else {
+            _ = finish(.failure(.noWindow))
+            return
+        }
+
+        var orderedBundleIDs: [String] = []
+        var slotsByBundle: [String: [WindowWorkspaceSlot]] = [:]
+        for slot in preset.slots {
+            if slotsByBundle[slot.bundleID] == nil {
+                orderedBundleIDs.append(slot.bundleID)
+            }
+            slotsByBundle[slot.bundleID, default: []].append(slot)
+        }
+
+        var appliedAny = false
+        for bundleID in orderedBundleIDs {
+            let slots = slotsByBundle[bundleID] ?? []
+            guard !slots.isEmpty else { continue }
+            if let running = NSWorkspace.shared.runningApplications.first(where: {
+                !$0.isTerminated && $0.bundleIdentifier == bundleID
+            }) {
+                if running.isHidden { running.unhide() }
+                if applyWorkspaceSlots(slots, toRunningApp: running, visibleFrames: visibleFrames) {
+                    appliedAny = true
+                }
+            } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = false
+                NSWorkspace.shared.openApplication(at: appURL, configuration: config) { [weak self] app, _ in
+                    guard let self, let app else { return }
+                    DispatchQueue.main.async {
+                        self.scheduleWorkspaceApplyAfterLaunch(slots,
+                                                               for: app,
+                                                               visibleFrames: visibleFrames,
+                                                               attempt: 0)
+                    }
+                }
+            }
+        }
+
+        if appliedAny {
+            VorssaintHaptics.alignment()
+            _ = finish(.success(restored: false))
+        }
+    }
+
+    private func scheduleWorkspaceApplyAfterLaunch(_ slots: [WindowWorkspaceSlot],
+                                                 for app: NSRunningApplication,
+                                                 visibleFrames: [CGRect],
+                                                 attempt: Int) {
+        guard !app.isTerminated, AXIsProcessTrusted() else { return }
+        if app.isFinishedLaunching,
+           applyWorkspaceSlots(slots, toRunningApp: app, visibleFrames: visibleFrames) {
+            VorssaintHaptics.alignment()
+            _ = finish(.success(restored: false))
+            return
+        }
+        guard attempt < 10 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.scheduleWorkspaceApplyAfterLaunch(slots,
+                                                   for: app,
+                                                   visibleFrames: visibleFrames,
+                                                   attempt: attempt + 1)
+        }
+    }
+
+    @discardableResult
+    private func applyWorkspaceSlots(_ slots: [WindowWorkspaceSlot],
+                                     toRunningApp app: NSRunningApplication,
+                                     visibleFrames: [CGRect]) -> Bool {
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(axApp, 0.35)
+        let published = windowsAttribute(axApp) ?? []
+        let fallback = published.isEmpty
+            ? [windowAttribute(axApp, kAXFocusedWindowAttribute as String),
+               windowAttribute(axApp, kAXMainWindowAttribute as String)].compactMap { $0 }
+            : []
+        let candidates = (published.isEmpty ? fallback : published).filter { window in
+            role(of: window) == (kAXWindowRole as String)
+                && !boolAttribute(window, kAXMinimizedAttribute as String)
+                && stringAttribute(window, kAXSubroleAttribute as String) != "AXFloatingWindow"
+                && !boolAttribute(window, "AXFullScreen")
+                && canSetFrame(on: window)
+        }
+        guard !candidates.isEmpty else { return false }
+
+        var applied = false
+        for (slot, window) in zip(slots, candidates) {
+            guard let screenVisible = WindowWorkspaceSlot.displayBounds(forIndex: slot.displayIndex,
+                                                                        screens: visibleFrames) else {
+                continue
+            }
+            let targetRect = slot.frame(in: screenVisible).integral
+            guard targetRect.width >= 80, targetRect.height >= 80 else { continue }
+            if let windowID = AXWindowResolver.windowID(for: window),
+               let current = frame(of: window) {
+                let key = WindowLayoutWindowKey(
+                    processID: app.processIdentifier,
+                    processLaunchTime: app.launchDate?.timeIntervalSinceReferenceDate ?? 0,
+                    windowID: windowID
+                )
+                frameHistory.record(current, for: key)
+                lastActions.removeValue(forKey: key)
+                settledFrames.removeValue(forKey: key)
+            }
+            if applyDirectAXRect(targetRect, to: window) {
+                applied = true
+            }
+        }
+        return applied
+    }
+
+    @discardableResult
+    func applyCustomSnapGridFrame(_ frame: CGRect) -> WindowLayoutResult {
+        guard AXIsProcessTrusted() else {
+            return finish(.failure(.missingAccessibility))
+        }
+        guard let target = focusedTarget(for: .leftHalf) else {
+            return finish(.failure(.noWindow))
+        }
+        pruneWindowState(keeping: target.key)
+        let integral = frame.integral
+        guard integral.width >= 80, integral.height >= 80 else {
+            return finish(.failure(.failed))
+        }
+        frameHistory.record(target.frame, for: target.key)
+        if applyDirectAXRect(integral, to: target.window) {
+            lastActions.removeValue(forKey: target.key)
+            settledFrames.removeValue(forKey: target.key)
+            return finish(.success(restored: false))
+        }
+        frameHistory.discardLatest(for: target.key)
+        return finish(.failure(.failed))
+    }
+
+    @discardableResult
+    func apply(_ action: WindowLayoutAction,
+               toWindowID windowID: CGWindowID,
+               processID: pid_t) -> WindowLayoutResult {
+        guard AXIsProcessTrusted() else {
+            return finish(.failure(.missingAccessibility))
+        }
+        guard let target = target(forWindowID: windowID,
+                                  processID: processID,
+                                  capability: action.targetCapability)
+            ?? focusedTarget(for: action) else {
+            return finish(.failure(.noWindow))
+        }
+        guard let screen = bestScreen(for: target.frame) else {
+            return finish(.failure(.failed))
+        }
+        pruneWindowState(keeping: target.key)
+        return applyPlacement(action,
+                              to: target,
+                              visibleFrame: screen.windowLayoutVisibleFrame,
+                              cyclesRepeatedAction: false)
+    }
+
+    @discardableResult
+    func minimizeWindow(windowID: CGWindowID, processID: pid_t) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        guard let target = target(forWindowID: windowID,
+                                  processID: processID,
+                                  capability: .position)
+            ?? focusedTarget(for: .center) else {
+            return false
+        }
+        return minimize(target: target)
+    }
+
+    private func target(forWindowID windowID: CGWindowID,
+                        processID: pid_t,
+                        capability: WindowLayoutTargetCapability) -> WindowLayoutTarget? {
+        guard let onScreenIDs = onScreenWindowIDs(),
+              onScreenIDs.contains(windowID),
+              let app = NSRunningApplication(processIdentifier: processID),
+              !app.isTerminated,
+              app.activationPolicy == .regular,
+              app.bundleIdentifier != Bundle.main.bundleIdentifier else {
+            return nil
+        }
+        let axApp = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(axApp, 0.35)
+        let resolvedWindow = AXWindowResolver.element(for: windowID, in: axApp, pid: processID)
+            ?? windowsAttribute(axApp)?.first(where: { AXWindowResolver.windowID(for: $0) == windowID })
+        guard let window = resolvedWindow else { return nil }
+        return target(from: window, app: app, onScreenWindowIDs: onScreenIDs, capability: capability)
+    }
+
+    @discardableResult
+    private func applyDirectAXRect(_ appKitRect: CGRect, to window: AXUIElement) -> Bool {
+        let axTarget = axFrame(fromAppKit: appKitRect.integral)
+        let suspension = EnhancedUserInterfaceSuspension.suspend(forAppOf: window)
+        defer { suspension?.resume() }
+        let positioned = setPosition(axTarget.origin, on: window)
+        let sized = setSize(axTarget.size, on: window)
+        _ = setPosition(axTarget.origin, on: window)
+        _ = setSize(axTarget.size, on: window)
+        _ = setPosition(axTarget.origin, on: window)
+        return positioned || sized
     }
 }
 

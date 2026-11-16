@@ -139,6 +139,13 @@ final class SystemMonitor: ObservableObject {
     static let shared = SystemMonitor()
 
     @Published private(set) var snapshot = SystemSnapshot()
+    @Published private(set) var latestCoreLoads: [Double] = []
+    private(set) var efficiencyCoreCount: Int = {
+        let eCount = CPUCoreTopology.groups
+            .filter { $0.name.lowercased().contains("eff") }
+            .reduce(0) { $0 + $1.indices.count }
+        return max(1, eCount > 0 ? eCount : 4)
+    }()
 
     private let queue = DispatchQueue(label: "com.vorssaint.utils.system-monitor", qos: .utility)
     private var timer: Timer?
@@ -214,6 +221,7 @@ final class SystemMonitor: ObservableObject {
     private var lastConnectedDevices: [ConnectedUSBDevice] = []
     private var lastPublishedPlan: SamplingPlan?
     private var lastPublishedForeground: Bool?
+    private var lastNetworkBytesPerSec: Double = 0
 
     // History
     private let historyCapacity = 120
@@ -826,6 +834,7 @@ final class SystemMonitor: ObservableObject {
                     next.netTotalUp = network.totalUp
                     if let down = network.downBytesPerSec { self.netDownHistory.push(down) }
                     if let up = network.upBytesPerSec { self.netUpHistory.push(up) }
+                    self.lastNetworkBytesPerSec = max(0, (network.downBytesPerSec ?? 0) + (network.upBytesPerSec ?? 0))
                 }
             }
 
@@ -978,6 +987,47 @@ final class SystemMonitor: ObservableObject {
             next.batteryHistory = plan.needPower
                 ? self.batteryHistory.publishedValues(whileVisible: foregroundSampling) : []
 
+            let coreClusterSample: ([Double], Int)? = {
+                guard !next.cpuCoreUsage.isEmpty else { return nil }
+                let groups = CPUCoreTopology.groups(for: next.cpuCoreUsage.count)
+                let eIndices = groups.filter { $0.name.lowercased().contains("eff") }.flatMap(\.indices)
+                let otherIndices = groups.filter { !$0.name.lowercased().contains("eff") }.flatMap(\.indices)
+                let orderedIndices = eIndices.isEmpty ? Array(next.cpuCoreUsage.indices) : (eIndices + otherIndices)
+                let loads = orderedIndices.compactMap { idx -> Double? in
+                    guard idx >= 0, idx < next.cpuCoreUsage.count, let value = next.cpuCoreUsage[idx] else { return nil }
+                    return min(100.0, max(0.0, value * 100.0))
+                }
+                guard !loads.isEmpty else { return nil }
+                let resolvedECount = eIndices.isEmpty
+                    ? max(1, loads.count / 2)
+                    : max(1, eIndices.filter { $0 >= 0 && $0 < next.cpuCoreUsage.count && next.cpuCoreUsage[$0] != nil }.count)
+                return (loads, resolvedECount)
+            }()
+
+            if sampledAnything {
+                let cpuPct = min(100.0, max(0.0, (next.cpuUsage ?? self.lastCPUUsage ?? 0) * 100.0))
+                let gpuPct = min(100.0, max(0.0, (next.gpuUsage ?? self.lastGPUUsage ?? 0) * 100.0))
+                let memPct: Double = {
+                    if let used = next.memoryUsed ?? self.memoryCache?.used,
+                       let total = next.memoryTotal ?? self.memoryCache?.total,
+                       total > 0 {
+                        return min(100.0, max(0.0, (Double(used) / Double(total)) * 100.0))
+                    }
+                    switch next.memoryPressure {
+                    case .critical: return 90
+                    case .warning: return 70
+                    case .normal, .unknown: return 40
+                    }
+                }()
+                TelemetryHistoryRing.shared.record(TelemetryPoint(
+                    timestamp: Date().timeIntervalSince1970,
+                    cpu: cpuPct,
+                    gpu: gpuPct,
+                    memory: memPct,
+                    networkBytesPerSec: self.lastNetworkBytesPerSec
+                ))
+            }
+
             DispatchQueue.main.async {
                 // Skip pure carry-over publishes (nothing sampled, same plan,
                 // same mode): the values are identical to the ones on screen.
@@ -985,6 +1035,10 @@ final class SystemMonitor: ObservableObject {
                     || foregroundSampling != self.lastPublishedForeground
                 if sampledAnything || planChanged {
                     self.snapshot = next
+                    if let (loads, eCount) = coreClusterSample {
+                        self.efficiencyCoreCount = eCount
+                        self.latestCoreLoads = loads
+                    }
                     self.lastPublishedPlan = plan
                     self.lastPublishedForeground = foregroundSampling
                 }

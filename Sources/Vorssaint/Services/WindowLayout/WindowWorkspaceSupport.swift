@@ -48,12 +48,111 @@ struct WindowWorkspaceSlot: Codable, Equatable, Sendable {
     let normalizedY: Double
     let normalizedWidth: Double
     let normalizedHeight: Double
+    let displayIndex: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case bundleID
+        case normalizedX
+        case normalizedY
+        case normalizedWidth
+        case normalizedHeight
+        case displayIndex
+    }
+
+    init(bundleID: String,
+         normalizedX: Double,
+         normalizedY: Double,
+         normalizedWidth: Double,
+         normalizedHeight: Double,
+         displayIndex: Int = 0) {
+        self.bundleID = bundleID
+        self.normalizedX = normalizedX
+        self.normalizedY = normalizedY
+        self.normalizedWidth = normalizedWidth
+        self.normalizedHeight = normalizedHeight
+        self.displayIndex = max(0, displayIndex)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        bundleID = try container.decode(String.self, forKey: .bundleID)
+        normalizedX = try container.decode(Double.self, forKey: .normalizedX)
+        normalizedY = try container.decode(Double.self, forKey: .normalizedY)
+        normalizedWidth = try container.decode(Double.self, forKey: .normalizedWidth)
+        normalizedHeight = try container.decode(Double.self, forKey: .normalizedHeight)
+        displayIndex = max(0, try container.decodeIfPresent(Int.self, forKey: .displayIndex) ?? 0)
+    }
 
     func frame(in bounds: CGRect) -> CGRect {
         CGRect(x: (bounds.minX + bounds.width * normalizedX).rounded(),
                y: (bounds.minY + bounds.height * normalizedY).rounded(),
                width: (bounds.width * normalizedWidth).rounded(),
                height: (bounds.height * normalizedHeight).rounded())
+    }
+
+    func frame(inScreens screens: [CGRect]) -> CGRect? {
+        guard let bounds = Self.displayBounds(forIndex: displayIndex, screens: screens) else {
+            return nil
+        }
+        return frame(in: bounds)
+    }
+
+    /// Resolves the screen bounds for a saved `displayIndex`, falling back to
+    /// the primary screen (`screens.first`) when a secondary monitor is disconnected.
+    static func displayBounds(forIndex index: Int, screens: [CGRect]) -> CGRect? {
+        guard !screens.isEmpty, index >= 0 else { return nil }
+        if screens.indices.contains(index) {
+            return screens[index]
+        }
+        return screens.first
+    }
+
+    static func displayIndex(forWindowFrame windowFrame: CGRect, screenFrames: [CGRect]) -> Int {
+        guard !screenFrames.isEmpty else { return 0 }
+        let center = CGPoint(x: windowFrame.midX, y: windowFrame.midY)
+        if let exact = screenFrames.firstIndex(where: { $0.contains(center) }) {
+            return exact
+        }
+        if let best = screenFrames.indices.max(by: { lhs, rhs in
+            let li = screenFrames[lhs].intersection(windowFrame)
+            let ri = screenFrames[rhs].intersection(windowFrame)
+            let la = (li.isNull || li.isEmpty) ? 0 : li.width * li.height
+            let ra = (ri.isNull || ri.isEmpty) ? 0 : ri.width * ri.height
+            return la < ra
+        }) {
+            return best
+        }
+        return 0
+    }
+
+    static func normalizedSlot(bundleID: String,
+                               windowFrame: CGRect,
+                               screenFrames: [CGRect],
+                               visibleFrames: [CGRect]) -> WindowWorkspaceSlot? {
+        guard !bundleID.isEmpty,
+              windowFrame.width > 0,
+              windowFrame.height > 0,
+              screenFrames.count == visibleFrames.count,
+              !visibleFrames.isEmpty else {
+            return nil
+        }
+        let idx = displayIndex(forWindowFrame: windowFrame, screenFrames: screenFrames)
+        let bounds = visibleFrames[idx]
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        let rawX = (windowFrame.minX - bounds.minX) / bounds.width
+        let rawY = (windowFrame.minY - bounds.minY) / bounds.height
+        let rawW = windowFrame.width / bounds.width
+        let rawH = windowFrame.height / bounds.height
+        let nw = min(max(0.05, rawW), 1.0)
+        let nh = min(max(0.05, rawH), 1.0)
+        let nx = min(max(0.0, rawX), max(0.0, 1.0 - nw))
+        let ny = min(max(0.0, rawY), max(0.0, 1.0 - nh))
+        return WindowWorkspaceSlot(bundleID: bundleID,
+                                   normalizedX: nx,
+                                   normalizedY: ny,
+                                   normalizedWidth: nw,
+                                   normalizedHeight: nh,
+                                   displayIndex: idx)
     }
 }
 

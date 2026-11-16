@@ -2551,6 +2551,22 @@ def main():
           + declaration(pin, "    static func clampedOpacity(", scope="final class ScreenshotPinWindow:")
           + "}\n")
 
+    auto_router = "Sources/Vorssaint/Services/Automation/VorssaintAutomationRouter.swift"
+    media_opt = "Sources/Vorssaint/Services/Media/MediaAutoOptimizerService.swift"
+    write("Wave6AutomationCore.swift",
+          "import Foundation\n"
+          + declaration(auto_router, "enum VorssaintAutomationCommand:")
+          + "enum Wave6AutomationParser {\n"
+          + declaration(auto_router, "    nonisolated static func parseCommand(").replace(
+              "nonisolated static func parseCommand(", "    static func parseCommand("
+          )
+          + "}\n"
+          + "enum Wave6MediaCompressionMath {\n"
+          + declaration(media_opt, "    nonisolated static func compressionSavingsPercent(").replace(
+              "nonisolated static func compressionSavingsPercent(", "    static func compressionSavingsPercent("
+          )
+          + "}\n")
+
 
 if __name__ == "__main__":
     main()

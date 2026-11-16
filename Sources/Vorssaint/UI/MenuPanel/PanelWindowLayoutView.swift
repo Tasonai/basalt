@@ -7,6 +7,7 @@ struct PanelWindowLayoutView: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var permissions = Permissions.shared
     @ObservedObject private var service = WindowLayoutService.shared
+    @ObservedObject private var workspaceStore = WindowWorkspaceStore.shared
     @AppStorage(DefaultsKey.windowLayoutShortcutsEnabled) private var shortcutsEnabled = true
     @AppStorage(DefaultsKey.windowEdgeSnapEnabled) private var edgeSnapEnabled = false
     @AppStorage(DefaultsKey.windowEdgeSnapDisabledZones) private var edgeSnapDisabledZones = ""
@@ -23,6 +24,14 @@ struct PanelWindowLayoutView: View {
         FeatureStrings.windowLayout(l10n.language)
     }
 
+    private var v2Strings: OverhaulV2Strings {
+        OverhaulV2Strings.localized(l10n.language)
+    }
+
+    private var wave4Strings: OverhaulWave4Strings {
+        OverhaulStrings.wave4(l10n.language)
+    }
+
     private let columns = [
         GridItem(.flexible(), spacing: 7),
         GridItem(.flexible(), spacing: 7),
@@ -36,6 +45,7 @@ struct PanelWindowLayoutView: View {
             } else if !permissions.accessibility || (edgeSnapEnabled && systemTilingEnabled) {
                 statusBanner
             }
+            workspacesAndGridStrip
             actionGroup(title: text.halves, actions: [.leftHalf, .rightHalf, .topHalf, .bottomHalf, .centerHalf])
             actionGroup(title: text.thirds, actions: [
                 .leftThird, .centerThird, .rightThird, .leftTwoThirds, .rightTwoThirds, .centerTwoThirds,
@@ -232,6 +242,89 @@ struct PanelWindowLayoutView: View {
     private func refreshSystemTilingState() {
         systemTilingEnabled = WindowEdgeSnapSupport.isSystemTilingEnabled
         WindowLayoutService.shared.syncWithPreferences()
+    }
+
+    private var workspacesAndGridStrip: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Text(wave4Strings.workspacesTitle.uppercased())
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button {
+                    CustomSnapGridOverlayController.shared.show()
+                } label: {
+                    Label(v2Strings.customSnapOverlayButton, systemImage: "square.grid.3x2")
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(!permissions.accessibility)
+            }
+
+            Button {
+                let slots = WindowLayoutService.shared.captureCurrentWorkspaceSlots()
+                guard !slots.isEmpty else { return }
+                let presetName = "\(wave4Strings.workspacesTitle) \(workspaceStore.presets.count + 1)"
+                workspaceStore.savePreset(name: presetName, slots: slots)
+                VorssaintHaptics.alignment()
+            } label: {
+                Label(v2Strings.workspaceCaptureCurrent, systemImage: "plus")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            if !workspaceStore.presets.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(workspaceStore.presets) { preset in
+                        HStack(spacing: 6) {
+                            Button {
+                                WindowLayoutService.shared.applyWorkspacePreset(preset)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "play.fill")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(Color.accentColor)
+                                    Text(preset.name)
+                                        .font(.system(size: 10.5, weight: .medium))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                    Spacer(minLength: 4)
+                                    Text("\(preset.slots.count)")
+                                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Capsule().fill(Color.secondary.opacity(0.16)))
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!permissions.accessibility)
+                            .help(v2Strings.workspaceRestoreAction)
+
+                            Button(role: .destructive) {
+                                workspaceStore.deletePreset(id: preset.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 22, height: 22)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(l10n.s.actionRemove)
+                            .accessibilityLabel(l10n.s.actionRemove)
+                        }
+                    }
+                }
+            }
+        }
+        .panelCard()
     }
 
     @ViewBuilder
