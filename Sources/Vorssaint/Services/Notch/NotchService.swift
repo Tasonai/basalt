@@ -4382,7 +4382,16 @@ final class NotchService: ObservableObject {
         // The companion is wide awake while Keep Awake holds the Mac up, and
         // yawns as it lets go.
         KeepAwakeManager.shared.$isActive.removeDuplicates().dropFirst().receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.syncMascotKeepAwake() }
+            .sink { [weak self] _ in
+                self?.syncMascotKeepAwake()
+                self?.syncIslandAmbientTint()
+            }
+            .store(in: &subscriptions)
+        MicMuteService.shared.$isMuted.removeDuplicates().dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.syncIslandAmbientTint() }
+            .store(in: &subscriptions)
+        NotchMusicService.shared.$artworkTint.removeDuplicates().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.syncIslandAmbientTint() }
             .store(in: &subscriptions)
         if NotchKeepAwakeSupport.showsActivity() {
             // A session starting or ending, or its end moving, which can
@@ -5412,6 +5421,35 @@ extension NotchService {
             self.commandBarHeight = measured
             self.refreshPresentation()
         }
+    }
+
+    func pulseIsland(scaleX: CGFloat = 1.028, scaleY: CGFloat = 1.016) {
+        windowHost?.pulsePhysicalSilhouette(scaleX: scaleX, scaleY: scaleY)
+    }
+
+    func setIslandDragDeformation(offsetY: CGFloat, scaleX: CGFloat, release: Bool) {
+        windowHost?.setInteractiveDeformation(offsetY: offsetY, scaleX: scaleX, releaseWithSpring: release)
+    }
+
+    func syncIslandAmbientTint() {
+        guard !fullscreenCompact else {
+            windowHost?.setAmbientTint(nil)
+            return
+        }
+        let color: NSColor?
+        if ScreenRecorderService.shared.isRecording || MicMuteService.shared.isMuted {
+            color = .systemRed
+        } else if NotchMusicService.shared.playback?.isPlaying == true,
+                  let tint = NotchMusicService.shared.artworkTint {
+            color = NSColor(srgbRed: tint.red, green: tint.green, blue: tint.blue, alpha: 1)
+        } else if KeepAwakeManager.shared.isActive {
+            color = .systemOrange
+        } else if NotchTimerService.shared.session.isRunning {
+            color = .systemCyan
+        } else {
+            color = nil
+        }
+        windowHost?.setAmbientTint(color)
     }
 }
 

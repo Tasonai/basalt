@@ -69,8 +69,10 @@ struct NotchSystemView: View {
         // The panel's power and fan sections, as cards opening the same details.
         if AppFeature.monitorPower.isAvailable {
             let power = snapshot.power
+            let liveWatts = monitor.powerSnapshot.flatMap { $0.packageWatts.isFinite && $0.packageWatts > 0 ? $0.packageWatts : nil }
+                ?? power?.systemWatts
             cards.append(Card(kind: .power, title: l10n.s.powerSection, symbol: "powerplug.fill",
-                              value: power?.systemWatts.map(MetricFormat.wattsCompact),
+                              value: liveWatts.map(MetricFormat.wattsCompact),
                               detail: power?.externalConnected == true ? power?.adapterWatts.map(MetricFormat.watts) : nil))
         }
         if AppFeature.fanControl.isAvailable, !snapshot.fanSpeeds.isEmpty {

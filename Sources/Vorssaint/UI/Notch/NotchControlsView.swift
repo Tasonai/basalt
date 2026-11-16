@@ -32,7 +32,7 @@ struct NotchControlsView: View {
                     NotchLevelRow(levels: belowLevels) { level($0) }
                 }
                 if layout.cardRow > 0 {
-                    NotchMusicControlsView(notch: service, height: layout.cardRow).frame(height: layout.cardRow)
+                    homeBentoStage(height: layout.cardRow)
                 }
                 if layout.shortcutRows > 0 {
                     NotchRail(items: shortcuts, rows: layout.shortcutRows, itemWidth: NotchLayout.shortcutWidth,
@@ -49,6 +49,29 @@ struct NotchControlsView: View {
             }, trailing: {
                 NotchBandLevels(band: band, levels: bandLevels, side: .trailing) { level($0) }
             })
+        }
+    }
+
+    private var showsSystemPulseCard: Bool {
+        size.width >= 392
+            && (AppFeature.monitorCPU.isAvailable
+                || AppFeature.monitorMemory.isAvailable
+                || AppFeature.monitorPower.isAvailable)
+    }
+
+    @ViewBuilder private func homeBentoStage(height: CGFloat) -> some View {
+        if showsSystemPulseCard {
+            HStack(spacing: 8) {
+                NotchMusicControlsView(notch: service, height: height)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: height)
+                NotchSystemPulseBentoCard(service: service, height: height)
+                    .frame(width: min(168, max(138, (size.width - (size.width >= 356 ? 12 : 0)) * 0.37)))
+                    .frame(height: height)
+            }
+            .frame(height: height)
+        } else {
+            NotchMusicControlsView(notch: service, height: height).frame(height: height)
         }
     }
 
@@ -158,7 +181,23 @@ struct NotchAudioControls: View {
             NotchLevelChooser(title: l10n.s.mixerSystemOutputTitle, items: outputItems)
                 .accessibilityValue(deviceName)
         }
+        .padding(.horizontal, 6)
         .frame(height: 28)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.065))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.18), Color.white.opacity(0.05)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.5
+                        )
+                )
+        )
         .help(mixer.outputSwitchError ?? deviceName)
     }
 
@@ -299,7 +338,23 @@ private struct NotchBrightnessControls: View {
                     .accessibilityValue(display.name)
             }
         }
+        .padding(.horizontal, 6)
         .frame(height: 28)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.065))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.18), Color.white.opacity(0.05)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.5
+                        )
+                )
+        )
         .help(display?.name ?? FeatureStrings.brightness(l10n.language).noDisplays)
         .onAppear { service.refresh() }
     }
@@ -307,7 +362,10 @@ private struct NotchBrightnessControls: View {
     /// Volume leads with its mute button; the sun keeps that button's width
     /// so both sliders start on the same line.
     private var glyph: some View {
-        Image(systemName: "sun.max.fill").font(.system(size: 12, weight: .medium)).frame(width: 18)
+        Image(systemName: "sun.max.fill")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Color.yellow.opacity(0.9))
+            .frame(width: 18)
     }
 
     private func displayItems(current: BrightnessDisplay) -> [NotchMenuItem] {
@@ -345,7 +403,23 @@ private struct NotchKeyboardLightControls: View {
             glyph
             slider
         }
+        .padding(.horizontal, 6)
         .frame(height: 28)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.065))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.18), Color.white.opacity(0.05)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.5
+                        )
+                )
+        )
         .help(title)
         .onAppear { service.refreshKeyboardLight() }
     }
@@ -425,62 +499,79 @@ struct NotchActionTile: View {
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: symbol).font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(active ? accent.glyph : .white.opacity(0.9))
+        Button {
+            NotchService.shared.pulseIsland(scaleX: 1.022, scaleY: 1.012)
+            action()
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(active ? accent.glyph : .white.opacity(0.92))
                     .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 40, height: 40)
-                    .background {
-                        if active {
-                            Circle()
-                                .fill(accent.fill.opacity(0.32))
-                                .blur(radius: 7)
-                                .scaleEffect(1.12)
-                        }
-                    }
+                    .frame(width: 34, height: 32)
                     .background(
-                        Circle()
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(
                                 active
                                     ? LinearGradient(
-                                        colors: [accent.fill, accent.fill.opacity(0.86)],
+                                        colors: [accent.fill, accent.fill.opacity(0.84)],
                                         startPoint: .top,
                                         endPoint: .bottom
                                     )
                                     : LinearGradient(
-                                        colors: [Color.white.opacity(0.115), Color.white.opacity(0.055)],
+                                        colors: [Color.white.opacity(0.11), Color.white.opacity(0.05)],
                                         startPoint: .top,
                                         endPoint: .bottom
                                     )
                             )
                     )
                     .overlay {
-                        Circle()
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        .white.opacity(active ? 0.35 : 0.18),
-                                        .white.opacity(active ? 0.10 : 0.04)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                ),
-                                lineWidth: 0.5
-                            )
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.white.opacity(active ? 0.36 : 0.14), lineWidth: 0.5)
                     }
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.26), value: symbol)
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.26), value: active)
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: symbol)
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: active)
                 label
                     .frame(maxWidth: .infinity)
-                    .frame(height: 28, alignment: .top)
+                    .frame(height: 26, alignment: .top)
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
             .frame(height: NotchLayout.shortcutHeight)
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(
+                        active
+                            ? LinearGradient(
+                                colors: [accent.fill.opacity(0.22), accent.fill.opacity(0.09)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            : LinearGradient(
+                                colors: [Color.white.opacity(0.075), Color.white.opacity(0.032)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                (active ? accent.fill : Color.white).opacity(active ? 0.48 : 0.16),
+                                (active ? accent.fill : Color.white).opacity(active ? 0.14 : 0.04)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: active ? 0.8 : 0.5
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         }
-        .buttonStyle(NotchButtonStyle(cornerRadius: 14))
+        .buttonStyle(NotchButtonStyle(cornerRadius: 15))
         .accessibilityLabel(title)
         .accessibilityValue(reading ?? "")
         .accessibilityAddTraits(active ? .isSelected : [])
@@ -617,6 +708,97 @@ private struct NotchRecorderButton: View {
                         title: NotchControlItem.recording.title(l10n),
                         active: recorder.isRecording, accent: .alert) {
             service.perform { recorder.toggle() }
+        }
+    }
+}
+
+private struct NotchSystemPulseBentoCard: View {
+    @ObservedObject var service: NotchService
+    let height: CGFloat
+    @ObservedObject private var monitor = SystemMonitor.shared
+    @ObservedObject private var l10n = L10n.shared
+
+    private var cpuFraction: Double {
+        let value = monitor.snapshot.cpuUsage ?? 0
+        return value.isFinite ? min(1, max(0, value)) : 0
+    }
+
+    private var memFraction: Double {
+        guard let used = monitor.snapshot.memoryUsed,
+              let total = monitor.snapshot.memoryTotal, total > 0 else { return 0 }
+        return min(1, max(0, Double(used) / Double(total)))
+    }
+
+    private var wattsValue: Double? {
+        if let pkg = monitor.powerSnapshot?.packageWatts, pkg.isFinite, pkg > 0 { return pkg }
+        if let sys = monitor.snapshot.power?.systemWatts, sys.isFinite, sys > 0 { return sys }
+        return nil
+    }
+
+    private var wattsFraction: Double {
+        guard let wattsValue else { return 0 }
+        return min(1, max(0.06, wattsValue / 45.0))
+    }
+
+    var body: some View {
+        let cardHeight = max(56, height - 6)
+        Button {
+            service.pulseIsland(scaleX: 1.022, scaleY: 1.012)
+            service.select(.system)
+        } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                if AppFeature.monitorCPU.isAvailable {
+                    pulseRow(
+                        label: l10n.s.cpuLabel,
+                        value: "\(Int((cpuFraction * 100).rounded()))%",
+                        fraction: cpuFraction,
+                        tint: .mint
+                    )
+                }
+                if AppFeature.monitorMemory.isAvailable {
+                    pulseRow(
+                        label: l10n.s.memorySection,
+                        value: "\(Int((memFraction * 100).rounded()))%",
+                        fraction: memFraction,
+                        tint: .cyan
+                    )
+                }
+                if AppFeature.monitorPower.isAvailable {
+                    pulseRow(
+                        label: l10n.s.powerSection,
+                        value: wattsValue.map(MetricFormat.wattsCompact) ?? "…",
+                        fraction: wattsFraction,
+                        tint: .orange
+                    )
+                }
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .frame(height: cardHeight)
+            .modifier(NotchControlSurface(cornerRadius: 18))
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(NotchButtonStyle(cornerRadius: 18))
+        .frame(height: height)
+        .accessibilityLabel(FeatureStrings.notch(l10n.language).system)
+    }
+
+    private func pulseRow(label: String, value: String, fraction: Double, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2.5) {
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.66))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                Text(value)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            NotchMeter(value: fraction, height: 3.5, tint: tint)
         }
     }
 }

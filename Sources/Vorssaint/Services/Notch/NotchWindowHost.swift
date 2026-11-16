@@ -71,6 +71,9 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
         canvas = mainCanvas
         quickAccessContainer = quickAccess.map { NotchQuickAccessContainer(canvas: mainCanvas, content: $0) }
         super.init()
+        if let quickAccessContainer {
+            quickAccessContainer.quickView.isHidden = true
+        }
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.appearance = NSAppearance(named: .darkAqua)
@@ -136,6 +139,18 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
 
     func setOutline(enabled: Bool, color: NSColor) {
         canvas.setOutline(enabled: enabled, color: color)
+    }
+
+    func setAmbientTint(_ color: NSColor?) {
+        canvas.setAmbientTint(color)
+    }
+
+    func pulsePhysicalSilhouette(scaleX: CGFloat, scaleY: CGFloat) {
+        canvas.pulsePhysicalSilhouette(scaleX: scaleX, scaleY: scaleY)
+    }
+
+    func setInteractiveDeformation(offsetY: CGFloat, scaleX: CGFloat, releaseWithSpring: Bool) {
+        canvas.setInteractiveDeformation(offsetY: offsetY, scaleX: scaleX, releaseWithSpring: releaseWithSpring)
     }
 
     /// The companion stands in the window's own layer while it steps into a
@@ -297,8 +312,11 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
         quickAccessAnimate = canAnimate
         if quickAccessConfiguration != nil { quickAccessNotchSize = size }
         if withdrawing { quickAccessContainer?.motion.setVisible(false, animated: canAnimate) }
-        let gutter = quickAccessConfiguration == nil ? 0 : NotchQuickAccessLayout.gutter
-        let bottom = quickAccessBottomInset(for: size, geometry: geometry)
+        let rawGutter = quickAccessConfiguration == nil ? 0 : NotchQuickAccessLayout.gutter
+        let rawBottom = quickAccessBottomInset(for: size, geometry: geometry)
+        let bleed: CGFloat = (quickAccessContainer != nil && size.height > 64) ? 14 : 0
+        let gutter = max(rawGutter, bleed)
+        let bottom = max(rawBottom, bleed)
         let frame = geometry.frame(for: CGSize(width: size.width + gutter * 2, height: size.height + bottom))
         let changesFrame = revealing || relocationHidden || (hideWhenSettled && !canAnimate) || size != targetSize
             || frame != previousFrame || (!isAnimating && panel.frame != appliedFrame)
@@ -454,8 +472,11 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
 
     private func settle() {
         let generation = animationGeneration
-        let gutter: CGFloat = quickAccessConfiguration == nil ? 0 : NotchQuickAccessLayout.gutter
-        let bottom = quickAccessBottomInset(for: targetSize, geometry: currentGeometry)
+        let rawGutter: CGFloat = quickAccessConfiguration == nil ? 0 : NotchQuickAccessLayout.gutter
+        let rawBottom = quickAccessBottomInset(for: targetSize, geometry: currentGeometry)
+        let bleed: CGFloat = (quickAccessContainer != nil && targetSize.height > 64) ? 14 : 0
+        let gutter = max(rawGutter, bleed)
+        let bottom = max(rawBottom, bleed)
         // Leaving draws a closed height. Applied while the window is still up,
         // that height flashes the island shut for a frame before it goes.
         // A shape animation still on screen is already at its end; ordering
@@ -586,7 +607,7 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
 
     private func configureQuickAccess() {
         guard let container = quickAccessContainer else { return }
-        container.quickView.isHidden = quickAccessConfiguration == nil && container.gutter == 0 && container.bottomInset == 0
+        container.quickView.isHidden = quickAccessConfiguration == nil
         guard let configuration = quickAccessConfiguration else {
             container.setHoverRects([])
             return
@@ -1156,6 +1177,9 @@ private final class NotchCanvas: NSView {
     private var hoverTrackingArea: NSTrackingArea?
     var hoverChanged: ((Bool) -> Void)?
     private let silhouette = CAShapeLayer()
+    private let ambientRim = CAShapeLayer()
+    private let ambientRimMask = CALayer()
+    private var ambientTint: NSColor?
     private let edge = CAShapeLayer()
     private let edgeMask = CALayer()
     /// Nil hangs the island from the top edge; a capsule floats this far inside it.
@@ -1208,6 +1232,12 @@ private final class NotchCanvas: NSView {
         activationButton.action = #selector(NotchActivationButton.invoke)
         activationButton.setAccessibilityIdentifier("notch.activation")
         addSubview(activationButton)
+        ambientRim.fillColor = nil
+        ambientRim.zPosition = 1.8
+        ambientRimMask.backgroundColor = NSColor.black.cgColor
+        ambientRimMask.frame = CGRect(x: -10_000, y: Self.outlineTopGap, width: 20_000, height: 20_000)
+        ambientRim.mask = ambientRimMask
+        layer?.addSublayer(ambientRim)
         edge.fillColor = nil
         updateContrast()
         edge.zPosition = 2
@@ -1248,13 +1278,115 @@ private final class NotchCanvas: NSView {
             outlineEnabled ? (increasedContrast ? 0.85 : 0.65) : (increasedContrast ? 0.45 : 0)).cgColor
         let lineWidth: CGFloat = outlineEnabled ? NotchLayout.outlineWidth : 0.5
         let opacity: Float = outlineEnabled || contentSize.height > 64 ? 1 : 0
-        guard edge.strokeColor != color || edge.lineWidth != lineWidth || edge.opacity != opacity else { return }
+
+        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        let rimColor: CGColor
+        if outlineEnabled {
+            rimColor = NSColor.clear.cgColor
+        } else if let ambientTint, !reduceTransparency {
+            rimColor = ambientTint.withAlphaComponent(contentSize.height > 64 ? 0.44 : 0.30).cgColor
+        } else {
+            rimColor = NSColor.white.withAlphaComponent(
+                reduceTransparency ? 0.22 : (contentSize.height > 64 ? 0.16 : 0.12)
+            ).cgColor
+        }
+        let rimLineWidth: CGFloat = contentSize.height > 64 ? 1.8 : 1.4
+        let rimOpacity: Float = outlineEnabled ? 0 : (contentSize.height > 8 ? 1 : 0)
+
+        let edgeNeedsUpdate = edge.strokeColor != color || edge.lineWidth != lineWidth || edge.opacity != opacity
+        let rimNeedsUpdate = ambientRim.strokeColor != rimColor || ambientRim.lineWidth != rimLineWidth || ambientRim.opacity != rimOpacity
+        guard edgeNeedsUpdate || rimNeedsUpdate else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        edge.strokeColor = color
-        edge.lineWidth = lineWidth
-        edge.opacity = opacity
+        if edgeNeedsUpdate {
+            edge.strokeColor = color
+            edge.lineWidth = lineWidth
+            edge.opacity = opacity
+        }
+        if rimNeedsUpdate {
+            ambientRim.strokeColor = rimColor
+            ambientRim.lineWidth = rimLineWidth
+            ambientRim.opacity = rimOpacity
+        }
         CATransaction.commit()
+    }
+
+    func setAmbientTint(_ color: NSColor?) {
+        guard ambientTint != color else { return }
+        ambientTint = color
+        updateContrast()
+    }
+
+    private func islandTransform(scaleX: CGFloat, scaleY: CGFloat, translateY: CGFloat = 0) -> CATransform3D {
+        guard let layer = self.layer else { return CATransform3DIdentity }
+        let anchor = CGPoint(x: layer.anchorPoint.x * layer.bounds.width, y: layer.anchorPoint.y * layer.bounds.height)
+        let centreX = stageCentreX?() ?? layer.bounds.midX
+        let topY: CGFloat = layer.contentsAreFlipped() ? layer.bounds.minY : layer.bounds.maxY
+        let dy = layer.contentsAreFlipped() ? translateY : -translateY
+        let offsetX = centreX - anchor.x
+        let offsetY = topY - anchor.y
+        var transform = CATransform3DMakeTranslation(offsetX, offsetY + dy, 0)
+        transform = CATransform3DScale(transform, scaleX, scaleY, 1)
+        return CATransform3DTranslate(transform, -offsetX, -offsetY, 0)
+    }
+
+    func pulsePhysicalSilhouette(scaleX: CGFloat, scaleY: CGFloat) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              bounds.width > 0, bounds.height > 0, !isHidden,
+              let layer = self.layer else { return }
+        let clampedX = min(1.06, max(0.94, scaleX))
+        let clampedY = min(1.05, max(0.95, scaleY))
+        // Keep compact menu-bar capsules strictly inside their window bounds so neighbors never clip.
+        let safeX = contentSize.height > 64 ? clampedX : min(1.0, clampedX)
+        let safeY = contentSize.height > 64 ? clampedY : min(1.0, clampedY)
+        let fromTransform = islandTransform(scaleX: safeX, scaleY: safeY)
+        layer.removeAnimation(forKey: "notch.fluid.pulse")
+        let spring = CASpringAnimation(keyPath: "transform")
+        spring.mass = 0.85
+        spring.stiffness = 340
+        spring.damping = 19
+        spring.initialVelocity = 3.5
+        spring.fromValue = NSValue(caTransform3D: fromTransform)
+        spring.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        spring.duration = spring.settlingDuration
+        layer.transform = CATransform3DIdentity
+        layer.add(spring, forKey: "notch.fluid.pulse")
+    }
+
+    func setInteractiveDeformation(offsetY: CGFloat, scaleX: CGFloat, releaseWithSpring: Bool) {
+        guard let layer = self.layer else { return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.removeAnimation(forKey: "notch.fluid.drag")
+            layer.transform = CATransform3DIdentity
+            CATransaction.commit()
+            return
+        }
+        let targetScaleX = min(1.03, max(0.96, scaleX))
+        let targetY = max(-8, min(12, offsetY))
+        let targetTransform = releaseWithSpring
+            ? CATransform3DIdentity
+            : islandTransform(scaleX: targetScaleX, scaleY: 1.0, translateY: targetY)
+        if releaseWithSpring {
+            let current = layer.presentation()?.transform ?? layer.transform
+            let spring = CASpringAnimation(keyPath: "transform")
+            spring.mass = 0.8
+            spring.stiffness = 320
+            spring.damping = 20
+            spring.initialVelocity = 2.0
+            spring.fromValue = NSValue(caTransform3D: current)
+            spring.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+            spring.duration = spring.settlingDuration
+            layer.transform = CATransform3DIdentity
+            layer.add(spring, forKey: "notch.fluid.drag")
+        } else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.removeAnimation(forKey: "notch.fluid.drag")
+            layer.transform = targetTransform
+            CATransaction.commit()
+        }
     }
 
     func setOutline(enabled: Bool, color: NSColor) {
@@ -1273,7 +1405,9 @@ private final class NotchCanvas: NSView {
         stopMotion()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        edgeMask.frame.origin.y = gap == nil ? Self.outlineTopGap : -10_000
+        let maskY = gap == nil ? Self.outlineTopGap : -10_000
+        edgeMask.frame.origin.y = maskY
+        ambientRimMask.frame.origin.y = maskY
         CATransaction.commit()
         backdropPresentation.floatingGap = gap ?? 0
         needsLayout = true
@@ -1503,6 +1637,7 @@ private final class NotchCanvas: NSView {
         motionTimeline = motion
         silhouette.path = silhouettePath(for: contentSize)
         silhouetteSize = contentSize
+        ambientRim.path = silhouette.path
         edge.path = silhouette.path
         silhouette.add(animation, forKey: Self.motionKey)
         if let from { setBackdropContour(inCanvas(from)) }
@@ -1511,6 +1646,10 @@ private final class NotchCanvas: NSView {
         let link = displayLink(target: backdropTick, selector: #selector(NotchBackdropTick.fire(_:)))
         backdropDisplayLink = link
         link.add(to: .main, forMode: .common)
+        if let rimAnimation = animation.copy() as? CAAnimation {
+            rimAnimation.delegate = nil
+            ambientRim.add(rimAnimation, forKey: Self.motionKey)
+        }
         if let borderAnimation = animation.copy() as? CAAnimation {
             borderAnimation.delegate = nil
             edge.add(borderAnimation, forKey: Self.motionKey)
@@ -1519,6 +1658,7 @@ private final class NotchCanvas: NSView {
     func stopMotion() {
         motionTimeline = nil
         silhouette.removeAnimation(forKey: Self.motionKey)
+        ambientRim.removeAnimation(forKey: Self.motionKey)
         edge.removeAnimation(forKey: Self.motionKey)
         backdropDisplayLink?.invalidate()
         backdropDisplayLink = nil
@@ -1895,10 +2035,12 @@ private final class NotchCanvas: NSView {
         let maskFrame = CGRect(x: centre - stage.width / 2, y: 0, width: stage.width, height: stage.height)
         if silhouette.frame != maskFrame {
             silhouette.frame = maskFrame
+            ambientRim.frame = maskFrame
             edge.frame = maskFrame
         }
         silhouetteSize = motionStart ?? contentSize
         silhouette.path = silhouettePath(for: silhouetteSize, offset: motionStart == nil ? 0 : motionStartOffset)
+        ambientRim.path = silhouette.path
         edge.path = silhouette.path
         updateContrast()
         // Keep foreground layout fixed inside the reserved reveal area. Only

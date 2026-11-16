@@ -50,6 +50,22 @@ struct NotchView: View {
     }
     private var expandedAmbientGlowColor: Color? { ambientGlowColor ?? music.tint?.color }
 
+    @ObservedObject private var awakeMonitor = KeepAwakeManager.shared
+    @ObservedObject private var timerMonitor = NotchTimerService.shared
+
+    private var islandAuraColor: Color {
+        if music.playback != nil, let bloom = expandedAmbientGlowColor { return bloom }
+        if awakeMonitor.isActive { return SemanticCategoryTone.energyDisplay.badgeColor }
+        if timerMonitor.session.isRunning { return .cyan }
+        return SemanticCategoryTone.dynamicIsland.badgeColor
+    }
+
+    private var islandAuraIntensity: Double {
+        if music.playback != nil, expandedAmbientGlowColor != nil { return 1.0 }
+        if awakeMonitor.isActive || timerMonitor.session.isRunning { return 0.78 }
+        return 0.52
+    }
+
     var body: some View {
         surface
             // An activity arriving over the resting companion fades in as the
@@ -103,7 +119,11 @@ struct NotchView: View {
                 handleNoticeFluidPulse(incoming)
             }
             .onChange(of: service.expanded) { _, isExpanded in
-                if !isExpanded {
+                service.syncIslandAmbientTint()
+                if isExpanded {
+                    service.pulseIsland(scaleX: 1.028, scaleY: 1.018)
+                } else {
+                    service.setIslandDragDeformation(offsetY: 0, scaleX: 1.0, release: !reduceMotion)
                     rubberBandDragY = 0
                     if !reduceMotion, stretchX != 1.0 {
                         withAnimation(DesignMotion.fluidX) { stretchX = 1.0 }
@@ -111,6 +131,14 @@ struct NotchView: View {
                         stretchX = 1.0
                     }
                 }
+            }
+            .onChange(of: service.selected) { _, _ in
+                if service.expanded {
+                    service.pulseIsland(scaleX: 1.018, scaleY: 1.010)
+                }
+            }
+            .onChange(of: islandAuraColor) { _, _ in
+                service.syncIslandAmbientTint()
             }
             .onChange(of: reduceMotion) { _, isReduced in
                 if isReduced {
@@ -409,26 +437,30 @@ struct NotchView: View {
             .offset(y: reduceMotion ? 0 : rubberBandDragY)
             .frame(width: service.expandedSize.width, height: service.expandedSize.height, alignment: .top)
             .background {
-                if let bloom = expandedAmbientGlowColor, music.playback != nil, !reduceTransparency {
+                if !reduceTransparency {
                     let islandShape = NotchShape.island(height: service.expandedSize.height, geometry: service.expandedGeometry)
+                    let aura = islandAuraColor
+                    let strength = islandAuraIntensity
                     RadialGradient(
-                        colors: [bloom.opacity(0.11), bloom.opacity(0.03), .clear],
+                        colors: [aura.opacity(0.14 * strength), aura.opacity(0.04 * strength), .clear],
                         center: .top,
                         startRadius: 12,
-                        endRadius: max(180, service.expandedSize.width * 0.58)
+                        endRadius: max(190, service.expandedSize.width * 0.62)
                     )
                     .clipShape(islandShape)
                     .allowsHitTesting(false)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: bloom)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: aura)
                 }
             }
             .overlay {
-                if let bloom = expandedAmbientGlowColor, music.playback != nil, !reduceTransparency {
+                if !reduceTransparency {
                     let islandShape = NotchShape.island(height: service.expandedSize.height, geometry: service.expandedGeometry)
+                    let aura = islandAuraColor
+                    let strength = islandAuraIntensity
                     islandShape
                         .stroke(
                             LinearGradient(
-                                colors: [bloom.opacity(0.28), bloom.opacity(0.08), .clear],
+                                colors: [aura.opacity(0.32 * strength), Color.white.opacity(0.10), aura.opacity(0.04), .clear],
                                 startPoint: .top,
                                 endPoint: .bottom
                             ),
@@ -436,7 +468,7 @@ struct NotchView: View {
                         )
                         .clipShape(islandShape)
                         .allowsHitTesting(false)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: bloom)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: aura)
                 }
             }
             .contentShape(Rectangle())
@@ -456,15 +488,15 @@ struct NotchView: View {
                 let dx = value.translation.width
                 guard abs(dy) > abs(dx) * 1.2 else { return }
                 let dampedY = NotchFluidKinematics.rubberBand(overshoot: dy, dimension: 14)
+                let targetScaleX: CGFloat = dampedY >= 0
+                    ? max(0.975, 1.0 - (dampedY / 14.0) * 0.02)
+                    : min(1.02, 1.0 + (abs(dampedY) / 14.0) * 0.015)
+                service.setIslandDragDeformation(offsetY: dampedY * 0.6, scaleX: targetScaleX, release: false)
                 withAnimation(DesignMotion.fluidY) {
-                    rubberBandDragY = dampedY
+                    rubberBandDragY = dampedY * 0.35
                 }
                 withAnimation(DesignMotion.fluidX) {
-                    if dampedY >= 0 {
-                        stretchX = max(0.975, 1.0 - (dampedY / 14.0) * 0.02)
-                    } else {
-                        stretchX = min(1.02, 1.0 + (abs(dampedY) / 14.0) * 0.015)
-                    }
+                    stretchX = targetScaleX
                 }
             }
             .onEnded { value in
@@ -474,6 +506,7 @@ struct NotchView: View {
                 let projected = Double(dy) + NotchFluidKinematics.project(velocity: Double(value.velocity.height))
                 let shouldCollapse = service.expanded && !service.showingCommandBar && isVertical
                     && (dy < -28 || projected < -64)
+                service.setIslandDragDeformation(offsetY: 0, scaleX: 1.0, release: !reduceMotion)
                 if reduceMotion {
                     rubberBandDragY = 0
                     stretchX = 1.0
@@ -526,6 +559,9 @@ struct NotchView: View {
         }
         let overshoot = NotchFluidKinematics.hudOvershootScale(normalizedLevel: level, delta: delta)
         guard overshoot > 1.0001 else { return }
+        let scaleX: CGFloat = level <= 0.01 ? 0.962 : min(1.05, overshoot)
+        let scaleY: CGFloat = level <= 0.01 ? 0.985 : 1.014
+        service.pulseIsland(scaleX: scaleX, scaleY: scaleY)
         stretchResetTask?.cancel()
         withAnimation(DesignMotion.fluidX) {
             stretchX = overshoot
@@ -592,14 +628,17 @@ struct NotchView: View {
                 // fit their side, never pushing them under the camera; the menu
                 // offers the same actions either way.
                 HStack(spacing: 8) {
+                    if wraps && !band.besideCamera {
+                        NotchExpandedCompanionBadge(service: service)
+                    }
                     NotchPrivacyHeaderBadge()
                     NotchExpandedAudioBadge()
                     NotchQuickScratchpadButton(service: service)
                     ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 6) { items.trailing; trailingSections(band); updateControl(band); pinMark }
+                        HStack(spacing: 6) { items.trailing; trailingSections(band); updateControl(band); pinMark; settingsHeaderButton }
                         HStack(spacing: 6) {
                             items.trailing; trailingSections(band)
-                            NotchUpdateControl(action: service.showUpdate, compact: true); pinMark
+                            NotchUpdateControl(action: service.showUpdate, compact: true); pinMark; settingsHeaderButton
                         }
                         HStack(spacing: 6) { items.trailing; trailingSections(band); pinMark }
                         HStack(spacing: 6) { items.trailing; trailingSections(band) }
@@ -630,10 +669,20 @@ struct NotchView: View {
         NotchUpdateControl(action: service.showUpdate, compact: band.besideCamera)
     }
 
-    /// A kept-open island says so, and one click lets it go.
-    @ViewBuilder private var pinMark: some View {
-        if service.pinned {
-            NotchIconButton(symbol: "pin.fill", title: text.unpin, selected: true) { service.pinned = false }
+    /// Always offers 1-click pinning inside the open header without requiring right-click.
+    private var pinMark: some View {
+        NotchIconButton(
+            symbol: service.pinned ? "pin.fill" : "pin",
+            title: service.pinned ? text.unpin : text.pin,
+            selected: service.pinned
+        ) {
+            service.pinned.toggle()
+        }
+    }
+
+    private var settingsHeaderButton: some View {
+        NotchIconButton(symbol: "gearshape", title: l10n.s.menuSettings) {
+            service.openSettings()
         }
     }
 
@@ -642,8 +691,14 @@ struct NotchView: View {
         return false
     }
 
+    private var quickSwitchModules: [NotchModule] {
+        let preferred: [NotchModule] = [.controls, .music, .mixer, .system]
+        return preferred.filter { service.modules.contains($0) }
+    }
+
     @ViewBuilder private func bandLeading(_ band: NotchBand) -> some View {
         if service.showingSections {
+            NotchExpandedCompanionBadge(service: service)
             NotchBandBackButton(title: text.sectionsTitle, action: service.toggleSections)
             if service.modules.count > 8 || !service.sectionQuery.isEmpty {
                 // Beside the camera the field takes the rest of its side.
@@ -651,16 +706,43 @@ struct NotchView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         } else if showsDetail {
+            NotchExpandedCompanionBadge(service: service)
             NotchBandBackButton(title: service.detailTitle, action: service.goBack)
-        } else if band.sectionsButton {
-            if service.selected != .controls && service.modules.contains(.controls) {
-                NotchIconButton(symbol: "chevron.left", title: FeatureStrings.notch(l10n.language).controls) {
-                    service.select(.controls)
-                }
+        } else {
+            if !band.besideCamera || band.sectionsButton {
+                NotchExpandedCompanionBadge(service: service)
             }
-            // Without the floating button, the sections stay one click away;
-            // the row keeps it room before the page's own controls.
-            NotchSectionsButton(action: service.toggleSections)
+            if !band.besideCamera && service.selected != .controls {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 4) {
+                        ForEach(quickSwitchModules) { module in
+                            NotchIconButton(
+                                symbol: module.symbol,
+                                title: module.title(l10n.language),
+                                selected: service.selected == module
+                            ) {
+                                service.select(module)
+                            }
+                        }
+                        if band.sectionsButton { NotchSectionsButton(action: service.toggleSections) }
+                    }
+                    HStack(spacing: 4) {
+                        if service.modules.contains(.controls) {
+                            NotchIconButton(symbol: "chevron.left", title: FeatureStrings.notch(l10n.language).controls) {
+                                service.select(.controls)
+                            }
+                        }
+                        if band.sectionsButton { NotchSectionsButton(action: service.toggleSections) }
+                    }
+                }
+            } else if band.sectionsButton {
+                if service.selected != .controls && service.modules.contains(.controls) {
+                    NotchIconButton(symbol: "chevron.left", title: FeatureStrings.notch(l10n.language).controls) {
+                        service.select(.controls)
+                    }
+                }
+                NotchSectionsButton(action: service.toggleSections)
+            }
         }
     }
 

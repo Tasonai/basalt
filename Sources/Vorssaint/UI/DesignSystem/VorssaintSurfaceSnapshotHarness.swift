@@ -371,21 +371,33 @@ private struct ExpandedIslandSnapshotSurface: View {
                 VStack(spacing: DesignSpace.md) {
                     // Concave top camera header bar.
                     HStack(spacing: DesignSpace.sm) {
-                        HStack(spacing: DesignSpace.sm) {
+                        HStack(spacing: DesignSpace.xs + 1) {
                             NotchMascotView(
                                 look: NotchMascotLook(style: .minimal, shape: .pill, palette: .lilac),
                                 mood: .happy,
-                                size: 26,
-                                idles: false
+                                size: 21,
+                                idles: false,
+                                followsPointer: true,
+                                interactive: true
                             )
-                            .frame(width: 26, height: 26)
-
-                            Text(FeatureStrings.notch(l10n.language).title)
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(.white)
+                            .frame(width: 22, height: 22)
 
                             SnapshotStaticEqualizer(tint: SemanticCategoryTone.sound.badgeColor)
                         }
+                        .padding(.horizontal, 8)
+                        .frame(height: 28)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(SemanticCategoryTone.sound.badgeColor.opacity(0.14))
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .strokeBorder(SemanticCategoryTone.sound.badgeColor.opacity(0.28), lineWidth: 0.6)
+                                )
+                        )
+
+                        Text(FeatureStrings.notch(l10n.language).title)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(.white)
 
                         Spacer(minLength: 0)
 

@@ -967,7 +967,15 @@ final class NotchMascotHostView: NSView {
     }
 
     override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    var acceptsInteraction = false
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard acceptsInteraction else { return nil }
+        let local = convert(point, from: superview)
+        let center = mascot.root.position
+        let reach = max(14, mascot.size / 2 + 6)
+        guard abs(local.x - center.x) <= reach, abs(local.y - center.y) <= reach else { return nil }
+        return self
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1223,12 +1231,18 @@ struct NotchMascotView: NSViewRepresentable {
     var cueID = 0
     /// Its eyes follow a file being dragged toward the island.
     var followsDrag = false
+    /// Its eyes follow the pointer over its stage and petting/clicks trigger hearts.
+    var followsPointer = false
+    /// Allows hit testing over the mascot center without blocking surrounding chrome.
+    var interactive = false
     /// A reaction it plays once, as it first shows: a notice's.
     var reaction: NotchMascotReaction? = nil
 
     func makeNSView(context: Context) -> NotchMascotHostView {
         let view = NotchMascotHostView(frame: CGRect(x: 0, y: 0, width: size, height: size))
         view.followsDrag = followsDrag
+        view.followsPointer = followsPointer
+        view.acceptsInteraction = interactive
         view.configure(look: look, size: size, mood: mood, idles: idles,
                        reduceMotion: context.environment.accessibilityReduceMotion, animated: false)
         if let reaction {
@@ -1240,6 +1254,9 @@ struct NotchMascotView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NotchMascotHostView, context: Context) {
+        view.followsDrag = followsDrag
+        view.followsPointer = followsPointer
+        view.acceptsInteraction = interactive
         view.configure(look: look, size: size, mood: mood, idles: idles,
                        reduceMotion: context.environment.accessibilityReduceMotion, animated: true)
         view.place(at: nil, visible: nil)
