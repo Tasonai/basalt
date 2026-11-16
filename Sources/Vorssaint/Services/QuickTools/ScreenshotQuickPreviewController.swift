@@ -14,6 +14,7 @@ final class ScreenshotQuickPreviewModel: ObservableObject {
     @Published var sharing = false
     @Published var sharedRecord: ScreenshotShareRecord?
     @Published var deletingShare = false
+    @Published var cloudUploading = false
 }
 
 /// A transient capture preview that stays outside Command Tab and reflects
@@ -111,7 +112,13 @@ final class ScreenshotQuickPreviewController {
             dismiss: { [weak self] in self?.close() },
             hoverChanged: { [weak self] inside in self?.hoverChanged(inside) },
             showsDismissButton: presentationPolicy.showsDismissButton,
-            embedded: wantsNotch)
+            embedded: wantsNotch,
+            cloudUploadTitle: OverhaulV2Strings.localized(L10n.shared.language).cloudUploadButton,
+            onCloudUpload: (Thread.isMainThread
+                ? MainActor.assumeIsolated { ScreenshotCloudUploadService.shared.isConfigured }
+                : false)
+                ? { [weak self] in Task { @MainActor in self?.performCloudUpload() } }
+                : nil)
         if wantsNotch, NotchService.shared.presentCapture(
             id: presentationID, content: AnyView(content), actions: AnyView(content.toolbar), height: Self.size(showingLink: model.sharedRecord != nil).height,
             takeFocus: presentationPolicy.takesFocus,
@@ -378,6 +385,48 @@ final class ScreenshotQuickPreviewController {
         return copied
     }
 
+    @MainActor
+    private func performCloudUpload() {
+        guard !closed, !model.cloudUploading,
+              ScreenshotCloudUploadService.shared.isConfigured else { return }
+        dismissWork?.cancel()
+        dismissWork = nil
+        model.cloudUploading = true
+        let image = capture.image
+        let scale = capture.scale
+        let prefix = strings.fileNamePrefix
+        let failedMessage = strings.shareFailedHUD
+        Task { @MainActor [weak self] in
+            let data = await Task.detached(priority: .userInitiated) {
+                ScreenshotRenderer.pngData(from: image, scale: scale)
+            }.value
+            guard let self, !self.closed else { return }
+            guard let data else {
+                self.model.cloudUploading = false
+                QuickToolHUD.show(icon: "icloud.and.arrow.up", message: failedMessage)
+                NSSound.beep()
+                self.scheduleAutoDismiss()
+                return
+            }
+            let fileName = ScreenshotSupport.fileName(prefix: prefix, date: Date())
+            do {
+                _ = try await ScreenshotCloudUploadService.shared.upload(
+                    pngData: data,
+                    fileName: fileName
+                )
+                guard !self.closed else { return }
+                self.model.cloudUploading = false
+                self.close()
+            } catch {
+                guard !self.closed else { return }
+                self.model.cloudUploading = false
+                QuickToolHUD.show(icon: "icloud.and.arrow.up", message: error.localizedDescription)
+                NSSound.beep()
+                self.scheduleAutoDismiss()
+            }
+        }
+    }
+
     private func deleteSharedLink() {
         guard let record = model.sharedRecord, !model.deletingShare else { return }
         dismissWork?.cancel()
@@ -548,6 +597,8 @@ private struct ScreenshotQuickPreviewView: View {
     let showsDismissButton: Bool
     var embedded = false
     var actionsOnly = false
+    var cloudUploadTitle = ""
+    var onCloudUpload: (() -> Void)? = nil
     var toolbar: Self {
         var view = self
         view.actionsOnly = true
@@ -605,6 +656,24 @@ private struct ScreenshotQuickPreviewView: View {
             if sharingEnabled, model.sharedRecord == nil {
                 shareMenu
             }
+            if embedded, let onCloudUpload {
+                Button(action: onCloudUpload) {
+                    Group {
+                        if model.cloudUploading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "icloud.and.arrow.up")
+                        }
+                    }
+                    .frame(width: 28, height: 28)
+                }
+                .modifier(ScreenshotPreviewActionStyle(embedded: true))
+                .controlSize(.small)
+                .disabled(model.cloudUploading)
+                .screenshotSafeHelp(cloudUploadTitle)
+                .accessibilityLabel(cloudUploadTitle)
+            }
             if !embedded { Spacer(minLength: 4) }
             if embedded {
                 Button {
@@ -648,6 +717,27 @@ private struct ScreenshotQuickPreviewView: View {
             if featureRuntime.isAvailable(.screenOCR) {
                 thumbnailButton(symbol: "text.viewfinder", title: strings.copyTextButton,
                                 action: copyText)
+            }
+            if let onCloudUpload {
+                Button(action: onCloudUpload) {
+                    Group {
+                        if model.cloudUploading {
+                            ProgressView()
+                                .controlSize(.mini)
+                        } else {
+                            Image(systemName: "icloud.and.arrow.up")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                    }
+                    .frame(width: 24, height: 24)
+                    .background(.regularMaterial, in: Circle())
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+                    .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.cloudUploading)
+                .screenshotSafeHelp(cloudUploadTitle)
+                .accessibilityLabel(cloudUploadTitle)
             }
             thumbnailButton(symbol: "square.and.arrow.up", title: strings.shareButton,
                             action: systemShare)

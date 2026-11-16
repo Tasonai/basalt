@@ -60,6 +60,9 @@ struct RecorderEditDocument: Codable, Equatable {
     var keystrokes: [RecorderKeystrokeEvent]
     var captionsEnabled: Bool
     var captions: [RecorderCaptionSegment]
+    var perspectiveTiltEnabled: Bool
+    var ambientGlowEnabled: Bool
+    var exportsProRes4444: Bool
 
     init(trimStart: Double = 0,
          trimEnd: Double = 0,
@@ -93,7 +96,10 @@ struct RecorderEditDocument: Codable, Equatable {
          keystrokesEnabled: Bool = true,
          keystrokes: [RecorderKeystrokeEvent] = [],
          captionsEnabled: Bool = true,
-         captions: [RecorderCaptionSegment] = []) {
+         captions: [RecorderCaptionSegment] = [],
+         perspectiveTiltEnabled: Bool = false,
+         ambientGlowEnabled: Bool = false,
+         exportsProRes4444: Bool = false) {
         self.trimStart = trimStart
         self.trimEnd = trimEnd
         self.quality = quality
@@ -127,6 +133,9 @@ struct RecorderEditDocument: Codable, Equatable {
         self.keystrokes = keystrokes
         self.captionsEnabled = captionsEnabled
         self.captions = captions
+        self.perspectiveTiltEnabled = perspectiveTiltEnabled
+        self.ambientGlowEnabled = ambientGlowEnabled
+        self.exportsProRes4444 = exportsProRes4444
     }
 
     /// A document written before these fields existed still opens: every one
@@ -177,6 +186,12 @@ struct RecorderEditDocument: Codable, Equatable {
         captionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .captionsEnabled) ?? true
         captions = try container.decodeIfPresent([RecorderCaptionSegment].self,
                                                  forKey: .captions) ?? []
+        perspectiveTiltEnabled = try container.decodeIfPresent(Bool.self,
+                                                               forKey: .perspectiveTiltEnabled) ?? false
+        ambientGlowEnabled = try container.decodeIfPresent(Bool.self,
+                                                           forKey: .ambientGlowEnabled) ?? false
+        exportsProRes4444 = try container.decodeIfPresent(Bool.self,
+                                                          forKey: .exportsProRes4444) ?? false
     }
 
     // MARK: - Timeline
@@ -234,6 +249,17 @@ struct RecorderEditDocument: Codable, Equatable {
 
     var resolvedBackdrop: ScreenshotSupport.BackdropStyle {
         ScreenshotSupport.BackdropStyle.decoded(backdrop)
+    }
+
+    var effectiveCanvasPadding: Double {
+        let style = resolvedBackdrop
+        if style.kind != .none { return style.padding * 0.18 }
+        if ambientGlowEnabled || perspectiveTiltEnabled { return 0.075 }
+        return 0
+    }
+
+    var cropsToAspectWithoutStage: Bool {
+        resolvedBackdrop.kind == .none && !ambientGlowEnabled && !perspectiveTiltEnabled
     }
 
     var resolvedAspect: RecorderSupport.Aspect {
@@ -334,6 +360,8 @@ struct RecorderEditDocument: Codable, Equatable {
             || keystrokes != other.keystrokes
             || captionsEnabled != other.captionsEnabled
             || captions != other.captions
+            || perspectiveTiltEnabled != other.perspectiveTiltEnabled
+            || ambientGlowEnabled != other.ambientGlowEnabled
     }
 
     /// Whether the finished video would run differently, which is what forces
@@ -362,6 +390,9 @@ struct RecorderEditDocument: Codable, Equatable {
             || motionBlurEnabled || cameraBubble.isEnabled
             || clickSFXStyle != RecorderClickSFXStyle.off.rawValue
             || !captions.isEmpty
+            || perspectiveTiltEnabled
+            || ambientGlowEnabled
+            || exportsProRes4444
     }
 
     /// A damaged or hand-edited document can never wedge the editor: every

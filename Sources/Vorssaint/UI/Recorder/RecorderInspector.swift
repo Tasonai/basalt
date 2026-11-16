@@ -29,6 +29,10 @@ struct RecorderInspector: View {
         OverhaulStrings.wave2(l10n.language)
     }
 
+    private var v2: OverhaulV2Strings {
+        OverhaulV2Strings.localized(l10n.language)
+    }
+
     private enum Tab: String, CaseIterable {
         case look, pointer, zoom, studio
     }
@@ -824,9 +828,9 @@ struct RecorderInspector: View {
     private var studioSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle(wave2.studioTabTitle)
+
             Toggle(wave2.motionBlurTitle, isOn: boolBinding(\.motionBlurEnabled))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
             if model.document.motionBlurEnabled {
                 backgroundSlider(
                     title: wave2.motionBlurTitle,
@@ -844,9 +848,20 @@ struct RecorderInspector: View {
                 )
             }
 
+            Toggle(v2.recorderTiltXLabel.replacingOccurrences(of: " X", with: ""),
+                   isOn: boolBinding(\.perspectiveTiltEnabled))
+                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+
+            Toggle(v2.recorderGlowLabel, isOn: boolBinding(\.ambientGlowEnabled))
+                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+
+            Toggle(v2.recorderProResAlphaLabel, isOn: boolBinding(\.exportsProRes4444))
+                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+
             Picker(wave2.clickSFXTitle, selection: Binding(
                 get: { model.document.clickSFXStyle },
                 set: { newValue in
+                    VorssaintHaptics.generic()
                     var next = model.document
                     next.clickSFXStyle = newValue
                     model.document = next
@@ -860,22 +875,27 @@ struct RecorderInspector: View {
             .pickerStyle(.menu)
 
             Toggle(wave2.keystrokeHUDTitle, isOn: boolBinding(\.keystrokesEnabled))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
 
             Divider().opacity(0.35)
             sectionTitle(wave2.cameraBubbleTitle)
             Toggle(wave2.cameraBubbleTitle, isOn: Binding(
                 get: { model.document.cameraBubble.isEnabled },
                 set: { enabled in
+                    UserDefaults.standard.set(enabled,
+                                              forKey: RecorderCameraCapture.defaultPreferenceKey)
                     var next = model.document
                     next.cameraBubble.isEnabled = enabled
                     model.document = next
                 }
             ))
-            .toggleStyle(.switch)
-            .controlSize(.mini)
+            .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+
             if model.document.cameraBubble.isEnabled {
+                Text(v2.recorderCameraLiveNote)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Toggle(wave2.cameraAutoShrinkLabel, isOn: Binding(
                     get: { model.document.cameraBubble.autoShrinkOnPointerNear },
                     set: { shrink in
@@ -884,38 +904,33 @@ struct RecorderInspector: View {
                         model.document = next
                     }
                 ))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
             }
 
             Divider().opacity(0.35)
             sectionTitle(wave2.captionsTrackTitle)
             Toggle(wave2.captionsTrackTitle, isOn: boolBinding(\.captionsEnabled))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
             HStack(spacing: 8) {
-                Button {
-                    Task { @MainActor in
-                        await model.transcribeCaptions()
-                    }
-                } label: {
-                    if model.isTranscribingCaptions {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text(wave2.transcribeAudioButton)
-                            .font(.system(size: 11, weight: .medium))
+                if model.isTranscribingCaptions {
+                    ProgressView().controlSize(.small)
+                } else {
+                    VorssaintActionChip(title: wave2.transcribeAudioButton,
+                                        symbol: "waveform",
+                                        tone: .tools,
+                                        prominent: true) {
+                        Task { @MainActor in
+                            await model.transcribeCaptions()
+                        }
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(model.isTranscribingCaptions)
 
                 if !model.document.captions.isEmpty {
-                    Button(wave2.exportSRTButton) {
+                    VorssaintActionChip(title: wave2.exportSRTButton,
+                                        symbol: "square.and.arrow.up",
+                                        tone: .tools) {
                         saveSRTPanel()
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
             }
 

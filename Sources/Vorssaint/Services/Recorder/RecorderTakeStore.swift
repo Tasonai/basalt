@@ -21,6 +21,8 @@ final class RecorderTakeStore: @unchecked Sendable {
         var videoURL: URL { folder.appendingPathComponent(RecorderSupport.takeVideoName) }
         var pointerURL: URL { folder.appendingPathComponent(RecorderSupport.takePointerName) }
         var typingURL: URL { folder.appendingPathComponent(RecorderSupport.takeTypingName) }
+        var cameraURL: URL { folder.appendingPathComponent("camera.mov") }
+        var keystrokesURL: URL { folder.appendingPathComponent("keystrokes.json") }
         var editURL: URL { folder.appendingPathComponent(RecorderSupport.takeEditName) }
     }
 

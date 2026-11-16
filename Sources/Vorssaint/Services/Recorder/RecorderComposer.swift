@@ -71,6 +71,14 @@ final class RecorderComposer {
         let keystrokes: [RecorderKeystrokeEvent]
         let captionsEnabled: Bool
         let captions: [RecorderCaptionSegment]
+        let sourceTimes: [Double]
+        let cameraURL: URL?
+        let cameraBubbleScale: [Double]
+        let perspectiveTiltEnabled: Bool
+        let tiltX: [Double]
+        let tiltY: [Double]
+        let ambientGlowEnabled: Bool
+        let preservesTransparentBackdrop: Bool
     }
 
     private let plan: Plan
@@ -78,6 +86,7 @@ final class RecorderComposer {
     /// so this is a handful of small images for the whole export.
     private let decodedShapes: [CGImage?]
     private let fallbackArrow: CGImage?
+    private let cameraSampler: CameraFrameSampler?
 
     init(plan: Plan) {
         self.plan = plan
@@ -88,9 +97,16 @@ final class RecorderComposer {
         fallbackArrow = (plan.showsPointer && plan.pointerShapes.isEmpty)
             ? RecorderCursorSprite.arrow(pixelSize: plan.pointerPixelSize * 3)
             : nil
+        cameraSampler = (plan.cameraBubble.isEnabled && plan.cameraURL != nil)
+            ? plan.cameraURL.flatMap(CameraFrameSampler.init(url:))
+            : nil
     }
 
     var canvasSize: CGSize { plan.canvasSize }
+
+    func prepareAssets() async {
+        await cameraSampler?.prepare()
+    }
 
     // MARK: - Rendering
 
@@ -125,24 +141,90 @@ final class RecorderComposer {
                 )
             }
         }
-        content = fitted(content)
+        let fittedContent = fitted(content)
+        let canvasBounds = CGRect(origin: .zero, size: plan.canvasSize)
 
+        var stageCard = fittedContent
         if let mask = plan.mask {
-            let background = plan.plate ?? CIImage(color: .black)
-                .cropped(to: CGRect(origin: .zero, size: plan.canvasSize))
-            content = content.applyingFilter("CIBlendWithMask", parameters: [
-                kCIInputBackgroundImageKey: background,
+            stageCard = stageCard.applyingFilter("CIBlendWithMask", parameters: [
+                kCIInputBackgroundImageKey: CIImage.empty(),
                 kCIInputMaskImageKey: mask,
             ])
-        } else if let plate = plan.plate {
-            content = content.composited(over: plate)
         }
+        if plan.perspectiveTiltEnabled {
+            stageCard = perspectiveTilted(stageCard, index: index)
+        }
+
+        var background: CIImage
+        if let plate = plan.plate {
+            background = plate
+        } else if plan.preservesTransparentBackdrop {
+            background = CIImage.empty()
+        } else {
+            background = CIImage(color: .black).cropped(to: canvasBounds)
+        }
+
+        if plan.ambientGlowEnabled {
+            background = ambientGlow(from: fittedContent, over: background)
+        }
+
+        if plan.mask != nil || plan.plate != nil || plan.ambientGlowEnabled
+            || plan.perspectiveTiltEnabled || plan.preservesTransparentBackdrop {
+            content = stageCard.composited(over: background)
+        } else {
+            content = fittedContent
+        }
+
+        let sourceSeconds = plan.sourceTimes.indices.contains(index) ? plan.sourceTimes[index] : seconds
         content = drawImages(on: content, index: index)
         content = drawTexts(on: content, index: index)
-        content = drawCameraBubble(on: content, index: index)
-        content = drawKeystrokeHUD(on: content, at: seconds)
-        content = drawCaptions(on: content, at: seconds)
-        return content.cropped(to: CGRect(origin: .zero, size: plan.canvasSize))
+        content = drawCameraBubble(on: content, index: index, sourceSeconds: sourceSeconds)
+        content = drawKeystrokeHUD(on: content, at: sourceSeconds)
+        content = drawCaptions(on: content, at: sourceSeconds)
+        return content.cropped(to: canvasBounds)
+    }
+
+    private func perspectiveTilted(_ image: CIImage, index: Int) -> CIImage {
+        let tx = plan.tiltX.indices.contains(index) ? plan.tiltX[index] : 0
+        let ty = plan.tiltY.indices.contains(index) ? plan.tiltY[index] : 0
+        guard abs(tx) > 0.002 || abs(ty) > 0.002 else { return image }
+
+        let rect = plan.cardRect
+        guard rect.width > 4, rect.height > 4,
+              let filter = CIFilter(name: "CIPerspectiveTransform") else { return image }
+
+        let maxInsetX = rect.width * 0.028
+        let maxInsetY = rect.height * 0.032
+        let leftInsetY = CGFloat(max(0, -tx)) * maxInsetY
+        let rightInsetY = CGFloat(max(0, tx)) * maxInsetY
+        let topInsetX = CGFloat(max(0, -ty)) * maxInsetX
+        let bottomInsetX = CGFloat(max(0, ty)) * maxInsetX
+
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(CIVector(x: rect.minX + topInsetX, y: rect.maxY - leftInsetY), forKey: "inputTopLeft")
+        filter.setValue(CIVector(x: rect.maxX - topInsetX, y: rect.maxY - rightInsetY), forKey: "inputTopRight")
+        filter.setValue(CIVector(x: rect.maxX - bottomInsetX, y: rect.minY + rightInsetY), forKey: "inputBottomRight")
+        filter.setValue(CIVector(x: rect.minX + bottomInsetX, y: rect.minY + leftInsetY), forKey: "inputBottomLeft")
+        return filter.outputImage ?? image
+    }
+
+    private func ambientGlow(from fittedContent: CIImage, over background: CIImage) -> CIImage {
+        let canvasBounds = CGRect(origin: .zero, size: plan.canvasSize)
+        let center = CGPoint(x: plan.cardRect.midX, y: plan.cardRect.midY)
+        let glowScale: CGFloat = 1.09
+        let blurRadius = max(18, min(plan.canvasSize.width, plan.canvasSize.height) * 0.055)
+        let toCenter = CGAffineTransform(translationX: -center.x, y: -center.y)
+        let scaled = CGAffineTransform(scaleX: glowScale, y: glowScale)
+        let back = CGAffineTransform(translationX: center.x, y: center.y)
+        let halo = fittedContent
+            .transformed(by: toCenter.concatenating(scaled).concatenating(back))
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: blurRadius])
+            .cropped(to: canvasBounds)
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.25])
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0.58),
+            ])
+        return halo.composited(over: background)
     }
 
     /// Pictures share the captions' place above the zoom, and go under them:
@@ -189,24 +271,24 @@ final class RecorderComposer {
         return result
     }
 
-    private func drawCameraBubble(on content: CIImage, index: Int) -> CIImage {
+    private func drawCameraBubble(on content: CIImage, index: Int, sourceSeconds: Double) -> CIImage {
         let cfg = plan.cameraBubble
         guard cfg.isEnabled else { return content }
-        let pointerNorm: CGPoint? = {
-            guard plan.positions.indices.contains(index),
-                  plan.sourceSize.width > 0, plan.sourceSize.height > 0
-            else { return nil }
-            let pt = plan.positions[index]
-            return CGPoint(x: pt.x / plan.sourceSize.width, y: pt.y / plan.sourceSize.height)
-        }()
-        let scale = cfg.effectiveScale(pointerNormalized: pointerNorm)
+        let scale: CGFloat
+        if plan.cameraBubbleScale.indices.contains(index) {
+            scale = CGFloat(plan.cameraBubbleScale[index])
+        } else {
+            let pointerNorm: CGPoint? = plan.positions.indices.contains(index) ? plan.positions[index] : nil
+            scale = cfg.effectiveScale(pointerNormalized: pointerNorm)
+        }
         let minor = min(plan.canvasSize.width, plan.canvasSize.height)
         let diameter = max(44, minor * CGFloat(cfg.diameterFraction) * scale)
         let center = CGPoint(
             x: cfg.normalizedCenter.x * plan.canvasSize.width,
             y: (1.0 - cfg.normalizedCenter.y) * plan.canvasSize.height
         )
-        let size = CGSize(width: ceil(diameter + 8), height: ceil(diameter + 8))
+        let pad: CGFloat = 14
+        let size = CGSize(width: ceil(diameter + pad * 2), height: ceil(diameter + pad * 2))
         guard let ctx = CGContext(data: nil,
                                   width: Int(size.width),
                                   height: Int(size.height),
@@ -215,18 +297,79 @@ final class RecorderComposer {
                                   space: CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return content }
-        let circleRect = CGRect(x: 4, y: 4, width: diameter, height: diameter)
-        ctx.setFillColor(CGColor(srgbRed: 0.12, green: 0.13, blue: 0.16, alpha: 0.88))
+        let circleRect = CGRect(x: pad, y: pad, width: diameter, height: diameter)
+
+        ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: -4),
+                      blur: 10,
+                      color: CGColor(gray: 0, alpha: 0.45))
+        ctx.setFillColor(CGColor(srgbRed: 0.10, green: 0.11, blue: 0.14, alpha: 1))
         ctx.fillEllipse(in: circleRect)
-        ctx.setStrokeColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.85))
-        ctx.setLineWidth(2.5)
+        ctx.restoreGState()
+
+        ctx.saveGState()
+        ctx.addEllipse(in: circleRect)
+        ctx.clip()
+        if let cameraFrame = cameraSampler?.frame(at: sourceSeconds),
+           cameraFrame.width > 0, cameraFrame.height > 0 {
+            let srcW = CGFloat(cameraFrame.width)
+            let srcH = CGFloat(cameraFrame.height)
+            let fill = max(circleRect.width / srcW, circleRect.height / srcH)
+            let drawW = srcW * fill
+            let drawH = srcH * fill
+            let drawRect = CGRect(
+                x: circleRect.midX - drawW / 2,
+                y: circleRect.midY - drawH / 2,
+                width: drawW,
+                height: drawH
+            )
+            ctx.interpolationQuality = .high
+            ctx.draw(cameraFrame, in: drawRect)
+        } else {
+            ctx.setFillColor(CGColor(srgbRed: 0.12, green: 0.13, blue: 0.16, alpha: 0.94))
+            ctx.fill(circleRect)
+            ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.34))
+            let headSize = diameter * 0.28
+            let headRect = CGRect(
+                x: circleRect.midX - headSize / 2,
+                y: circleRect.midY + diameter * 0.04,
+                width: headSize,
+                height: headSize
+            )
+            ctx.fillEllipse(in: headRect)
+            let shouldersW = diameter * 0.56
+            let shouldersH = diameter * 0.36
+            let shouldersRect = CGRect(
+                x: circleRect.midX - shouldersW / 2,
+                y: circleRect.minY - shouldersH * 0.22,
+                width: shouldersW,
+                height: shouldersH
+            )
+            ctx.fillEllipse(in: shouldersRect)
+        }
+        ctx.restoreGState()
+
+        ctx.setStrokeColor(Self.borderCGColor(hex: cfg.borderHex))
+        ctx.setLineWidth(max(2.0, diameter * 0.025))
         ctx.strokeEllipse(in: circleRect)
+
         guard let cg = ctx.makeImage() else { return content }
         let ox = center.x - size.width / 2
         let oy = center.y - size.height / 2
         return CIImage(cgImage: cg)
             .transformed(by: CGAffineTransform(translationX: ox, y: oy))
             .composited(over: content)
+    }
+
+    private static func borderCGColor(hex: String) -> CGColor {
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else {
+            return CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.88)
+        }
+        let r = CGFloat((value >> 16) & 0xFF) / 255.0
+        let g = CGFloat((value >> 8) & 0xFF) / 255.0
+        let b = CGFloat(value & 0xFF) / 255.0
+        return CGColor(srgbRed: r, green: g, blue: b, alpha: 0.88)
     }
 
     private func drawKeystrokeHUD(on content: CIImage, at seconds: Double) -> CIImage {
@@ -478,6 +621,7 @@ final class RecorderComposer {
                                  outputSize: CGSize,
                                  playbackSpeed: Double = 1) async -> AVMutableVideoComposition? {
         if let composer {
+            await composer.prepareAssets()
             // The handler may run concurrently; this composer only reads
             // immutable state while rendering each frame.
             nonisolated(unsafe) let threadSafeComposer = composer
@@ -534,5 +678,120 @@ final class RecorderComposer {
         instruction.layerInstructions = [layer]
         composition.instructions = [instruction]
         return composition
+    }
+}
+
+/// Lazily caches and extracts synced `camera.mov` frames for `RecorderComposer`
+/// using bounded 30fps bucket caching and `autoreleasepool` so long exports keep
+/// memory flat.
+private final class CameraFrameSampler: @unchecked Sendable {
+    private let asset: AVURLAsset
+    private let generator: AVAssetImageGenerator
+    private let lock = NSLock()
+    private var prepared = false
+    private var hasValidVideo = false
+    private var durationSeconds: Double = 0
+    private var startOffset: Double = 0
+    private var cachedBucket: Int = -1
+    private var cachedImage: CGImage?
+
+    init?(url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 512, height: 512)
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 0.05, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.05, preferredTimescale: 600)
+        self.asset = asset
+        self.generator = generator
+    }
+
+    deinit {
+        generator.cancelAllCGImageGeneration()
+    }
+
+    func prepare() async {
+        let alreadyPrepared = lock.withLock { prepared }
+        guard !alreadyPrepared else { return }
+
+        let loadedDuration = (try? await asset.load(.duration).seconds) ?? 0
+        let videoTracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+        var offset = 0.0
+        if let metadata = try? await asset.load(.metadata) {
+            for item in metadata where item.identifier == .quickTimeMetadataContentIdentifier {
+                if let raw = try? await item.load(.stringValue),
+                   raw.hasPrefix("com.vorssaint.recorder.camera.offset:"),
+                   let parsed = Double(raw.dropFirst("com.vorssaint.recorder.camera.offset:".count)),
+                   parsed.isFinite, parsed >= 0 {
+                    offset = parsed
+                    break
+                }
+            }
+        }
+
+        lock.withLock {
+            prepared = true
+            durationSeconds = loadedDuration.isFinite ? max(0, loadedDuration) : 0
+            hasValidVideo = durationSeconds > 0.02 && !videoTracks.isEmpty
+            startOffset = offset
+        }
+    }
+
+    private func ensurePreparedSync() {
+        let isReady = lock.withLock { prepared }
+        guard !isReady else { return }
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached { [weak self] in
+            await self?.prepare()
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 0.5)
+    }
+
+    func frame(at sourceSeconds: Double) -> CGImage? {
+        ensurePreparedSync()
+        let (valid, dur, offset) = lock.withLock { (hasValidVideo, durationSeconds, startOffset) }
+        guard valid else { return nil }
+
+        let local = max(0, sourceSeconds - offset)
+        let clamped = min(max(0, dur - 0.01), local)
+        let bucket = max(0, Int((clamped * 30.0).rounded()))
+
+        return lock.withLock { () -> CGImage? in
+            if bucket == cachedBucket, let cachedImage {
+                return cachedImage
+            }
+            let semaphore = DispatchSemaphore(value: 0)
+            let box = CameraImageBox()
+            autoreleasepool {
+                generator.generateCGImageAsynchronously(
+                    for: CMTime(seconds: clamped, preferredTimescale: 600)
+                ) { image, _, _ in
+                    box.set(image)
+                    semaphore.signal()
+                }
+                _ = semaphore.wait(timeout: .now() + 0.35)
+            }
+            let decoded = box.get()
+            if let decoded {
+                cachedBucket = bucket
+                cachedImage = decoded
+            }
+            return decoded ?? cachedImage
+        }
+    }
+}
+
+private final class CameraImageBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: CGImage?
+
+    func set(_ image: CGImage?) {
+        lock.withLock { stored = image }
+    }
+
+    func get() -> CGImage? {
+        lock.withLock { stored }
     }
 }

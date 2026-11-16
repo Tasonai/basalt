@@ -1919,6 +1919,7 @@ enum ScreenshotSupport {
         var arrowStyle: ArrowStyleID
         var scribbleSeed: UInt64
         var number: Int
+        var counterStyle: ScreenshotCounterBadgeStyle
         var imageAsset: ImageAsset?
         var renderReferenceSize: CGSize?
 
@@ -1937,7 +1938,8 @@ enum ScreenshotSupport {
              scribbleSeed: UInt64? = nil,
              number: Int = 0,
              imageAsset: ImageAsset? = nil,
-             renderReferenceSize: CGSize? = nil) {
+             renderReferenceSize: CGSize? = nil,
+             counterStyle: ScreenshotCounterBadgeStyle = .numeric) {
             self.id = id
             self.tool = tool
             self.rect = rect
@@ -1955,6 +1957,7 @@ enum ScreenshotSupport {
                     ? ScreenshotSupport.randomScribbleSeed()
                     : 0)
             self.number = number
+            self.counterStyle = counterStyle
             self.imageAsset = imageAsset
             self.renderReferenceSize = renderReferenceSize
         }
@@ -1969,6 +1972,7 @@ enum ScreenshotSupport {
         var blurLevel: Int? = nil
         var blurStyle: BlurStyleID? = nil
         var blurTextOnly: Bool? = nil
+        var counterStyle: ScreenshotCounterBadgeStyle? = nil
     }
 
     static func selectionStyle(for annotation: Annotation) -> SelectionStyle {
@@ -1986,10 +1990,15 @@ enum ScreenshotSupport {
                                   stroke: nil,
                                   arrowStyle: nil,
                                   textSize: annotation.textSize)
-        case .highlight, .counter, .redact:
+        case .highlight, .redact:
             return SelectionStyle(color: annotation.color,
                                   stroke: nil,
                                   arrowStyle: nil)
+        case .counter:
+            return SelectionStyle(color: annotation.color,
+                                  stroke: nil,
+                                  arrowStyle: nil,
+                                  counterStyle: annotation.counterStyle)
         case .pixelate:
             return SelectionStyle(color: nil,
                                   stroke: nil,
@@ -2042,6 +2051,23 @@ enum ScreenshotSupport {
             var updated = annotation
             updated.number = next
             next += 1
+            return updated
+        }
+    }
+
+    /// Applies `style` to all counter badges and optionally resets numbering from 1.
+    static func formattingCounters(_ annotations: [Annotation],
+                                   style: ScreenshotCounterBadgeStyle,
+                                   resettingNumbers: Bool = false) -> [Annotation] {
+        var next = 1
+        return annotations.map { annotation in
+            guard annotation.tool == .counter else { return annotation }
+            var updated = annotation
+            updated.counterStyle = style
+            if resettingNumbers {
+                updated.number = next
+                next += 1
+            }
             return updated
         }
     }

@@ -305,17 +305,34 @@ enum ScreenshotRenderer {
                           y: annotation.rect.midY - diameter / 2,
                           width: diameter,
                           height: diameter)
+
+        // Subtle outer halo ring stays tight around the badge (< 3pt) so
+        // rendered diameter bounds remain predictable across canvas expansions.
+        let haloWidth = max(1.5, diameter * 0.06)
+        let haloColor = annotation.color == .white
+            ? CGColor(gray: 0.12, alpha: 0.22)
+            : color(annotation.color, alpha: 0.28)
+        context.saveGState()
+        context.setStrokeColor(haloColor)
+        context.setLineWidth(haloWidth)
+        context.strokeEllipse(in: rect.insetBy(dx: -1.5, dy: -1.5))
+        context.restoreGState()
+
         context.saveGState()
         applyShadow(context, scale: scale, enabled: shadowsEnabled)
         context.setFillColor(color(annotation.color))
         context.fillEllipse(in: rect)
-        context.setStrokeColor(CGColor(gray: 1, alpha: 0.9))
-        context.setLineWidth(max(1.5, diameter * 0.05))
+        let borderColor = annotation.color == .white
+            ? CGColor(gray: 0.12, alpha: 0.85)
+            : CGColor(gray: 1, alpha: 0.94)
+        context.setStrokeColor(borderColor)
+        context.setLineWidth(max(1.5, diameter * 0.055))
         context.strokeEllipse(in: rect.insetBy(dx: 1, dy: 1))
         context.restoreGState()
 
-        let label = "\(annotation.number)"
-        let font = NSFont.systemFont(ofSize: diameter * 0.52, weight: .bold)
+        let label = annotation.counterStyle.formattedLabel(for: annotation.number)
+        let fontFactor: CGFloat = label.count >= 3 ? 0.36 : (label.count == 2 ? 0.44 : 0.52)
+        let font = NSFont.systemFont(ofSize: diameter * fontFactor, weight: .bold)
         let textColor: NSColor = annotation.color == .white
             ? NSColor(srgbRed: 0.09, green: 0.09, blue: 0.11, alpha: 1) : .white
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]

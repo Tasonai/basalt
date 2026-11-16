@@ -204,3 +204,40 @@ enum ScreenshotPixelRuler {
                            bottomEdgeY: bottomY)
     }
 }
+
+/// Formatting style for sequential step counter annotations (`1, 2, 3` or `A, B, C`).
+enum ScreenshotCounterBadgeStyle: String, CaseIterable, Codable, Sendable {
+    case numeric
+    case alphabetic
+
+    static func sanitized(_ raw: String?) -> ScreenshotCounterBadgeStyle {
+        ScreenshotCounterBadgeStyle(rawValue: raw ?? "") ?? .numeric
+    }
+
+    /// Formats a 1-based counter index (`1 -> "1"` / `"A"`, `27 -> "27"` / `"AA"`).
+    func formattedLabel(for number: Int) -> String {
+        let positive = max(1, number)
+        switch self {
+        case .numeric:
+            return "\(positive)"
+        case .alphabetic:
+            var value = positive
+            var scalars: [UnicodeScalar] = []
+            while value > 0 {
+                let remainder = (value - 1) % 26
+                if let scalar = UnicodeScalar(65 + remainder) {
+                    scalars.append(scalar)
+                }
+                value = (value - 1) / 26
+            }
+            return String(String.UnicodeScalarView(scalars.reversed()))
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .numeric: return "1.circle"
+        case .alphabetic: return "a.circle"
+        }
+    }
+}

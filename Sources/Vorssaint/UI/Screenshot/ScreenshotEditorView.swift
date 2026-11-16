@@ -10,6 +10,7 @@ struct ScreenshotEditorView: View {
     @ObservedObject var model: ScreenshotEditorModel
     let controller: ScreenshotEditorController
     @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var cloudUpload = ScreenshotCloudUploadService.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var keyboard = ScreenshotShortcutContext()
 
@@ -27,6 +28,7 @@ struct ScreenshotEditorView: View {
     @State private var footerHeight = ScreenshotSupport.editorWrappedFooterHeight
     @State private var toolOptionsShown = false
     @State private var sharing = false
+    @State private var cloudUploading = false
     @State private var sharedRecord: ScreenshotShareRecord?
     @State private var shareAnchor = ShelfSharePickerAnchor.Anchor()
     @AppStorage(DefaultsKey.screenshotToolOrder) private var toolOrderRaw =
@@ -1034,6 +1036,9 @@ struct ScreenshotEditorView: View {
             if sharingEnabled {
                 shareMenu
             }
+            if cloudUpload.isConfigured {
+                cloudUploadButton
+            }
             Divider().frame(height: 16).padding(.horizontal, 3)
 
             Menu {
@@ -1105,6 +1110,31 @@ struct ScreenshotEditorView: View {
         .disabled(sharing)
         .screenshotSafeHelp(sharing ? strings.sharingHUD : strings.shareSectionTitle)
         .accessibilityLabel(strings.shareSectionTitle)
+    }
+
+    private var cloudUploadButton: some View {
+        let title = OverhaulV2Strings.localized(l10n.language).cloudUploadButton
+        return Button {
+            commitEditingTextIfNeeded()
+            cloudUploading = true
+            controller.uploadToCloud { _ in
+                cloudUploading = false
+            }
+        } label: {
+            Group {
+                if cloudUploading {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "icloud.and.arrow.up")
+                }
+            }
+            .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.borderless)
+        .disabled(cloudUploading)
+        .screenshotSafeHelp(title)
+        .accessibilityLabel(title)
     }
 
     // MARK: - Bottom row
@@ -1205,6 +1235,15 @@ struct ScreenshotEditorView: View {
         return selected.tool == .sticker
     }
 
+    private var showsCounterControls: Bool {
+        if model.tool == .counter { return true }
+        guard model.tool == .select,
+              let selectedID = model.selectedID,
+              let selected = model.annotations.first(where: { $0.id == selectedID })
+        else { return false }
+        return selected.tool == .counter
+    }
+
     private var bottomRow: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: 10) {
@@ -1290,6 +1329,10 @@ struct ScreenshotEditorView: View {
                 stickerMenu
                 Divider().frame(height: 16)
             }
+            if showsCounterControls {
+                counterControls
+                Divider().frame(height: 16)
+            }
             if showsBlurControls {
                 blurStyleMenu
                 blurTextOnlyButton
@@ -1308,10 +1351,11 @@ struct ScreenshotEditorView: View {
                         colorDot(colorID)
                     }
                 }
-                Divider().frame(height: 16)
                 if showsTextSizeControls {
+                    Divider().frame(height: 16)
                     textSizeControl
-                } else {
+                } else if !showsCounterControls {
+                    Divider().frame(height: 16)
                     HStack(spacing: 3) {
                         ForEach(ScreenshotSupport.StrokeID.allCases, id: \.self) { stroke in
                             strokeGlyph(stroke)
@@ -1406,6 +1450,51 @@ struct ScreenshotEditorView: View {
         .fixedSize()
         .screenshotSafeHelp(strings.toolSticker)
         .accessibilityLabel(strings.toolSticker)
+    }
+
+    private var counterControls: some View {
+        let hasCounters = model.annotations.contains { $0.tool == .counter }
+        let counterLabel = OverhaulV2Strings.localized(l10n.language).stepCounterToolLabel
+        return HStack(spacing: 4) {
+            HStack(spacing: 2) {
+                ForEach(ScreenshotCounterBadgeStyle.allCases, id: \.self) { style in
+                    let active = model.counterStyle == style
+                    Button {
+                        model.applyCounterStyleToSequence(style)
+                    } label: {
+                        Text(style == .numeric ? "1·2·3" : "A·B·C")
+                            .font(.system(size: 10.5, weight: active ? .semibold : .medium, design: .rounded))
+                            .padding(.horizontal, 6)
+                            .frame(height: 20)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(active ? Color.accentColor.opacity(0.22) : .clear)
+                            )
+                            .foregroundStyle(active ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                }
+            }
+            .padding(2)
+            .background(Color.primary.opacity(0.06),
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .screenshotSafeHelp(counterLabel)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(counterLabel)
+
+            Button {
+                model.resetCounterSequence()
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .disabled(!hasCounters)
+            .screenshotSafeHelp(l10n.s.shortcutReset)
+            .accessibilityLabel(l10n.s.shortcutReset)
+        }
     }
 
     private var cropBar: some View {

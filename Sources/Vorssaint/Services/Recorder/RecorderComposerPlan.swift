@@ -23,17 +23,19 @@ extension RecorderComposer {
                          sourceSize: CGSize,
                          frameRate: Int,
                          duration: Double,
-                         outputScale: CGFloat = 1) -> Plan? {
+                         outputScale: CGFloat = 1,
+                         cameraURL: URL? = nil,
+                         preservesTransparentBackdrop: Bool = false) -> Plan? {
         guard sourceSize.width > 0, sourceSize.height > 0, duration > 0 else { return nil }
 
         let style = document.resolvedBackdrop
         let aspect = document.resolvedAspect
         let hasBackdrop = style.kind != .none
-        let padding = hasBackdrop ? style.padding * 0.18 : 0
+        let padding = document.effectiveCanvasPadding
         let fullCanvas = RecorderSupport.canvasSize(source: sourceSize,
                                                     padding: padding,
                                                     aspect: aspect,
-                                                    cropsToAspect: !hasBackdrop)
+                                                    cropsToAspect: document.cropsToAspectWithoutStage)
         let scale = outputScale.isFinite ? min(1, max(0.1, outputScale)) : 1
         let canvas = scale == 1
             ? fullCanvas
@@ -43,17 +45,24 @@ extension RecorderComposer {
             canvas: canvas,
             source: sourceSize,
             padding: padding,
-            fillsCanvas: !hasBackdrop && aspect != .original)
+            fillsCanvas: document.cropsToAspectWithoutStage && aspect != .original)
 
         let showsPointer = document.showsPointer && !track.samples.isEmpty
         let segments = document.activeZoomSegments(duration: duration)
-        let needsCanvas = hasBackdrop || fullCanvas != RecorderSupport.evenSize(sourceSize)
+        let needsCanvas = hasBackdrop || padding > 0 || fullCanvas != RecorderSupport.evenSize(sourceSize)
         let hasCuts = !document.cuts.isEmpty
         let texts = RecorderTextOverlay.normalized(document.texts, duration: duration)
         let images = RecorderImageOverlay.normalized(document.images, duration: duration)
         let blurs = RecorderBlurRegion.normalized(document.blurs, duration: duration)
+        let hasStudioVisuals = document.motionBlurEnabled
+            || document.perspectiveTiltEnabled
+            || document.ambientGlowEnabled
+            || document.cameraBubble.isEnabled
+            || (document.keystrokesEnabled && !document.keystrokes.isEmpty)
+            || (document.captionsEnabled && !document.captions.isEmpty)
+            || preservesTransparentBackdrop
         guard showsPointer || !segments.isEmpty || needsCanvas || hasCuts || !texts.isEmpty
-            || !images.isEmpty || !blurs.isEmpty
+            || !images.isEmpty || !blurs.isEmpty || hasStudioVisuals
         else { return nil }
 
         // Everything the pointer track knows is in the RECORDING's own time,
@@ -213,15 +222,49 @@ extension RecorderComposer {
             }
         }
 
-        let corner = hasBackdrop
-            ? RecorderSupport.cardCorner(style.cornerRadius, cardSize: card.size)
-            : 0
-        let plate = needsCanvas
+        let corner: CGFloat
+        if hasBackdrop {
+            corner = RecorderSupport.cardCorner(style.cornerRadius, cardSize: card.size)
+        } else if document.ambientGlowEnabled || document.perspectiveTiltEnabled {
+            corner = RecorderSupport.cardCorner(0.28, cardSize: card.size)
+        } else {
+            corner = 0
+        }
+        let usesTransparentStage = preservesTransparentBackdrop && !hasBackdrop
+        let plate = (needsCanvas && !usesTransparentStage)
             ? backgroundPlate(style: style, canvas: canvas, card: card, corner: corner)
             : nil
-        let mask = (needsCanvas && plate != nil)
+        let mask = (needsCanvas && (plate != nil || corner > 0))
             ? cardMask(canvas: canvas, card: card, corner: corner)
             : nil
+
+        var cameraBubbleScale = [Double](repeating: 1, count: frames)
+        if document.cameraBubble.isEnabled {
+            let hasPointerSamples = showsPointer || !track.samples.isEmpty
+            let rawScales = (0..<frames).map { index -> Double in
+                let norm: CGPoint? = hasPointerSamples ? positions[index] : nil
+                return Double(document.cameraBubble.effectiveScale(pointerNormalized: norm))
+            }
+            cameraBubbleScale = frames > 1
+                ? RecorderMotion.springed(rawScales, frameRate: frameRate)
+                : rawScales
+        }
+
+        var tiltX = [Double](repeating: 0, count: frames)
+        var tiltY = [Double](repeating: 0, count: frames)
+        if document.perspectiveTiltEnabled, frames > 1, !track.samples.isEmpty {
+            var rawX = [Double](repeating: 0, count: frames)
+            var rawY = [Double](repeating: 0, count: frames)
+            let rate = Double(max(1, frameRate))
+            for index in 1..<frames {
+                let vx = Double(positions[index].x - positions[index - 1].x) * rate
+                let vy = Double(positions[index].y - positions[index - 1].y) * rate
+                rawX[index] = min(1, max(-1, vx / 1.4))
+                rawY[index] = min(1, max(-1, vy / 1.4))
+            }
+            tiltX = RecorderMotion.springed(rawX, frameRate: frameRate)
+            tiltY = RecorderMotion.springed(rawY, frameRate: frameRate)
+        }
 
         return Plan(sourceSize: RecorderSupport.evenSize(sourceSize),
                     canvasSize: canvas,
@@ -264,7 +307,15 @@ extension RecorderComposer {
                     keystrokesEnabled: document.keystrokesEnabled,
                     keystrokes: document.keystrokes,
                     captionsEnabled: document.captionsEnabled,
-                    captions: document.captions)
+                    captions: document.captions,
+                    sourceTimes: sourceTimes,
+                    cameraURL: cameraURL,
+                    cameraBubbleScale: cameraBubbleScale,
+                    perspectiveTiltEnabled: document.perspectiveTiltEnabled,
+                    tiltX: tiltX,
+                    tiltY: tiltY,
+                    ambientGlowEnabled: document.ambientGlowEnabled,
+                    preservesTransparentBackdrop: usesTransparentStage)
     }
 
     // MARK: - Plate

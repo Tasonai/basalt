@@ -9,6 +9,7 @@ struct ScreenshotCaptureSettings: View {
     @ObservedObject private var permissions = Permissions.shared
     @ObservedObject private var service = ScreenshotService.shared
     @ObservedObject private var sharing = ScreenshotShareService.shared
+    @ObservedObject private var cloudUpload = ScreenshotCloudUploadService.shared
     @AppStorage(DefaultsKey.screenshotFullScreenShortcutEnabled)
     private var fullScreenShortcutEnabled = false
     @AppStorage(DefaultsKey.screenshotLastCaptureShortcutEnabled)
@@ -52,9 +53,15 @@ struct ScreenshotCaptureSettings: View {
     @AppStorage(DefaultsKey.screenshotUploadDuration) private var uploadDuration = ScreenshotShareDuration.oneHour.rawValue
     @State private var showingSharedLinks = false
     @State private var showingSharePrivacy = false
+    @State private var cloudExpanded = ScreenshotCloudUploadService.shared.config.provider != .disabled
+    @State private var cloudSecretInput = ""
 
     private var strings: ScreenshotFeatureStrings {
         FeatureStrings.screenshot(l10n.language)
+    }
+
+    private var v2Strings: OverhaulV2Strings {
+        OverhaulV2Strings.localized(l10n.language)
     }
 
     var body: some View {
@@ -344,13 +351,140 @@ struct ScreenshotCaptureSettings: View {
                     .buttonStyle(.plain)
                 }
             }
+
+            cloudUploadCard
         }
-        .onAppear { sharing.refresh() }
+        .onAppear {
+            sharing.refresh()
+            cloudUpload.refreshSecretStatus()
+            if cloudUpload.config.provider != .disabled {
+                cloudExpanded = true
+            }
+        }
+        .onDisappear {
+            commitCloudSecretIfEdited()
+        }
         .sheet(isPresented: $showingSharedLinks) {
             ScreenshotSharedLinksView()
         }
         .sheet(isPresented: $showingSharePrivacy) {
             ScreenshotSharePrivacyView()
+        }
+    }
+
+    private var cloudUploadCard: some View {
+        SettingsDisclosureCard(
+            title: v2Strings.cloudUploadTitle,
+            symbol: "icloud.and.arrow.up",
+            badge: cloudUpload.isConfigured ? cloudUpload.config.provider.shortBadge : nil,
+            isExpanded: $cloudExpanded
+        ) {
+            SettingsChoiceRow(
+                symbol: "icloud.and.arrow.up",
+                title: v2Strings.cloudUploadTitle,
+                selection: $cloudUpload.config.provider
+            ) {
+                Text(strings.delayOff).tag(ScreenshotCloudProvider.disabled)
+                Text("S3 / R2").tag(ScreenshotCloudProvider.s3Compatible)
+                Text("Webhook").tag(ScreenshotCloudProvider.customWebhook)
+            }
+            .onChange(of: cloudUpload.config.provider) { _, _ in
+                cloudSecretInput = ""
+                cloudUpload.refreshSecretStatus()
+            }
+
+            if cloudUpload.config.provider != .disabled {
+                Divider()
+                SettingsRow(symbol: "link", title: v2Strings.cloudEndpointLabel) {
+                    TextField(
+                        cloudUpload.config.provider == .s3Compatible
+                            ? "https://account.r2.cloudflarestorage.com"
+                            : "https://uploads.example.com/hook",
+                        text: $cloudUpload.config.endpointURLString
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 240)
+                }
+            }
+
+            if cloudUpload.config.provider == .s3Compatible {
+                SettingsRow(symbol: "externaldrive", title: v2Strings.cloudBucketLabel) {
+                    TextField("screenshots", text: $cloudUpload.config.bucket)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                }
+                SettingsRow(symbol: "globe", title: v2Strings.cloudRegionLabel) {
+                    TextField("auto", text: $cloudUpload.config.region)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 140)
+                }
+                SettingsRow(symbol: "folder", title: "Key prefix") {
+                    TextField("captures/", text: $cloudUpload.config.keyPrefix)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                }
+                SettingsRow(symbol: "arrow.up.forward.app", title: "Public base URL") {
+                    TextField("https://cdn.example.com", text: $cloudUpload.config.publicBaseURL)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
+                SettingsRow(symbol: "key", title: v2Strings.cloudAccessKeyLabel) {
+                    TextField("AKIA...", text: $cloudUpload.config.accessKeyID)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                cloudSecretRow(placeholder: "Secret Access Key")
+            } else if cloudUpload.config.provider == .customWebhook {
+                SettingsRow(symbol: "key", title: "Auth header") {
+                    TextField("Authorization", text: $cloudUpload.config.webhookHeaderName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                }
+                cloudSecretRow(placeholder: "Bearer / API token")
+                SettingsRow(symbol: "doc.text", title: "Response URL JSON keypath") {
+                    TextField("data.url", text: $cloudUpload.config.webhookResponseURLKeyPath)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                }
+            }
+        }
+    }
+
+    private func cloudSecretRow(placeholder: String) -> some View {
+        let trimmed = cloudSecretInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SettingsRow(
+            symbol: "key.fill",
+            title: v2Strings.cloudSecretKeyLabel,
+            caption: cloudUpload.hasStoredSecret ? "Stored securely in macOS Keychain" : nil
+        ) {
+            HStack(spacing: 8) {
+                SecureField(
+                    cloudUpload.hasStoredSecret ? "•••••••• (Keychain)" : placeholder,
+                    text: $cloudSecretInput
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 180)
+                .onSubmit {
+                    commitCloudSecretIfEdited()
+                }
+                if !trimmed.isEmpty {
+                    VorssaintActionChip(title: strings.saveButton, tone: .tools, prominent: true) {
+                        commitCloudSecretIfEdited()
+                    }
+                } else if cloudUpload.hasStoredSecret {
+                    VorssaintActionChip(title: strings.backdropDeletePreset, destructive: true) {
+                        _ = cloudUpload.deleteSecret()
+                    }
+                }
+            }
+        }
+    }
+
+    private func commitCloudSecretIfEdited() {
+        let trimmed = cloudSecretInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if cloudUpload.saveSecret(trimmed) {
+            cloudSecretInput = ""
         }
     }
 

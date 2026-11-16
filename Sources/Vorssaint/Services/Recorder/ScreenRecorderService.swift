@@ -47,6 +47,8 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
     private let streamHeardSinceTap = RecorderAudioFlag()
     private let pointer: RecorderPointerSampler
     private let typing: RecorderTypingSampler
+    private let keystrokes: RecorderKeystrokeSampler
+    private let cameraCapture: RecorderCameraCapture?
     private let writerQueue = DispatchQueue(label: "com.vorssaint.recorder.writer",
                                             qos: .userInitiated)
     private let startGate = RecorderStartGate()
@@ -71,6 +73,10 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
         microphone = capturesMicrophone ? RecorderMicrophoneCapture() : nil
         pointer = RecorderPointerSampler(region: region, pauseClock: pauseClock)
         typing = RecorderTypingSampler(pauseClock: pauseClock)
+        keystrokes = RecorderKeystrokeSampler(pauseClock: pauseClock)
+        cameraCapture = RecorderCameraCapture.isCaptureRequested()
+            ? RecorderCameraCapture(pauseClock: pauseClock)
+            : nil
         super.init()
         engine.delegate = self
         microphone?.onSample = { [weak self] sampleBuffer in
@@ -146,6 +152,14 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
                 return .streamFailed
             }
         }
+        cameraCapture?.start(to: take.cameraURL)
+        guard startGate.isAuthorized else {
+            await tap?.stop()
+            await microphone?.stop()
+            await cameraCapture?.stop()
+            await engine.stop()
+            return .streamFailed
+        }
         // This method is nonisolated and async, so its body runs on the
         // cooperative pool however main-actor the caller was (SE-0338). The
         // two samplers install AppKit event monitors, which belong to the
@@ -153,6 +167,9 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
         await MainActor.run {
             pointer.start()
             typing.start()
+        }
+        await MainActor.run {
+            keystrokes.start()
         }
         return nil
     }
@@ -169,11 +186,15 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
     var isPaused: Bool { pauseClock.isPaused }
 
     func pause(at time: CFTimeInterval) -> Bool {
-        pauseClock.pause(at: time)
+        let paused = pauseClock.pause(at: time)
+        if paused { cameraCapture?.pause() }
+        return paused
     }
 
     func resume(at time: CFTimeInterval) -> Bool {
-        pauseClock.resume(at: time)
+        let resumed = pauseClock.resume(at: time)
+        if resumed { cameraCapture?.resume() }
+        return resumed
     }
 
     func elapsed(at time: CFTimeInterval) -> Double {
@@ -188,7 +209,9 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
         await startGate.waitUntilFinished()
         guard ownsFinalization else { return false }
         let tap = systemAudioTap
+        let camera = cameraCapture
         async let tapStop: Void = { if let tap { await tap.stop() } }()
+        async let cameraStop: Void = { if let camera { await camera.stop() } }()
         if let microphone {
             async let microphoneStop: Void = microphone.stop()
             await engine.stop()
@@ -197,6 +220,7 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
             await engine.stop()
         }
         await tapStop
+        await cameraStop
         // A tap that lost its reader was cut short by a device or process
         // change, not by a missing permission, so this recording proves
         // nothing either way.
@@ -208,6 +232,7 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
                 forKey: DefaultsKey.recorderSystemAudioTapVerified)
         }
         let (track, typingTrack) = await MainActor.run { (pointer.stop(), typing.stop()) }
+        let keystrokeEvents = await MainActor.run { keystrokes.stop() }
         writerQueue.sync {}
         let written = await writer.finish(at: end)
         if written, !track.isEmpty {
@@ -215,6 +240,9 @@ private final class RecorderSession: NSObject, RecorderCaptureEngineDelegate {
         }
         if written, !typingTrack.isEmpty, let data = typingTrack.encoded() {
             try? data.write(to: take.typingURL, options: .atomic)
+        }
+        if written, !keystrokeEvents.isEmpty, let data = RecorderKeystrokeSampler.encoded(keystrokeEvents) {
+            try? data.write(to: take.keystrokesURL, options: .atomic)
         }
         return written
     }

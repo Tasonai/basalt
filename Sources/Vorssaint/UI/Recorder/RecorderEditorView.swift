@@ -274,7 +274,7 @@ struct RecorderEditorView: View {
                     .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 190, maxHeight: .infinity)
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .onTapGesture {
@@ -343,99 +343,13 @@ struct RecorderEditorView: View {
         VStack(spacing: 6) {
             transportRow
                 .padding(.bottom, 4)
-            timelineRow(strings.zoomSectionLabel) {
-                VStack(spacing: 2) {
-                    ClickRuler(model: model).frame(height: 12)
-                    RecorderZoomLane(model: model, kind: .zoom,
-                                     emptyHint: strings.zoomLaneEmptyHint)
-                        .frame(height: 30)
-                }
-            }
-            // The text lane only exists once there is text, so an editor
-            // nobody typed in stays as simple as it was.
-            if !model.document.texts.isEmpty {
-                timelineRow(strings.textContentLabel) {
-                    RecorderZoomLane(model: model, kind: .text,
-                                     emptyHint: strings.textLaneEmptyHint)
-                        .frame(height: 30)
-                }
-            }
-            if !model.document.images.isEmpty {
-                timelineRow(strings.imageLaneLabel) {
-                    RecorderZoomLane(model: model, kind: .image,
-                                     emptyHint: strings.imageLaneEmptyHint)
-                        .frame(height: 30)
-                }
-            }
-            if !model.document.blurs.isEmpty {
-                timelineRow(strings.blurLaneLabel) {
-                    RecorderZoomLane(model: model, kind: .blur,
-                                     emptyHint: strings.blurLaneEmptyHint)
-                        .frame(height: 30)
-                }
-            }
-            if !model.document.captions.isEmpty {
-                timelineRow(OverhaulStrings.wave2(l10n.language).captionsTrackTitle) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            ForEach(model.document.captions) { seg in
-                                Button {
-                                    model.toggleCaptionCut(seg.id)
-                                } label: {
-                                    Text(seg.text)
-                                        .font(.system(size: 10, weight: .medium))
-                                        .strikethrough(seg.isCut)
-                                        .lineLimit(1)
-                                        .padding(.horizontal, 7)
-                                        .padding(.vertical, 3)
-                                        .background(
-                                            (seg.isCut ? Color.orange.opacity(0.22) : Color.accentColor.opacity(0.18)),
-                                            in: Capsule()
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .frame(height: 28)
-                }
-            }
-            if model.hasAudio(.system) {
-                timelineRow(strings.systemAudioTrackLabel) {
-                    RecorderAudioLane(model: model, source: .system)
-                        .frame(height: 32)
-                }
-            }
-            if model.hasAudio(.microphone) {
-                timelineRow(strings.microphoneTrackLabel) {
-                    RecorderAudioLane(model: model, source: .microphone)
-                        .frame(height: 32)
-                }
-            }
-            timelineRow(strings.editorTitle) {
-                Filmstrip(model: model).frame(height: 54)
-            }
+            RecorderMultiTrackTimelineView(model: model)
         }
         .padding(.horizontal, 18)
         .padding(.top, 10)
-        .padding(.bottom, 16)
+        .padding(.bottom, 14)
         .background(.ultraThinMaterial)
         .overlay(alignment: .top) { Divider().opacity(0.45) }
-    }
-
-    private func timelineRow<Content: View>(
-        _ title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        HStack(spacing: 10) {
-            Text(title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 80, alignment: .trailing)
-                .lineLimit(1)
-                .minimumScaleFactor(0.88)
-            content()
-        }
     }
 
     private var transportRow: some View {
@@ -716,7 +630,7 @@ private struct RecorderSharedLinkView: View {
 
 // MARK: - Audio timeline
 
-private struct RecorderAudioLane: View {
+struct RecorderAudioLane: View {
     @ObservedObject var model: RecorderEditorModel
     let source: RecorderAudioSource
 
@@ -870,7 +784,7 @@ private struct PlayerSurface: NSViewRepresentable {
 /// The recording as a strip of frames, with the kept part bright and a handle
 /// at each end. Dragging a handle is the whole trim interaction: there is no
 /// second place to type numbers, because there does not need to be.
-private struct Filmstrip: View {
+struct Filmstrip: View {
     @ObservedObject var model: RecorderEditorModel
     private enum Handle { case start, end }
 
@@ -1044,7 +958,7 @@ private struct Filmstrip: View {
 /// A tick for every press the recording captured. It costs almost nothing,
 /// it gives the zooms something to snap onto, and it silently answers the
 /// first question anybody asks about an automatic zoom: why is it here.
-private struct ClickRuler: View {
+struct ClickRuler: View {
     @ObservedObject var model: RecorderEditorModel
 
     var body: some View {

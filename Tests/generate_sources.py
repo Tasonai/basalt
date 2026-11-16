@@ -2534,6 +2534,23 @@ def main():
           + f'#sourceLocation(file: {json.dumps(checks)}, line: 1)\n'
           + (ROOT / checks).read_text() + "\n#sourceLocation()\n")
 
+    cloud = "Sources/Vorssaint/Services/QuickTools/ScreenshotCloudUploadService.swift"
+    pin = "Sources/Vorssaint/Services/QuickTools/ScreenshotPinController.swift"
+    write("ScreenshotCloudCore.swift",
+          "import CoreGraphics\nimport CryptoKit\nimport Foundation\n"
+          + declaration(cloud, "enum ScreenshotCloudProvider:")
+          + declaration(cloud, "struct ScreenshotCloudConfig:")
+          + declaration(cloud, "protocol ScreenshotCloudSecretStore:")
+          + declaration(cloud, "final class InMemoryScreenshotCloudSecretStore:")
+          + declaration(cloud, "enum S3SigV4Signer {")
+          + "enum ScreenshotCloudURLHelper {\n"
+          + declaration(cloud, "    static func extractURL(")
+          + "}\n"
+          + "enum ScreenshotPinOpacityMath {\n"
+          + "    static let opacityRange: ClosedRange<CGFloat> = 0.20...1.0\n"
+          + declaration(pin, "    static func clampedOpacity(", scope="final class ScreenshotPinWindow:")
+          + "}\n")
+
 
 if __name__ == "__main__":
     main()

@@ -112,6 +112,13 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             applyStyleToSelection()
         }
     }
+    @Published var counterStyle: ScreenshotCounterBadgeStyle {
+        didSet {
+            UserDefaults.standard.set(counterStyle.rawValue,
+                                      forKey: "screenshotLastCounterStyle")
+            applyStyleToSelection()
+        }
+    }
     @Published var sticker: ScreenshotSupport.StickerID {
         didSet {
             UserDefaults.standard.set(sticker.rawValue,
@@ -262,6 +269,8 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             CGFloat(defaults.double(forKey: DefaultsKey.screenshotSpotlightDim)))
         arrowStyle = ScreenshotSupport.ArrowStyleID.sanitized(
             defaults.string(forKey: DefaultsKey.screenshotLastArrowStyle))
+        counterStyle = ScreenshotCounterBadgeStyle.sanitized(
+            defaults.string(forKey: "screenshotLastCounterStyle"))
         sticker = ScreenshotSupport.StickerID.sanitized(
             defaults.string(forKey: DefaultsKey.screenshotLastSticker))
         annotationShadowsEnabled = defaults.bool(
@@ -743,6 +752,8 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
         guard annotations[index].tool != .image else { return }
         let arrowStyleChanged = annotations[index].tool == .arrow
             && annotations[index].arrowStyle != arrowStyle
+        let counterStyleChanged = annotations[index].tool == .counter
+            && annotations[index].counterStyle != counterStyle
         let textSizeChanged = annotations[index].tool == .text
             && annotations[index].textSize != textSize
         // Marks without a thickness control keep theirs, so picking one never
@@ -752,6 +763,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
         guard annotations[index].color != color
                 || strokeChanged
                 || arrowStyleChanged
+                || counterStyleChanged
                 || textSizeChanged
         else { return }
         registerUndo()
@@ -763,6 +775,9 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             }
             annotations[index].arrowStyle = arrowStyle
         }
+        if annotations[index].tool == .counter {
+            annotations[index].counterStyle = counterStyle
+        }
         if annotations[index].tool == .text {
             annotations[index].textSize = textSize
             annotations[index].rect = ScreenshotRenderer.textBounds(
@@ -771,6 +786,23 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
                 textSize: textSize,
                 scale: scale)
         }
+    }
+
+    func applyCounterStyleToSequence(_ style: ScreenshotCounterBadgeStyle) {
+        counterStyle = style
+        let updated = ScreenshotSupport.formattingCounters(annotations, style: style)
+        guard updated != annotations else { return }
+        registerUndo()
+        annotations = updated
+    }
+
+    func resetCounterSequence() {
+        let updated = ScreenshotSupport.formattingCounters(annotations,
+                                                           style: counterStyle,
+                                                           resettingNumbers: true)
+        guard updated != annotations else { return }
+        registerUndo()
+        annotations = updated
     }
 
     private func applyBlurToSelection() {
@@ -819,6 +851,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
         if let blurStyle = style.blurStyle { self.blurStyle = blurStyle }
         if let blurTextOnly = style.blurTextOnly { self.blurTextOnly = blurTextOnly }
         if let arrowStyle = style.arrowStyle { self.arrowStyle = arrowStyle }
+        if let counterStyle = style.counterStyle { self.counterStyle = counterStyle }
         if annotation.tool == .sticker {
             sticker = ScreenshotSupport.StickerID.sanitized(annotation.text)
         }
@@ -1073,7 +1106,7 @@ final class ScreenshotEditorModel: ObservableObject, BackdropEditing {
             let annotation = ScreenshotSupport.Annotation(
                 tool: .counter,
                 rect: CGRect(x: point.x, y: point.y, width: 0, height: 0),
-                color: color, stroke: stroke, number: 1)
+                color: color, stroke: stroke, number: 1, counterStyle: counterStyle)
             annotations.append(annotation)
             annotations = ScreenshotSupport.renumberingCounters(annotations)
             selectedID = annotation.id
@@ -1688,6 +1721,52 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate {
                 completion(record)
             } catch {
                 QuickToolHUD.show(icon: "link", message: self.strings.shareFailedHUD)
+                NSSound.beep()
+                completion(nil)
+            }
+        }
+    }
+
+    /// Uploads the rendered editor result to the configured S3 / R2 / Webhook endpoint,
+    /// copies the resolved public URL to the clipboard, and keeps the editor open.
+    func uploadToCloud(completion: @escaping @MainActor (URL?) -> Void) {
+        guard let export = model.exportImage() else {
+            QuickToolHUD.show(icon: "icloud.and.arrow.up", message: strings.shareFailedHUD)
+            NSSound.beep()
+            Task { @MainActor in completion(nil) }
+            return
+        }
+        let fileName = ScreenshotSupport.fileName(prefix: strings.fileNamePrefix, date: Date())
+        Task { @MainActor [weak self] in
+            guard let self else {
+                completion(nil)
+                return
+            }
+            let data = await Task.detached(priority: .userInitiated) {
+                ScreenshotRenderer.pngData(from: export.image, scale: export.scale)
+            }.value
+            guard let data else {
+                QuickToolHUD.show(icon: "icloud.and.arrow.up", message: self.strings.shareFailedHUD)
+                NSSound.beep()
+                completion(nil)
+                return
+            }
+            guard self.window != nil, AppFeature.screenshot.isAvailable else {
+                completion(nil)
+                return
+            }
+            do {
+                let uploadedURL = try await ScreenshotCloudUploadService.shared.upload(
+                    pngData: data,
+                    fileName: fileName
+                )
+                self.model.markExported()
+                completion(uploadedURL)
+            } catch {
+                QuickToolHUD.show(
+                    icon: "icloud.and.arrow.up",
+                    message: error.localizedDescription
+                )
                 NSSound.beep()
                 completion(nil)
             }

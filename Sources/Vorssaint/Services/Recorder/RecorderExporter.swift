@@ -81,6 +81,7 @@ final class RecorderExporter {
             failure = await exportVideo(asset: asset,
                                         videoTrack: videoTrack,
                                         pointerURL: take.pointerURL,
+                                        cameraURL: take.cameraURL,
                                         document: document,
                                         trim: trim,
                                         sourceSize: sourceSize,
@@ -91,6 +92,7 @@ final class RecorderExporter {
             failure = await exportGIF(asset: asset,
                                       videoTrack: videoTrack,
                                       pointerURL: take.pointerURL,
+                                      cameraURL: take.cameraURL,
                                       document: document,
                                       sourceSize: sourceSize,
                                       to: staged,
@@ -145,6 +147,7 @@ final class RecorderExporter {
             let failure = await exportVideo(asset: asset,
                                             videoTrack: videoTrack,
                                             pointerURL: take.pointerURL,
+                                            cameraURL: take.cameraURL,
                                             document: document,
                                             trim: trim,
                                             sourceSize: sourceSize,
@@ -180,6 +183,7 @@ final class RecorderExporter {
     private func exportVideo(asset: AVURLAsset,
                              videoTrack: AVAssetTrack,
                              pointerURL: URL,
+                             cameraURL: URL? = nil,
                              document: RecorderEditDocument,
                              trim: RecorderSupport.Trim,
                              sourceSize: CGSize,
@@ -201,14 +205,31 @@ final class RecorderExporter {
         else { return .readFailed }
         let timeline = result.asset
         let timelineDuration = (try? await timeline.load(.duration)) ?? .zero
+        let clickStyle = RecorderClickSFXStyle.sanitized(document.clickSFXStyle)
+        let clickSFX = await RecorderComposition.attachClickSFXTrack(
+            to: timeline,
+            clicks: track.clicks,
+            style: clickStyle,
+            trim: trim,
+            cuts: document.cuts,
+            playbackSpeed: document.exportTiming.speed,
+            outputDuration: timelineDuration.seconds)
+        defer {
+            if let sfxURL = clickSFX?.tempURL {
+                try? FileManager.default.removeItem(at: sfxURL)
+            }
+        }
         let audioTracks = (try? await timeline.loadTracks(withMediaType: .audio)) ?? []
+        let hasOutputAudio = !audioTracks.isEmpty && (keepsAnyAudio || clickSFX != nil)
 
+        let useProRes4444 = document.exportsProRes4444 && sharingBitRateScale == nil
         let style = document.resolvedBackdrop
-        let padding = style.kind == .none ? 0 : style.padding * 0.18
+        let preservesTransparentBackdrop = useProRes4444 && style.kind == .none
+        let padding = document.effectiveCanvasPadding
         let fullCanvas = RecorderSupport.canvasSize(source: sourceSize,
                                                     padding: padding,
                                                     aspect: document.resolvedAspect,
-                                                    cropsToAspect: style.kind == .none)
+                                                    cropsToAspect: document.cropsToAspectWithoutStage)
         let regularSize = RecorderSupport.evenSize(CGSize(
             width: fullCanvas.width * document.resolvedQuality.outputScale,
             height: fullCanvas.height * document.resolvedQuality.outputScale))
@@ -217,7 +238,7 @@ final class RecorderExporter {
                 duration: timelineDuration.seconds,
                 baseSize: regularSize,
                 sourceFrameRate: frameRate,
-                hasAudio: keepsAnyAudio && !audioTracks.isEmpty,
+                hasAudio: hasOutputAudio,
                 bitRateScale: $0)
         }
         if sharingBitRateScale != nil, sharingPlan == nil { return .tooLargeForSharing }
@@ -238,7 +259,9 @@ final class RecorderExporter {
                                              sourceSize: sourceSize,
                                              frameRate: outputFrameRate,
                                              duration: duration,
-                                             outputScale: outputScale)
+                                             outputScale: outputScale,
+                                             cameraURL: cameraURL,
+                                             preservesTransparentBackdrop: preservesTransparentBackdrop)
         let composer = plan.map { RecorderComposer(plan: $0) }
         let outputSize = composer?.canvasSize
             ?? sharingPlan?.size
@@ -256,7 +279,8 @@ final class RecorderExporter {
         else { return .readFailed }
 
         guard let reader = try? AVAssetReader(asset: timeline),
-              let writer = try? AVAssetWriter(outputURL: destination, fileType: .mp4)
+              let writer = try? AVAssetWriter(outputURL: destination,
+                                              fileType: useProRes4444 ? .mov : .mp4)
         else { return .readFailed }
         writer.shouldOptimizeForNetworkUse = sharingPlan != nil
 
@@ -269,7 +293,7 @@ final class RecorderExporter {
         reader.add(videoOutput)
 
         var audioOutput: AVAssetReaderAudioMixOutput?
-        if keepsAnyAudio, !audioTracks.isEmpty {
+        if hasOutputAudio {
             let output = AVAssetReaderAudioMixOutput(
                 audioTracks: audioTracks,
                 audioSettings: [
@@ -280,6 +304,7 @@ final class RecorderExporter {
                     AVLinearPCMIsBigEndianKey: false,
                 ])
             output.audioMix = RecorderComposition.audioMix(trackIDs: result.audioTrackIDs,
+                                                           clickSFXTrackID: clickSFX?.trackID,
                                                            document: document)
             if document.exportTiming.speed != 1 {
                 // Decode scaled audio edits at their new duration while
@@ -298,6 +323,10 @@ final class RecorderExporter {
             resolved = Self.sharingVideoSettings(size: outputSize,
                                                  frameRate: outputFrameRate,
                                                  bitRate: sharingPlan.videoBitRate)
+        } else if useProRes4444,
+                  writer.canApply(outputSettings: Self.proRes4444VideoSettings(size: outputSize),
+                                  forMediaType: .video) {
+            resolved = Self.proRes4444VideoSettings(size: outputSize)
         } else {
             let preferred = Self.videoSettings(size: outputSize,
                                                frameRate: outputFrameRate,
@@ -432,6 +461,14 @@ final class RecorderExporter {
         }
     }
 
+    private static func proRes4444VideoSettings(size: CGSize) -> [String: Any] {
+        [
+            AVVideoCodecKey: AVVideoCodecType.proRes4444,
+            AVVideoWidthKey: Int(size.width),
+            AVVideoHeightKey: Int(size.height),
+        ]
+    }
+
     private static func videoSettings(size: CGSize,
                                       frameRate: Int,
                                       quality: RecorderSupport.Quality,
@@ -550,6 +587,7 @@ final class RecorderExporter {
     private func exportGIF(asset: AVURLAsset,
                            videoTrack: AVAssetTrack,
                            pointerURL: URL,
+                           cameraURL: URL? = nil,
                            document: RecorderEditDocument,
                            sourceSize: CGSize,
                            to destination: URL,
@@ -580,7 +618,8 @@ final class RecorderExporter {
                                              track: track,
                                              sourceSize: sourceSize,
                                              frameRate: RecorderSupport.sanitizedFrameRate(frameRate),
-                                             duration: duration)
+                                             duration: duration,
+                                             cameraURL: cameraURL)
         let composer = plan.map { RecorderComposer(plan: $0) }
         let canvas = composer?.canvasSize ?? RecorderSupport.evenSize(sourceSize)
         let size = RecorderSupport.gifOutputSize(source: canvas, size: document.resolvedGIFSize)

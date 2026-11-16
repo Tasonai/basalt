@@ -68,6 +68,7 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
     private(set) var audioSources: Set<RecorderAudioSource> = []
     private(set) var pointerTrack = RecorderPointerTrack()
     private(set) var typingTrack = RecorderTypingTrack()
+    let hasCameraSidecar: Bool
     /// True when the recording carries a pointer track at all. Without one the
     /// pointer and zoom controls have nothing to act on and are hidden rather
     /// than shown doing nothing.
@@ -82,6 +83,14 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
 
     init(take: RecorderTakeStore.Take) {
         self.take = take
+        let cameraExists = FileManager.default.fileExists(atPath: take.cameraURL.path)
+        self.hasCameraSidecar = cameraExists
+        let capturedKeystrokes: [RecorderKeystrokeEvent]
+        if let ksData = try? Data(contentsOf: take.keystrokesURL) {
+            capturedKeystrokes = RecorderKeystrokeSampler.decoded(ksData)
+        } else {
+            capturedKeystrokes = []
+        }
         let item = AVPlayerItem(url: take.videoURL)
         player = AVPlayer(playerItem: item)
         player.actionAtItemEnd = .pause
@@ -89,10 +98,14 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
         // preferences; after that the edit next to the master wins, so
         // reopening finds exactly what was left behind.
         if let saved = try? Data(contentsOf: take.editURL) {
-            document = RecorderEditDocument.decoded(saved)
+            var loaded = RecorderEditDocument.decoded(saved)
+            if loaded.keystrokes.isEmpty, !capturedKeystrokes.isEmpty {
+                loaded.keystrokes = capturedKeystrokes
+            }
+            document = loaded
         } else {
             let defaults = UserDefaults.standard
-            document = RecorderEditDocument(
+            var initial = RecorderEditDocument(
                 quality: RecorderSupport.sanitizedQuality(
                     defaults.string(forKey: DefaultsKey.recorderQuality)).rawValue,
                 keepsSystemAudio: defaults.bool(forKey: DefaultsKey.recorderSystemAudio),
@@ -101,6 +114,11 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
                 gifFrameRate: RecorderSupport.sanitizedGIFFrameRate(
                     defaults.integer(forKey: DefaultsKey.recorderGIFFrameRate)),
                 zoomEnabled: defaults.bool(forKey: DefaultsKey.recorderAutomaticZoom))
+            initial.keystrokes = capturedKeystrokes
+            if cameraExists {
+                initial.cameraBubble.isEnabled = true
+            }
+            document = initial
         }
         player.isMuted = false
         pointerTrack = RecorderPointerTrack.decoded(try? Data(contentsOf: take.pointerURL))
@@ -391,11 +409,13 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
         previewTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled, let self, let item = self.player.currentItem else { return }
+            let cameraURL = self.hasCameraSidecar ? self.take.cameraURL : nil
             guard let plan = RecorderComposer.makePlan(document: document,
                                                        track: track,
                                                        sourceSize: sourceSize,
                                                        frameRate: frameRate,
-                                                       duration: duration) else {
+                                                       duration: duration,
+                                                       cameraURL: cameraURL) else {
                 item.videoComposition = nil
                 return
             }
@@ -574,12 +594,10 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
     /// The size the current preset will write, for THIS recording.
     var exportSize: CGSize {
         guard sourceSize.width > 0 else { return .zero }
-        let style = document.resolvedBackdrop
-        let padding = style.kind == .none ? 0 : style.padding * 0.18
         let canvas = RecorderSupport.canvasSize(source: sourceSize,
-                                                padding: padding,
+                                                padding: document.effectiveCanvasPadding,
                                                 aspect: document.resolvedAspect,
-                                                cropsToAspect: style.kind == .none)
+                                                cropsToAspect: document.cropsToAspectWithoutStage)
         return RecorderSupport.outputSize(source: canvas, quality: document.resolvedQuality)
     }
 
@@ -1479,8 +1497,9 @@ final class RecorderEditorController: NSObject, NSWindowDelegate {
     // MARK: - Actions
 
     func saveVideo() {
+        let ext = model.document.exportsProRes4444 ? "mov" : "mp4"
         let destination = ScreenRecorderService.saveDestination(strings: strings,
-                                                                fileExtension: "mp4")
+                                                                fileExtension: ext)
         run(.video, to: destination)
     }
 
@@ -1492,10 +1511,12 @@ final class RecorderEditorController: NSObject, NSWindowDelegate {
 
     func saveVideoAs() {
         guard let window else { return }
-        let suggested = ScreenRecorderService.saveDestination(strings: strings,
-                                                               fileExtension: "mp4")
+        let proRes = model.document.exportsProRes4444
+        let suggested = ScreenRecorderService.saveDestination(
+            strings: strings,
+            fileExtension: proRes ? "mov" : "mp4")
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.allowedContentTypes = proRes ? [.quickTimeMovie] : [.mpeg4Movie]
         panel.canCreateDirectories = true
         panel.directoryURL = suggested.deletingLastPathComponent()
         panel.nameFieldStringValue = suggested.lastPathComponent
@@ -1568,7 +1589,8 @@ final class RecorderEditorController: NSObject, NSWindowDelegate {
     }
 
     private func copyVideoAndDelete(_ deletesRecording: Bool) {
-        guard let destination = copyDestination(fileExtension: "mp4") else {
+        let ext = model.document.exportsProRes4444 ? "mov" : "mp4"
+        guard let destination = copyDestination(fileExtension: ext) else {
             QuickToolHUD.show(icon: "record.circle", message: strings.exportFailed)
             return
         }
@@ -1858,5 +1880,12 @@ extension RecorderEditorModel {
 
     func exportCaptionsSRT() -> String {
         RecorderCaptionSegment.formatSRT(document.captions)
+    }
+
+    func selectZoomAndSeek(_ id: UUID?) {
+        selectLaneItem(.zoom, id: id)
+        if let id, let segment = zoom(id) {
+            seek(to: segment.start)
+        }
     }
 }
