@@ -3,6 +3,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The text snippets page: the enable toggle, the snippet list and a simple
 /// editor sheet. Edits persist to defaults and nudge the service, so a change
@@ -20,9 +21,15 @@ struct TextSnippetsSettings: View {
         UserDefaults.standard.data(forKey: DefaultsKey.textSnippets))
     @State private var editing: TextSnippet?
     @State private var creating = false
+    @State private var packStatusMessage: String?
+    @State private var packStatusIsError = false
 
     private var text: SnippetFeatureStrings {
         FeatureStrings.snippets(l10n.language)
+    }
+
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
     }
 
     var body: some View {
@@ -132,10 +139,34 @@ struct TextSnippetsSettings: View {
                     }
                 }
                 Divider()
-                Button {
-                    creating = true
-                } label: {
-                    Label(text.addButton, systemImage: "plus")
+                HStack(spacing: DesignSpace.sm) {
+                    Button {
+                        creating = true
+                    } label: {
+                        Label(text.addButton, systemImage: "plus")
+                    }
+                    Spacer(minLength: DesignSpace.sm)
+                    VorssaintActionChip(
+                        title: v3(\OverhaulV3Strings.snippetsImportPackButton),
+                        symbol: "square.and.arrow.down",
+                        tone: .mouseKeyboard
+                    ) {
+                        importSnippetPack()
+                    }
+                    VorssaintActionChip(
+                        title: "Export .vorssaintsnippets",
+                        symbol: "square.and.arrow.up",
+                        tone: .mouseKeyboard
+                    ) {
+                        exportSnippetPack()
+                    }
+                    .disabled(snippets.isEmpty)
+                }
+                if let packStatusMessage {
+                    Text(packStatusMessage)
+                        .font(.caption)
+                        .foregroundStyle(packStatusIsError ? Color.orange : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -183,6 +214,90 @@ struct TextSnippetsSettings: View {
                                   forKey: DefaultsKey.textSnippets)
         TextSnippetService.shared.syncWithPreferences()
         SnippetLibraryService.shared.syncWithPreferences()
+    }
+
+    private static var snippetPackContentTypes: [UTType] {
+        [
+            UTType(filenameExtension: "vorssaintsnippets", conformingTo: .json),
+            UTType(filenameExtension: "vorssaintsnippets"),
+            .json,
+        ].compactMap { $0 }
+    }
+
+    private func exportSnippetPack() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = Self.snippetPackContentTypes
+        panel.allowsOtherFileTypes = true
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "Vorssaint-Snippets.vorssaintsnippets"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let items = snippets.map {
+            SnippetPackItem(trigger: $0.trigger, title: $0.name, content: $0.replacement)
+        }
+        let pack = SnippetExportPack(version: 1, snippets: items)
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(pack)
+            try data.write(to: url, options: .atomic)
+            packStatusIsError = false
+            packStatusMessage = "Exported \(items.count) snippets to \(url.lastPathComponent)."
+            VorssaintHaptics.alignment()
+        } catch {
+            packStatusIsError = true
+            packStatusMessage = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func readSnippetPackData(from url: URL) throws -> Data {
+        try Data(contentsOf: url)
+    }
+
+    private func importSnippetPack() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = Self.snippetPackContentTypes
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let data = try readSnippetPackData(from: url)
+            let pack = try JSONDecoder().decode(SnippetExportPack.self, from: data)
+            var importedCount = 0
+            for item in pack.snippets {
+                let cleanTrigger = TextSnippetSupport.sanitizedTrigger(item.trigger)
+                guard cleanTrigger.count >= 2, !item.content.isEmpty else { continue }
+                if let existingIdx = snippets.firstIndex(where: { existing in
+                    if existing.ignoresCase {
+                        return existing.trigger.compare(cleanTrigger, options: .caseInsensitive) == .orderedSame
+                    }
+                    return existing.trigger == cleanTrigger
+                }) {
+                    if !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        snippets[existingIdx].name = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                    snippets[existingIdx].replacement = item.content
+                } else {
+                    var created = TextSnippet()
+                    created.name = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    created.trigger = cleanTrigger
+                    created.replacement = item.content
+                    snippets.append(created)
+                }
+                importedCount += 1
+            }
+            if importedCount > 0 {
+                persist()
+                VorssaintHaptics.alignment()
+            }
+            packStatusIsError = false
+            packStatusMessage = "Imported \(importedCount) snippets from \(url.lastPathComponent)."
+        } catch {
+            packStatusIsError = true
+            packStatusMessage = "Import failed: \(error.localizedDescription)"
+        }
     }
 }
 

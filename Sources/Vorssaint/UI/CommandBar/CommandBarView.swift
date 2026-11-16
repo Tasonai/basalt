@@ -56,11 +56,16 @@ struct CommandBarView: View {
     @State private var actionPanelTransformOutput: String?
     @State private var scriptArgInputs: [String] = ["", "", ""]
     @State private var scriptArgLinkID: UUID?
+    @State private var pluginFormValues: [String: String] = [:]
     @State private var detectedCLITools: [QuickAIProvider] = []
     @FocusState private var actionPanelFocused: Bool
 
     private var wave3Strings: OverhaulWave3Strings { OverhaulStrings.wave3(l10n.language) }
     private var v2Strings: OverhaulV2Strings { OverhaulV2Strings.localized(l10n.language) }
+
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
+    }
 
     private var layoutMode: CommandBarLayoutMode {
         CommandBarLayoutMode(rawValue: layoutModeRaw) ?? .list
@@ -217,7 +222,12 @@ struct CommandBarView: View {
                 Divider()
                 shortcutCard(entryID: entryID)
             }
-            if showQuickAICard || quickAI.isStreaming || !quickAI.responseText.isEmpty || quickAI.errorText != nil {
+            if showQuickAICard
+                || quickAI.isStreaming
+                || !quickAI.responseText.isEmpty
+                || quickAI.errorText != nil
+                || !(service.activeAIThread?.messages.isEmpty ?? true)
+                || service.pendingAIImageThumbnail != nil {
                 Divider()
                 quickAICard
             }
@@ -665,6 +675,18 @@ struct CommandBarView: View {
                 .onChange(of: service.selectedIndex) { _, index in
                     guard service.rows.indices.contains(index) else { return }
                     proxy.scrollTo(service.rows[index].id)
+                }
+            }
+            if let entry = service.selectedEntry,
+               let link = scriptLink(for: entry) {
+                let typed = service.query.trimmingCharacters(in: .whitespaces)
+                let arg = CommandBarLinks.trailingArgument(query: typed, name: link.name) ?? ""
+                if let result = service.scriptRunner.cachedResult(linkID: link.id, argument: arg),
+                   let payload = result.jsonPayload {
+                    Divider()
+                    richJSONPluginCard(payload: payload, link: link, accent: .accentColor)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
                 }
             }
         }
@@ -1681,47 +1703,7 @@ struct CommandBarView: View {
 
             if let result = activeResult {
                 if let payload = result.jsonPayload {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(payload.title)
-                                .font(.system(size: 12, weight: .semibold))
-                            Spacer()
-                            if let badge = payload.badge, !badge.isEmpty {
-                                Text(badge)
-                                    .font(.system(size: 9.5, weight: .semibold))
-                                    .foregroundStyle(Color.green)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.green.opacity(0.15)))
-                            }
-                        }
-                        if let sub = payload.subtitle, !sub.isEmpty {
-                            Text(sub)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        HStack(spacing: 8) {
-                            Button {
-                                copyTextToPasteboard(payload.copyText ?? payload.title)
-                            } label: {
-                                Label("Copy", systemImage: "doc.on.doc")
-                                    .font(.system(size: 10.5, weight: .medium))
-                            }
-                            .buttonStyle(.plain)
-                            if let openURL = payload.openURL, let url = URL(string: openURL) {
-                                Button {
-                                    NSWorkspace.shared.open(url)
-                                } label: {
-                                    Label("Open URL", systemImage: "arrow.up.right.square")
-                                        .font(.system(size: 10.5, weight: .medium))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .foregroundStyle(accent)
-                    }
-                    .padding(9)
-                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(accent.opacity(0.09)))
+                    richJSONPluginCard(payload: payload, link: link, accent: accent)
                 } else {
                     Text(result.rawOutput)
                         .font(.system(size: 11, design: .monospaced))
@@ -1739,6 +1721,156 @@ struct CommandBarView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    private func richJSONPluginCard(payload: ScriptCommandJSONPayload,
+                                    link: CommandBarLink,
+                                    accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(payload.title)
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                if let badge = payload.badge, !badge.isEmpty {
+                    Text(badge)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(Color.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.green.opacity(0.15)))
+                }
+            }
+            if let sub = payload.subtitle, !sub.isEmpty {
+                Text(sub)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            if let markdownBody = payload.markdownBody, !markdownBody.isEmpty {
+                markdownOrPlainText(markdownBody)
+                    .font(.system(size: 11))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let formFields = payload.formFields, !formFields.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(formFields) { field in
+                        HStack(spacing: 8) {
+                            Text(field.label)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(minWidth: 64, alignment: .leading)
+                            if !field.options.isEmpty {
+                                Menu {
+                                    ForEach(field.options, id: \.self) { option in
+                                        Button {
+                                            pluginFormValues[field.id] = option
+                                        } label: {
+                                            HStack {
+                                                Text(option)
+                                                if currentPluginFormValue(for: field) == option {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text(currentPluginFormValue(for: field))
+                                            .font(.system(size: 10.5, weight: .medium))
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.system(size: 8, weight: .semibold))
+                                    }
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Capsule().fill(Color.primary.opacity(0.08)))
+                                }
+                                .menuStyle(.borderlessButton)
+                                .fixedSize()
+                            } else {
+                                TextField(
+                                    field.defaultValue.isEmpty ? field.label : field.defaultValue,
+                                    text: pluginFormBinding(for: field)
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11))
+                            }
+                        }
+                    }
+                }
+            }
+            if let actions = payload.actions, !actions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(actions) { action in
+                            VorssaintActionChip(
+                                title: action.title,
+                                symbol: pluginActionSymbol(action.kind),
+                                tone: .brand,
+                                prominent: action.kind == .runSubcommand || action.kind == .paste
+                            ) {
+                                service.executePluginAction(
+                                    action,
+                                    link: link,
+                                    formValues: resolvedPluginFormValues(for: payload.formFields)
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Button {
+                        copyTextToPasteboard(payload.copyText ?? payload.title)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    if let openURL = payload.openURL, let url = URL(string: openURL) {
+                        Button {
+                            NSWorkspace.shared.open(url)
+                        } label: {
+                            Label("Open URL", systemImage: "arrow.up.right.square")
+                                .font(.system(size: 10.5, weight: .medium))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .foregroundStyle(accent)
+            }
+        }
+        .padding(9)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(accent.opacity(0.09)))
+    }
+
+    private func currentPluginFormValue(for field: PluginFormField) -> String {
+        pluginFormValues[field.id] ?? (field.defaultValue.isEmpty ? (field.options.first ?? "") : field.defaultValue)
+    }
+
+    private func pluginFormBinding(for field: PluginFormField) -> Binding<String> {
+        Binding(
+            get: { currentPluginFormValue(for: field) },
+            set: { pluginFormValues[field.id] = $0 }
+        )
+    }
+
+    private func resolvedPluginFormValues(for fields: [PluginFormField]?) -> [String: String] {
+        guard let fields else { return [:] }
+        var resolved: [String: String] = [:]
+        for field in fields {
+            resolved[field.id] = currentPluginFormValue(for: field)
+        }
+        return resolved
+    }
+
+    private func pluginActionSymbol(_ kind: PluginActionKind) -> String {
+        switch kind {
+        case .copy: return "doc.on.doc"
+        case .openURL: return "arrow.up.right.square"
+        case .paste: return "arrow.uturn.down.circle"
+        case .runSubcommand: return "play.fill"
         }
     }
 
@@ -1980,6 +2112,10 @@ struct CommandBarView: View {
 
     private var quickAICard: some View {
         let missingProvider = missingAPIKeyProvider
+        let activeThread = service.activeAIThread
+        let threadMessages = activeThread?.messages ?? []
+        let showsLiveStreamBubble = !quickAI.responseText.isEmpty
+            && (quickAI.isStreaming || threadMessages.last?.role != "assistant")
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Label(wave3Strings.quickAITitle, systemImage: "sparkles")
@@ -2014,6 +2150,56 @@ struct CommandBarView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
 
+                if service.aiThreads.count > 1 {
+                    Menu {
+                        ForEach(service.aiThreads) { thread in
+                            Button {
+                                service.selectAIThread(thread.id)
+                            } label: {
+                                HStack {
+                                    Text(thread.title)
+                                    if activeThread?.id == thread.id {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "bubble.left.and.bubble.right")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text(activeThread?.title ?? v3(\OverhaulV3Strings.aiNewThreadButton))
+                                .font(.system(size: 10, weight: .medium))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+
+                Button {
+                    service.startNewAIThread()
+                    quickAIPromptDraft = ""
+                    quickAICopied = false
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "plus.bubble")
+                            .font(.system(size: 9.5, weight: .semibold))
+                        Text(v3(\OverhaulV3Strings.aiNewThreadButton))
+                            .font(.system(size: 10, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+
                 if quickAI.isStreaming {
                     HStack(spacing: 4) {
                         ProgressView()
@@ -2022,7 +2208,7 @@ struct CommandBarView: View {
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                     }
-                } else if quickAI.dropletState == .celebrate && !quickAI.responseText.isEmpty {
+                } else if quickAI.dropletState == .celebrate && (!quickAI.responseText.isEmpty || threadMessages.last?.role == "assistant") {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 10.5))
                         .foregroundStyle(.green)
@@ -2030,9 +2216,31 @@ struct CommandBarView: View {
 
                 Spacer()
 
-                if !quickAI.responseText.isEmpty {
+                if !service.selectedText.isEmpty {
                     Button {
-                        copyTextToPasteboard(quickAI.responseText)
+                        service.openInlineAISelectionHUD()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "text.cursor")
+                                .font(.system(size: 9.5, weight: .semibold))
+                            Text(v3(\OverhaulV3Strings.inlineAITitle))
+                                .font(.system(size: 9.5, weight: .semibold))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                let copyCandidate = !quickAI.responseText.isEmpty
+                    ? quickAI.responseText
+                    : (threadMessages.last(where: { $0.role == "assistant" })?.text ?? "")
+                if !copyCandidate.isEmpty {
+                    Button {
+                        copyTextToPasteboard(copyCandidate)
                         quickAICopied = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                             quickAICopied = false
@@ -2080,7 +2288,7 @@ struct CommandBarView: View {
                 .buttonStyle(.plain)
             }
 
-            // Context injection chips: @clipboard, @selection, @frontApp, @browser
+            // Context injection chips (@clipboard, @selection, @frontApp, @browser) + Vision PNG attachment
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 5) {
                     ForEach(QuickAIContextToken.allCases) { token in
@@ -2112,7 +2320,64 @@ struct CommandBarView: View {
                         }
                         .buttonStyle(.plain)
                     }
+
+                    Button {
+                        service.attachAIImageFromClipboardOrPicker()
+                    } label: {
+                        HStack(spacing: 3.5) {
+                            Image(systemName: "photo.badge.plus")
+                                .font(.system(size: 9, weight: .semibold))
+                            Text(v3(\OverhaulV3Strings.aiAttachImageButton))
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundStyle(service.pendingAIImageBase64 != nil ? Color.accentColor : Color.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(service.pendingAIImageBase64 != nil
+                                           ? Color.accentColor.opacity(0.16)
+                                           : Color.primary.opacity(0.06))
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        service.attachImageFromFilePickerForAI()
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    }
+                    .buttonStyle(.plain)
                 }
+            }
+
+            if let thumb = service.pendingAIImageThumbnail {
+                HStack(spacing: 8) {
+                    Image(nsImage: thumb)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 28, height: 28)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    Text("PNG attached")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        service.clearPendingAIImage()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.accentColor.opacity(0.08)))
             }
 
             if trimmedQuery.isEmpty {
@@ -2122,21 +2387,28 @@ struct CommandBarView: View {
                         .font(.system(size: 11.5))
                         .onSubmit {
                             let prompt = quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !prompt.isEmpty else { return }
-                            sendQuickAIPrompt(prompt)
+                            guard !prompt.isEmpty || service.pendingAIImageBase64 != nil else { return }
+                            sendQuickAIPrompt(prompt, clearDraft: true)
                         }
                     Button {
                         let prompt = quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !prompt.isEmpty else { return }
-                        sendQuickAIPrompt(prompt)
+                        guard !prompt.isEmpty || service.pendingAIImageBase64 != nil else { return }
+                        sendQuickAIPrompt(prompt, clearDraft: true)
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 17))
-                            .foregroundStyle(quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                             ? Color.secondary.opacity(0.4) : Color.accentColor)
+                            .foregroundStyle(
+                                quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    && service.pendingAIImageBase64 == nil
+                                    ? Color.secondary.opacity(0.4)
+                                    : Color.accentColor
+                            )
                     }
                     .buttonStyle(.plain)
-                    .disabled(quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && service.pendingAIImageBase64 == nil
+                    )
                 }
             } else {
                 HStack {
@@ -2194,15 +2466,61 @@ struct CommandBarView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if !quickAI.responseText.isEmpty {
+            }
+
+            if !threadMessages.isEmpty || showsLiveStreamBubble {
                 ScrollView {
-                    markdownOrPlainText(quickAI.responseText)
-                        .font(.system(size: 12))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(threadMessages) { msg in
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: msg.role == "assistant" ? "sparkles" : "person.crop.circle")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(msg.role == "assistant" ? Color.accentColor : Color.secondary)
+                                    .padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    if msg.imagePNGDataBase64 != nil {
+                                        Label("Image", systemImage: "photo")
+                                            .font(.system(size: 9.5, weight: .semibold))
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                    markdownOrPlainText(msg.text)
+                                        .font(.system(size: msg.role == "assistant" ? 12 : 11.5))
+                                        .foregroundStyle(msg.role == "assistant" ? Color.primary : Color.secondary)
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(msg.role == "assistant"
+                                          ? Color.primary.opacity(0.05)
+                                          : Color.accentColor.opacity(0.08))
+                            )
+                        }
+                        if showsLiveStreamBubble {
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .padding(.top, 2)
+                                markdownOrPlainText(quickAI.responseText)
+                                    .font(.system(size: 12))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.primary.opacity(0.05))
+                            )
+                        }
+                    }
                 }
-                .frame(maxHeight: 150)
-            } else {
+                .frame(maxHeight: 175)
+            } else if quickAI.errorText == nil && missingProvider == nil {
                 Text(wave3Strings.quickAIPlaceholder)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -2246,9 +2564,10 @@ struct CommandBarView: View {
         }
     }
 
-    private func sendQuickAIPrompt(_ prompt: String) {
+    private func sendQuickAIPrompt(_ prompt: String, clearDraft: Bool = false) {
         quickAICopied = false
-        quickAI.sendContextualPrompt(prompt, attachedTokens: attachedContextTokens)
+        if clearDraft { quickAIPromptDraft = "" }
+        service.sendAIQuestion(prompt, attachedTokens: attachedContextTokens)
     }
 
     private func markdownOrPlainText(_ content: String) -> Text {
@@ -2366,11 +2685,13 @@ struct CommandBarView: View {
         guard let entry = service.selectedEntry,
               let link = scriptLink(for: entry) else {
             scriptArgLinkID = nil
+            pluginFormValues = [:]
             return
         }
         guard scriptArgLinkID != link.id else { return }
         scriptArgLinkID = link.id
         scriptArgInputs = ["", "", ""]
+        pluginFormValues = [:]
     }
 
     private func categoryTone(for source: CommandBarSource) -> SemanticCategoryTone {

@@ -305,14 +305,56 @@ final class SnippetFillInPopoverController: OverlayPanel {
                             Text(field.name)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(.secondary)
-                            TextField(
-                                field.defaultValue.isEmpty ? field.name : field.defaultValue,
-                                text: binding(for: field)
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12.5))
-                            .focused($focusedFieldID, equals: field.id)
-                            .onSubmit { onConfirm() }
+                            if !field.options.isEmpty {
+                                let currentSelection = model.values[field.name] ?? field.defaultValue
+                                Menu {
+                                    ForEach(field.options, id: \.self) { option in
+                                        Button {
+                                            model.values[field.name] = option
+                                        } label: {
+                                            HStack {
+                                                Text(option)
+                                                if currentSelection == option {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Text(currentSelection.isEmpty ? (field.options.first ?? "") : currentSelection)
+                                            .font(.system(size: 12.5))
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Image(systemName: "chevron.up.chevron.down")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .frame(width: 288, alignment: .leading)
+                                    .padding(.horizontal, DesignSpace.sm + 2)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous)
+                                            .fill(Color.primary.opacity(0.06))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous)
+                                            .strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.75)
+                                    )
+                                }
+                                .menuStyle(.borderlessButton)
+                                .fixedSize()
+                            } else {
+                                TextField(
+                                    field.defaultValue.isEmpty ? field.name : field.defaultValue,
+                                    text: binding(for: field)
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 12.5))
+                                .focused($focusedFieldID, equals: field.id)
+                                .onSubmit { onConfirm() }
+                            }
                         }
                     }
                 }
@@ -341,10 +383,10 @@ final class SnippetFillInPopoverController: OverlayPanel {
                     .strokeBorder(Color.primary.opacity(0.14), lineWidth: 1)
             )
             .onAppear {
-                focusedFieldID = model.fields.first?.id
+                focusedFieldID = model.fields.first(where: { $0.options.isEmpty })?.id
             }
             .onChange(of: model.sessionID) { _, _ in
-                focusedFieldID = model.fields.first?.id
+                focusedFieldID = model.fields.first(where: { $0.options.isEmpty })?.id
             }
         }
 

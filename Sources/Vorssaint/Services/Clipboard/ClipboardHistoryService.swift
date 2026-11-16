@@ -70,6 +70,18 @@ final class ClipboardHistoryService: ObservableObject {
     /// always agree, even if the setting changes while it is open.
     @Published private(set) var quickLayout = ClipboardHistoryLayout.current()
     @Published var isDockCarouselMode = UserDefaults.standard.bool(forKey: "clipboardDockCarouselMode")
+    static let sqliteIndexCapacity = 50_000
+    var maxHistoryItems: Int { Self.sqliteIndexCapacity }
+    @Published private(set) var ftsIndexedCount: Int = 0
+    @Published var liveVaultSyncEnabled: Bool = UserDefaults.standard.bool(
+        forKey: "clipboardLiveVaultSyncEnabled"
+    ) {
+        didSet {
+            guard liveVaultSyncEnabled != oldValue else { return }
+            UserDefaults.standard.set(liveVaultSyncEnabled, forKey: "clipboardLiveVaultSyncEnabled")
+            syncLiveVaultWatcher()
+        }
+    }
 
     private var timer: Timer?
     /// Entries age out with nothing new copied, so the retention window is
@@ -120,10 +132,14 @@ final class ClipboardHistoryService: ObservableObject {
     /// only a store-file write that really landed retires that blob, so a
     /// crash mid-migration never loses entries.
     private var migrateLegacyBlob = false
+    private var sqliteStore: ClipboardSQLiteStore?
+    private static let appDisplayNameCache = NSCache<NSString, NSString>()
 
     private init() {
         load()
+        setupSQLiteStore()
         setupProObservers()
+        syncLiveVaultWatcher()
     }
 
     func syncWithPreferences() {
@@ -137,6 +153,7 @@ final class ClipboardHistoryService: ObservableObject {
             unregisterHotkey()
             unregisterPasteStackHotkey()
         }
+        syncLiveVaultWatcher()
     }
 
     /// Skips capturing pasteboard changes up to the given change count. Quick
@@ -359,6 +376,17 @@ final class ClipboardHistoryService: ObservableObject {
         selected.remove(entry.id)
         quickBatchEntryIDs = selected
         save()
+        if let store = sqliteStore {
+            let removedID = entry.id
+            Self.persistQueue.async { [weak self, weak store] in
+                guard let store else { return }
+                store.delete(id: removedID)
+                let count = store.totalCount()
+                DispatchQueue.main.async {
+                    self?.ftsIndexedCount = count
+                }
+            }
+        }
     }
 
     @discardableResult
@@ -1188,6 +1216,14 @@ final class ClipboardHistoryService: ObservableObject {
             // Only a write that really landed retires the legacy blob, so a
             // failed save leaves the history readable from somewhere.
             guard PrivateFileStore.write(data, to: url) else { return }
+            if let store = self?.sqliteStore {
+                let rows = snapshot.map(Self.sqliteRow(from:))
+                store.upsertBatch(rows)
+                let indexedCount = store.totalCount()
+                DispatchQueue.main.async {
+                    self?.ftsIndexedCount = indexedCount
+                }
+            }
             finishPersist()
             if retireLegacyBlob {
                 UserDefaults.standard.removeObject(forKey: DefaultsKey.clipboardHistoryEntries)
@@ -1766,7 +1802,8 @@ final class ClipboardHistoryService: ObservableObject {
 
     private func setupProObservers() {
         capturedEntry
-            .sink { entry in
+            .sink { [weak self] entry in
+                self?.indexAndSyncCapturedEntry(entry)
                 guard ClipboardPasteStack.shared.isRecording else { return }
                 ClipboardPasteStack.shared.enqueue(entry)
                 ClipboardPasteStackHUDController.shared.refresh()
@@ -2010,6 +2047,179 @@ final class ClipboardHistoryService: ObservableObject {
             latestPasteboardEntry = updated[index]
         }
         save()
+    }
+
+    // MARK: - Clipboard 3.0 (SQLite FTS5 50k Index & Live iCloud Vault Sync)
+
+    private static var sqliteStoreURL: URL? {
+        PrivateFileStore.containerURL?.appendingPathComponent("ClipboardHistory.sqlite")
+    }
+
+    func searchSQLiteHistory(query: String, limit: Int = 200) -> [ClipboardSQLiteRow] {
+        sqliteStore?.search(query: query, limit: limit) ?? []
+    }
+
+    private func setupSQLiteStore() {
+        guard let dbURL = Self.sqliteStoreURL else { return }
+        PrivateFileStore.createDirectory(at: dbURL.deletingLastPathComponent())
+        let store = ClipboardSQLiteStore(databaseURL: dbURL, maxCapacity: maxHistoryItems)
+        sqliteStore = store
+
+        let legacyURL = Self.storeURL
+        let initialSnapshot = entries
+        Self.persistQueue.async { [weak self, weak store] in
+            guard let store else { return }
+            if let legacyURL {
+                store.migrateLegacyJSONIfNeeded(from: legacyURL)
+            }
+            if !initialSnapshot.isEmpty {
+                store.upsertBatch(initialSnapshot.map(Self.sqliteRow(from:)))
+            }
+            let count = store.totalCount()
+            DispatchQueue.main.async {
+                self?.ftsIndexedCount = count
+            }
+        }
+    }
+
+    private func indexAndSyncCapturedEntry(_ entry: ClipboardHistoryEntry) {
+        let row = Self.sqliteRow(from: entry)
+        let shouldPublishLive = liveVaultSyncEnabled
+            && AppFeature.clipboardHistory.isAvailable
+            && entry.kind == .text
+            && !entry.text.isEmpty
+            && PrivateFileStore.containerURL != nil
+        let vaultDirectory = ClipboardLiveVaultSyncService.defaultDirectoryURL()
+
+        Self.persistQueue.async { [weak self] in
+            if let store = self?.sqliteStore {
+                store.upsert(row)
+                let count = store.totalCount()
+                DispatchQueue.main.async {
+                    self?.ftsIndexedCount = count
+                }
+            }
+            if shouldPublishLive, let key = Self.resolvedLiveVaultKey() {
+                ClipboardLiveVaultSyncService.shared.publishRow(row, to: vaultDirectory, key: key)
+            }
+        }
+    }
+
+    func syncLiveVaultWatcher() {
+        guard liveVaultSyncEnabled,
+              AppFeature.clipboardHistory.isAvailable,
+              PrivateFileStore.containerURL != nil else {
+            ClipboardLiveVaultSyncService.shared.stopWatching()
+            return
+        }
+        let directory = ClipboardLiveVaultSyncService.defaultDirectoryURL()
+        ClipboardLiveVaultSyncService.shared.startWatching(directoryURL: directory) { [weak self] fileURL in
+            self?.handleIncomingLiveVaultFile(at: fileURL)
+        }
+    }
+
+    private func handleIncomingLiveVaultFile(at fileURL: URL) {
+        guard let key = Self.resolvedLiveVaultKey(),
+              let data = try? Data(contentsOf: fileURL),
+              let row = try? ClipboardLiveVaultSyncService.decodeEnvelope(data: data, key: key) else {
+            return
+        }
+        Self.persistQueue.async { [weak self] in
+            if let store = self?.sqliteStore {
+                store.upsert(row)
+                let count = store.totalCount()
+                DispatchQueue.main.async {
+                    self?.ftsIndexedCount = count
+                }
+            }
+            guard row.contentKind == "text", !row.plainText.isEmpty else { return }
+            DispatchQueue.main.async {
+                self?.mergeSyncedTextRow(row)
+            }
+        }
+    }
+
+    private func mergeSyncedTextRow(_ row: ClipboardSQLiteRow) {
+        guard !entries.contains(where: { $0.id == row.id || ($0.kind == .text && $0.text == row.plainText) }) else {
+            return
+        }
+        var imported = ClipboardHistoryEntry(
+            id: row.id,
+            text: row.plainText,
+            copiedAt: row.createdAt,
+            pinnedAt: row.isPinned ? row.createdAt : nil,
+            kind: .text
+        )
+        imported.sourceBundleID = row.sourceAppBundleID
+        if imported.isPinned {
+            entries.insert(imported, at: 0)
+        } else {
+            entries.insert(imported, at: firstRecentIndex)
+        }
+        normalizeEntryOrder()
+        trimToLimit()
+        save()
+    }
+
+    private static func resolvedLiveVaultKey() -> SymmetricKey? {
+        guard let passphrase = KeychainClipboardVaultSecretStore().loadSecret(),
+              !passphrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return ClipboardLiveVaultSyncService.deriveKey(from: passphrase)
+    }
+
+    private static func sqliteRow(from entry: ClipboardHistoryEntry) -> ClipboardSQLiteRow {
+        let plainText: String
+        switch entry.kind {
+        case .text:
+            plainText = entry.text
+        case .image:
+            let dims = entry.imageDimensionsLabel
+            plainText = [entry.ocrText, dims.isEmpty ? nil : dims, entry.imageFile]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+        case .files:
+            let paths = entry.filePaths.joined(separator: "\n")
+            plainText = [paths, entry.ocrText]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+        }
+        return ClipboardSQLiteRow(
+            id: entry.id,
+            contentKind: entry.kind.rawValue,
+            plainText: plainText,
+            sourceAppBundleID: entry.sourceBundleID,
+            sourceAppName: appDisplayName(for: entry.sourceBundleID),
+            isPinned: entry.isPinned,
+            byteCount: plainText.utf8.count,
+            createdAt: entry.copiedAt
+        )
+    }
+
+    private static func appDisplayName(for bundleID: String?) -> String? {
+        guard let bundleID, !bundleID.isEmpty else { return nil }
+        if let cached = appDisplayNameCache.object(forKey: bundleID as NSString) {
+            return cached as String
+        }
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName,
+           !running.isEmpty {
+            appDisplayNameCache.setObject(running as NSString, forKey: bundleID as NSString)
+            return running
+        }
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            let displayName = FileManager.default.displayName(atPath: appURL.path)
+            let normalized = displayName.hasSuffix(".app")
+                ? String(displayName.dropLast(4))
+                : displayName
+            if !normalized.isEmpty {
+                appDisplayNameCache.setObject(normalized as NSString, forKey: bundleID as NSString)
+                return normalized
+            }
+        }
+        return nil
     }
 }
 

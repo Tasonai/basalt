@@ -11,6 +11,8 @@ struct ClipboardSettings: View {
     @ObservedObject private var history = ClipboardHistoryService.shared
     @ObservedObject private var pastePlain = PastePlainService.shared
     @ObservedObject private var permissions = Permissions.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var clearingIDs: [UUID: Date]?
     @State private var vaultExpanded = false
     @State private var vaultPassphraseInput = ""
@@ -50,6 +52,10 @@ struct ClipboardSettings: View {
 
     private var v2Strings: OverhaulV2Strings {
         OverhaulV2Strings.localized(l10n.language)
+    }
+
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
     }
 
     var body: some View {
@@ -369,9 +375,23 @@ struct ClipboardSettings: View {
         return SettingsDisclosureCard(
             title: v2Strings.clipboardVaultTitle,
             symbol: "lock.shield",
-            badge: hasStoredVaultPassphrase ? "Keychain" : nil,
+            badge: history.liveVaultSyncEnabled ? "Live" : (hasStoredVaultPassphrase ? "Keychain" : nil),
             isExpanded: $vaultExpanded
         ) {
+            SettingsRow(
+                symbol: "icloud.and.arrow.up",
+                title: v3(\OverhaulV3Strings.clipboardLiveSyncToggle),
+                caption: hasStoredVaultPassphrase
+                    ? "AES-256-GCM · \(ClipboardLiveVaultSyncService.defaultDirectoryURL().lastPathComponent)"
+                    : v2Strings.clipboardVaultPassphraseLabel
+            ) {
+                Toggle(v3(\OverhaulV3Strings.clipboardLiveSyncToggle), isOn: $history.liveVaultSyncEnabled)
+                    .labelsHidden()
+                    .toggleStyle(VorssaintCompactSwitchStyle(tone: .clipboardFiles))
+            }
+
+            Divider()
+
             SettingsRow(
                 symbol: "key.fill",
                 title: v2Strings.clipboardVaultPassphraseLabel,
@@ -565,8 +585,17 @@ struct ClipboardSettings: View {
     }
 
     private var clipboardStatsCard: some View {
-        SettingsCard {
-            HStack(spacing: 6) {
+        let ftsBadgeTitle = String(
+            format: v3(\OverhaulV3Strings.clipboardFTSBadgeFormat),
+            locale: .autoupdatingCurrent,
+            max(history.ftsIndexedCount, history.entries.count)
+        )
+        let badgeTone = SemanticCategoryTone.clipboardFiles.color(
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
+        return SettingsCard {
+            HStack(spacing: DesignSpace.sm) {
                 Text("\(history.pinnedEntries.count)")
                     .monospacedDigit()
                 Text(text.pinned)
@@ -577,7 +606,21 @@ struct ClipboardSettings: View {
                     .monospacedDigit()
                 Text(text.recent)
                     .foregroundStyle(.secondary)
-                Spacer()
+                Text(ftsBadgeTitle)
+                    .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(badgeTone)
+                    .padding(.horizontal, DesignSpace.sm)
+                    .padding(.vertical, DesignSpace.xs)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(badgeTone.opacity(colorScheme == .dark ? 0.16 : 0.12))
+                    )
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(badgeTone.opacity(0.24), lineWidth: 0.75)
+                    )
+                Spacer(minLength: DesignSpace.sm)
                 VorssaintActionChip(title: text.clearRecent, symbol: "trash", destructive: true) {
                     clearingIDs = history.recentEntriesSnapshot
                 }

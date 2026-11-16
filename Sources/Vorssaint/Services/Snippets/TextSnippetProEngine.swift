@@ -4,16 +4,42 @@
 import AppKit
 import Foundation
 
-/// Argument placeholder specification extracted from `{{arg:name=default}}` tokens.
+/// Argument placeholder specification extracted from `{{arg:name=default}}` or `{{choice:Label|Opt1|Opt2}}` tokens.
 struct TextSnippetArgumentField: Equatable, Identifiable, Sendable {
     let id: String
     let name: String
     let defaultValue: String
+    let options: [String]
 
-    init(id: String? = nil, name: String, defaultValue: String = "") {
+    init(id: String? = nil, name: String, defaultValue: String = "", options: [String] = []) {
         self.id = id ?? name
         self.name = name
         self.defaultValue = defaultValue
+        self.options = options
+    }
+}
+
+/// Portable snippet item serialized inside `.vorssaintsnippets` export packs.
+struct SnippetPackItem: Codable, Equatable, Sendable {
+    let trigger: String
+    let title: String
+    let content: String
+
+    init(trigger: String, title: String, content: String) {
+        self.trigger = trigger
+        self.title = title
+        self.content = content
+    }
+}
+
+/// Shareable `.vorssaintsnippets` JSON pack container (Snippets 3.0).
+struct SnippetExportPack: Codable, Equatable, Sendable {
+    let version: Int
+    let snippets: [SnippetPackItem]
+
+    init(version: Int = 1, snippets: [SnippetPackItem]) {
+        self.version = version
+        self.snippets = snippets
     }
 }
 
@@ -43,31 +69,112 @@ struct TextSnippetExpansionResult: Equatable {
 enum TextSnippetProEngine {
     static let cursorMarker = "{{cursor}}"
     static let maxRecursionDepth = 8
+    static let maxTemplateDepth = 5
     private static let argumentPattern = #"\{\{arg:([A-Za-z0-9_.\-]+)(?:=([^{}]*))?\}\}"#
+    private static let choicePattern = #"\{\{choice:([^{}]+)\}\}"#
 
-    /// Extracts deduplicated `{{arg:name=default}}` fields in appearance order.
+    /// Extracts deduplicated `{{arg:name=default}}` and `{{choice:Label|Opt1|Opt2}}` fields in appearance order.
     static func extractArgumentSpecs(from template: String) -> [TextSnippetArgumentField] {
-        guard template.contains("{{arg:"),
-              let regex = try? NSRegularExpression(pattern: argumentPattern) else {
-            return []
+        var located: [(location: Int, field: TextSnippetArgumentField)] = []
+        let nsRange = NSRange(template.startIndex..<template.endIndex, in: template)
+
+        if template.contains("{{arg:"),
+           let regex = try? NSRegularExpression(pattern: argumentPattern) {
+            for match in regex.matches(in: template, range: nsRange) {
+                guard let nameRange = Range(match.range(at: 1), in: template) else { continue }
+                let name = String(template[nameRange])
+                let defaultValue: String
+                if match.range(at: 2).location != NSNotFound,
+                   let defRange = Range(match.range(at: 2), in: template) {
+                    defaultValue = String(template[defRange])
+                } else {
+                    defaultValue = ""
+                }
+                located.append((
+                    match.range.location,
+                    TextSnippetArgumentField(id: name, name: name, defaultValue: defaultValue)
+                ))
+            }
         }
+
+        if template.contains("{{choice:"),
+           let regex = try? NSRegularExpression(pattern: choicePattern) {
+            for match in regex.matches(in: template, range: nsRange) {
+                guard let bodyRange = Range(match.range(at: 1), in: template),
+                      let parsed = parseChoiceBody(String(template[bodyRange])) else { continue }
+                located.append((
+                    match.range.location,
+                    TextSnippetArgumentField(
+                        id: parsed.label,
+                        name: parsed.label,
+                        defaultValue: parsed.options.first ?? "",
+                        options: parsed.options
+                    )
+                ))
+            }
+        }
+
+        located.sort { $0.location < $1.location }
         var seen = Set<String>()
         var fields: [TextSnippetArgumentField] = []
-        let nsRange = NSRange(template.startIndex..<template.endIndex, in: template)
-        for match in regex.matches(in: template, range: nsRange) {
-            guard let nameRange = Range(match.range(at: 1), in: template) else { continue }
-            let name = String(template[nameRange])
-            guard seen.insert(name).inserted else { continue }
-            let defaultValue: String
-            if match.range(at: 2).location != NSNotFound,
-               let defRange = Range(match.range(at: 2), in: template) {
-                defaultValue = String(template[defRange])
-            } else {
-                defaultValue = ""
-            }
-            fields.append(TextSnippetArgumentField(id: name, name: name, defaultValue: defaultValue))
+        for entry in located {
+            guard seen.insert(entry.field.name).inserted else { continue }
+            fields.append(entry.field)
         }
         return fields
+    }
+
+    private static func parseChoiceBody(_ body: String) -> (label: String, options: [String])? {
+        let parts = body
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard let rawLabel = parts.first, !rawLabel.isEmpty else { return nil }
+        let options = parts.dropFirst().filter { !$0.isEmpty }
+        guard !options.isEmpty else { return nil }
+        return (rawLabel, options)
+    }
+
+    /// Expands Snippets 3.0 templates: nested `{{snippet:...}}` (cycle-safe, maxDepth 5),
+    /// `{{choice: Label | Opt1 | Opt2}}` dropdowns, and deterministic date arithmetic.
+    static func resolveAdvancedTemplate(
+        _ template: String,
+        choiceSelections: [String: String],
+        snippetsByTrigger: [String: String],
+        referenceDate: Date = Date(),
+        depth: Int = 0
+    ) -> String {
+        var visited = Set<String>()
+        return resolveAdvancedTemplateInternal(
+            template,
+            choiceSelections: choiceSelections,
+            snippetsByTrigger: snippetsByTrigger,
+            referenceDate: referenceDate,
+            depth: depth,
+            visited: &visited
+        )
+    }
+
+    private static func resolveAdvancedTemplateInternal(
+        _ template: String,
+        choiceSelections: [String: String],
+        snippetsByTrigger: [String: String],
+        referenceDate: Date,
+        depth: Int,
+        visited: inout Set<String>
+    ) -> String {
+        var expanded = resolveNestedSnippets(
+            template,
+            lookup: { snippetsByTrigger[$0] },
+            visited: &visited,
+            depth: depth,
+            maxDepth: maxTemplateDepth
+        )
+        expanded = resolveChoices(in: expanded, selections: choiceSelections)
+        let utc = TimeZone(secondsFromGMT: 0)!
+        let posixLocale = Locale(identifier: "en_US_POSIX")
+        expanded = resolveDateArithmetic(in: expanded, baseDate: referenceDate, locale: posixLocale, timeZone: utc)
+        expanded = expandBaseDateTokens(expanded, date: referenceDate, locale: posixLocale, timeZone: utc)
+        return expanded
     }
 
     static func expandAdvanced(
@@ -84,6 +191,7 @@ enum TextSnippetProEngine {
                                              visited: &visited,
                                              depth: 0)
         expanded = resolveArguments(in: expanded, values: arguments)
+        expanded = resolveChoices(in: expanded, selections: arguments)
         expanded = resolveDateArithmetic(in: expanded, baseDate: date, locale: locale)
 
         // Replace basic {{date}} / {{time}} / {{datetime}} / {{date:...}} / {{date-tz(...):...}} before clipboard injection.
@@ -134,9 +242,10 @@ enum TextSnippetProEngine {
         _ input: String,
         lookup: ((String) -> String?)?,
         visited: inout Set<String>,
-        depth: Int
+        depth: Int,
+        maxDepth: Int = maxRecursionDepth
     ) -> String {
-        guard let lookup, depth < maxRecursionDepth, input.contains("{{snippet:") else {
+        guard let lookup, depth < maxDepth, input.contains("{{snippet:") else {
             return stripRemainingSnippetTokensIfCycle(input)
         }
         guard let regex = try? NSRegularExpression(pattern: #"\{\{snippet:([^{}]+)\}\}"#) else {
@@ -155,7 +264,7 @@ enum TextSnippetProEngine {
                 continue
             }
             visited.insert(trigger)
-            let nested = resolveNestedSnippets(body, lookup: lookup, visited: &visited, depth: depth + 1)
+            let nested = resolveNestedSnippets(body, lookup: lookup, visited: &visited, depth: depth + 1, maxDepth: maxDepth)
             visited.remove(trigger)
             output.replaceSubrange(fullRange, with: nested)
         }
@@ -191,12 +300,36 @@ enum TextSnippetProEngine {
         return output
     }
 
-    static func resolveDateArithmetic(in text: String, baseDate: Date, locale: Locale) -> String {
+    static func resolveChoices(in text: String, selections: [String: String]) -> String {
+        guard text.contains("{{choice:"),
+              let regex = try? NSRegularExpression(pattern: choicePattern) else {
+            return text
+        }
+        var output = text
+        let nsRange = NSRange(output.startIndex..<output.endIndex, in: output)
+        for match in regex.matches(in: output, range: nsRange).reversed() {
+            guard let fullRange = Range(match.range(at: 0), in: output),
+                  let bodyRange = Range(match.range(at: 1), in: output),
+                  let parsed = parseChoiceBody(String(output[bodyRange])) else { continue }
+            let resolved = selections[parsed.label] ?? parsed.options.first ?? ""
+            output.replaceSubrange(fullRange, with: resolved)
+        }
+        return output
+    }
+
+    static func resolveDateArithmetic(in text: String, baseDate: Date, locale: Locale, timeZone: TimeZone? = nil) -> String {
         guard text.contains("{{date") || text.contains("{{time") else { return text }
-        let pattern = #"\{\{(datetime|date|time)([+\-]\d+)(min|d|w|m|y|h)(?::([^{}]+))?\}\}"#
+        let pattern = #"\{\{(datetime|date|time):?([+\-]\d+)(min|d|w|m|y|h)(?::([^{}]+))?\}\}"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
 
-        let calendar = Calendar.current
+        var calendar: Calendar
+        if let timeZone {
+            var gregorian = Calendar(identifier: .gregorian)
+            gregorian.timeZone = timeZone
+            calendar = gregorian
+        } else {
+            calendar = Calendar.current
+        }
         var output = text
         let nsRange = NSRange(output.startIndex..<output.endIndex, in: output)
         for match in regex.matches(in: output, range: nsRange).reversed() {
@@ -213,6 +346,7 @@ enum TextSnippetProEngine {
 
             let formatter = DateFormatter()
             formatter.locale = locale
+            if let timeZone { formatter.timeZone = timeZone }
             if match.numberOfRanges >= 5,
                match.range(at: 4).location != NSNotFound,
                let patRange = Range(match.range(at: 4), in: output) {
@@ -246,14 +380,16 @@ enum TextSnippetProEngine {
         }
     }
 
-    private static func expandBaseDateTokens(_ text: String, date: Date, locale: Locale) -> String {
+    private static func expandBaseDateTokens(_ text: String, date: Date, locale: Locale, timeZone: TimeZone? = nil) -> String {
         guard text.contains("{{") else { return text }
         let dateFormatter = DateFormatter()
         dateFormatter.locale = locale
+        if let timeZone { dateFormatter.timeZone = timeZone }
         dateFormatter.dateStyle = .medium
         dateFormatter.timeStyle = .none
         let timeFormatter = DateFormatter()
         timeFormatter.locale = locale
+        if let timeZone { timeFormatter.timeZone = timeZone }
         timeFormatter.dateStyle = .none
         timeFormatter.timeStyle = .short
         let dStr = dateFormatter.string(from: date)
@@ -287,6 +423,7 @@ enum TextSnippetProEngine {
                       let patRange = Range(match.range(at: 2), in: out) else { continue }
                 let formatter = DateFormatter()
                 formatter.locale = locale
+                if let timeZone { formatter.timeZone = timeZone }
                 formatter.dateFormat = String(out[patRange])
                 out.replaceSubrange(fullRange, with: formatter.string(from: date))
             }

@@ -5,7 +5,9 @@ import AppKit
 import Combine
 import CoreGraphics
 import CryptoKit
+import Darwin
 import Foundation
+import os
 import Security
 import SwiftUI
 import Vision
@@ -962,5 +964,251 @@ enum ClipboardLinkMetadataFetcher {
         } catch {
             return nil
         }
+    }
+}
+
+/// Zero-CloudKit end-to-end encrypted live folder sync for Clipboard 3.0 rows via iCloud Drive.
+final class ClipboardLiveVaultSyncService: @unchecked Sendable {
+    enum LiveSyncError: Error, Equatable {
+        case emptyPayload
+        case invalidEnvelope
+    }
+
+    static let shared = ClipboardLiveVaultSyncService()
+
+    private static let logger = Logger(subsystem: "com.vorssaint.utils", category: "ClipboardLiveVaultSync")
+    private static let hkdfSalt = Data("vorssaint.clipboard.livevault.salt.v1".utf8)
+    private static let hkdfInfo = Data("vorssaint.clipboard.livevault.key.v1".utf8)
+    private static let rowFileExtension = "vorssaintrow"
+    private static let debounceInterval: TimeInterval = 0.15
+    private static let selfEchoSuppressionWindow: TimeInterval = 15.0
+
+    private let stateLock = NSLock()
+    private let watchQueue = DispatchQueue(label: "com.vorssaint.utils.clipboard-live-vault", qos: .utility)
+    private var dispatchSource: DispatchSourceFileSystemObject?
+    private var pendingScanWorkItem: DispatchWorkItem?
+    private var recentlyWrittenIDs: [UUID: Date] = [:]
+    private var seenFileSignatures: [String: String] = [:]
+    private var watchedDirectoryURL: URL?
+
+    private init() {}
+
+    deinit {
+        stopWatching()
+    }
+
+    static func defaultDirectoryURL(fileManager: FileManager = .default) -> URL {
+        let iCloudDocuments = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: iCloudDocuments.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            return iCloudDocuments.appendingPathComponent("VorssaintVault", isDirectory: true)
+        }
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.vorssaint.utils"
+        return appSupport
+            .appendingPathComponent(bundleID, isDirectory: true)
+            .appendingPathComponent("VorssaintVault", isDirectory: true)
+    }
+
+    static func deriveKey(from passphrase: String) -> SymmetricKey {
+        let inputKey = SymmetricKey(data: Data(passphrase.utf8))
+        return HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: inputKey,
+            salt: hkdfSalt,
+            info: hkdfInfo,
+            outputByteCount: 32
+        )
+    }
+
+    static func encodeEnvelope(row: ClipboardSQLiteRow, key: SymmetricKey) throws -> Data {
+        let plaintext = try JSONEncoder().encode(row)
+        guard !plaintext.isEmpty else { throw LiveSyncError.emptyPayload }
+        let sealed = try AES.GCM.seal(plaintext, using: key)
+        guard let combined = sealed.combined, combined.count > 28 else {
+            throw LiveSyncError.invalidEnvelope
+        }
+        return combined
+    }
+
+    static func decodeEnvelope(data: Data, key: SymmetricKey) throws -> ClipboardSQLiteRow {
+        guard data.count > 28 else { throw LiveSyncError.invalidEnvelope }
+        let plaintext: Data
+        do {
+            let box = try AES.GCM.SealedBox(combined: data)
+            plaintext = try AES.GCM.open(box, using: key)
+        } catch {
+            throw LiveSyncError.invalidEnvelope
+        }
+        guard !plaintext.isEmpty else { throw LiveSyncError.emptyPayload }
+        return try JSONDecoder().decode(ClipboardSQLiteRow.self, from: plaintext)
+    }
+
+    func startWatching(directoryURL: URL, onIncomingFile: @escaping @Sendable (URL) -> Void) {
+        stopWatching()
+
+        do {
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        } catch {
+            Self.logger.error("Unable to create live vault directory: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        let fd = open(directoryURL.path, O_EVTONLY)
+        guard fd >= 0 else {
+            Self.logger.error("Unable to open O_EVTONLY descriptor for \(directoryURL.path, privacy: .public)")
+            return
+        }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename, .extend],
+            queue: watchQueue
+        )
+
+        source.setEventHandler { [weak self] in
+            self?.scheduleDirectoryScan(directoryURL: directoryURL, onIncomingFile: onIncomingFile)
+        }
+
+        source.setCancelHandler {
+            close(fd)
+        }
+
+        stateLock.lock()
+        watchedDirectoryURL = directoryURL
+        seenFileSignatures.removeAll()
+        dispatchSource = source
+        stateLock.unlock()
+
+        source.resume()
+        scheduleDirectoryScan(directoryURL: directoryURL, onIncomingFile: onIncomingFile)
+    }
+
+    func stopWatching() {
+        stateLock.lock()
+        pendingScanWorkItem?.cancel()
+        pendingScanWorkItem = nil
+        let existingSource = dispatchSource
+        dispatchSource = nil
+        watchedDirectoryURL = nil
+        seenFileSignatures.removeAll()
+        stateLock.unlock()
+
+        existingSource?.cancel()
+    }
+
+    func publishRow(_ row: ClipboardSQLiteRow, to directoryURL: URL, key: SymmetricKey? = nil) {
+        let resolvedKey: SymmetricKey
+        if let key {
+            resolvedKey = key
+        } else if let passphrase = KeychainClipboardVaultSecretStore().loadSecret(), !passphrase.isEmpty {
+            resolvedKey = Self.deriveKey(from: passphrase)
+        } else {
+            resolvedKey = Self.deriveKey(from: Bundle.main.bundleIdentifier ?? "com.vorssaint.utils.livevault")
+        }
+
+        do {
+            let envelope = try Self.encodeEnvelope(row: row, key: resolvedKey)
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+
+            let fileName = "\(row.id.uuidString).\(Self.rowFileExtension)"
+            let destinationURL = directoryURL.appendingPathComponent(fileName, isDirectory: false)
+            let now = Date()
+
+            stateLock.lock()
+            pruneRecentlyWrittenLocked(now: now)
+            recentlyWrittenIDs[row.id] = now
+            seenFileSignatures[fileName] = "\(envelope.count)"
+            stateLock.unlock()
+
+            try envelope.write(to: destinationURL, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destinationURL.path)
+
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: destinationURL.path),
+               let modDate = attrs[.modificationDate] as? Date,
+               let fileSize = attrs[.size] as? NSNumber {
+                stateLock.lock()
+                seenFileSignatures[fileName] = "\(fileSize.int64Value)-\(modDate.timeIntervalSince1970)"
+                stateLock.unlock()
+            }
+        } catch {
+            Self.logger.error("Failed publishing live vault row: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func scheduleDirectoryScan(directoryURL: URL, onIncomingFile: @escaping @Sendable (URL) -> Void) {
+        stateLock.lock()
+        guard watchedDirectoryURL == directoryURL, dispatchSource != nil else {
+            stateLock.unlock()
+            return
+        }
+        pendingScanWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.scanDirectory(directoryURL: directoryURL, onIncomingFile: onIncomingFile)
+        }
+        pendingScanWorkItem = workItem
+        stateLock.unlock()
+
+        watchQueue.asyncAfter(deadline: .now() + Self.debounceInterval, execute: workItem)
+    }
+
+    private func scanDirectory(directoryURL: URL, onIncomingFile: @escaping @Sendable (URL) -> Void) {
+        stateLock.lock()
+        let active = watchedDirectoryURL == directoryURL && dispatchSource != nil
+        stateLock.unlock()
+        guard active else { return }
+
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let sorted = contents.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let now = Date()
+        var deliveries: [URL] = []
+
+        stateLock.lock()
+        pruneRecentlyWrittenLocked(now: now)
+        for url in sorted {
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey])
+            guard values?.isRegularFile == true else { continue }
+
+            let stem = url.deletingPathExtension().lastPathComponent
+            if let uuid = UUID(uuidString: stem), recentlyWrittenIDs[uuid] != nil {
+                continue
+            }
+
+            let fileName = url.lastPathComponent
+            let size = values?.fileSize ?? 0
+            let mod = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            let signature = "\(size)-\(mod)"
+            if seenFileSignatures[fileName] == signature {
+                continue
+            }
+            seenFileSignatures[fileName] = signature
+            deliveries.append(url)
+        }
+        stateLock.unlock()
+
+        for url in deliveries {
+            onIncomingFile(url)
+        }
+    }
+
+    private func pruneRecentlyWrittenLocked(now: Date) {
+        let cutoff = now.addingTimeInterval(-Self.selfEchoSuppressionWindow)
+        recentlyWrittenIDs = recentlyWrittenIDs.filter { $0.value >= cutoff }
     }
 }

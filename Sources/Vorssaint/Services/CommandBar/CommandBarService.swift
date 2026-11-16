@@ -4,6 +4,7 @@
 import AppKit
 import Carbon.HIToolbox
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The command bar: one floating field, summoned by a global shortcut, that
 /// finds and runs everything the app can do. The panel never activates, so
@@ -137,6 +138,12 @@ final class CommandBarService: ObservableObject {
     /// was typed. The companion thinks meanwhile.
     @Published private(set) var awaitsAnswers = false
 
+    /// In-memory multi-turn Quick AI chat threads and optional pending PNG attachment for Command Bar 3.0.
+    @Published var aiThreads: [AIChatThread] = []
+    @Published var activeAIThreadID: UUID?
+    @Published var pendingAIImageBase64: String?
+    @Published private(set) var pendingAIImageThumbnail: NSImage?
+
     /// The companion's face as the bar goes back into the island: a wink
     /// goodbye, or determined once something ran.
     var farewell = NotchMascotMood.wink
@@ -144,6 +151,8 @@ final class CommandBarService: ObservableObject {
     private let hotkey = QuickToolHotkey(id: 20)
     private var rowHotkeys: [QuickToolHotkey] = []
     private var panel: NSPanel?
+    private var hasPrewarmedPanel = false
+    private var isPresentingAttachmentPicker = false
     private var keyMonitor: Any?
     private var outsideClickMonitor: Any?
     private var localClickMonitor: Any?
@@ -283,17 +292,13 @@ final class CommandBarService: ObservableObject {
             // itself before it first appears, and keys typed meanwhile would
             // still reach the app in front.
             DispatchQueue.main.async { [weak self] in
-                guard AppFeature.commandBar.isAvailable, let self else { return }
-                let panel = self.ensurePanel()
-                if !panel.isVisible {
-                    panel.contentViewController?.view.layoutSubtreeIfNeeded()
-                    panel.display()
-                }
+                self?.prewarmPanelIfNeeded()
             }
         }
         if !available {
             hide()
             panel = nil
+            hasPrewarmedPanel = false
             // Uninstalled means uninstalled: the catalog, the app scan and the
             // window list all go, not just the window.
             catalog = []
@@ -3644,14 +3649,14 @@ final class CommandBarService: ObservableObject {
         }
         let mouseEvents: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents) { [weak self, weak panel] event in
-            guard let self, let panel, panel.isVisible else { return event }
+            guard let self, let panel, panel.isVisible, !self.isPresentingAttachmentPicker else { return event }
             if event.window !== panel, !Self.mouseIsInside(panel) {
                 self.hide()
             }
             return event
         }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseEvents) { [weak self, weak panel] event in
-            guard let self, let panel, panel.isVisible else { return }
+            guard let self, let panel, panel.isVisible, !self.isPresentingAttachmentPicker else { return }
             if event.windowNumber != panel.windowNumber, !Self.mouseIsInside(panel),
                // Every key on the Accessibility Keyboard is a click outside this
                // panel. Dismissing on those makes the panel impossible to type into.
@@ -3665,6 +3670,7 @@ final class CommandBarService: ObservableObject {
             queue: .main
         ) { [weak self] notification in
             guard let self,
+                  !self.isPresentingAttachmentPicker,
                   let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.bundleIdentifier != Bundle.main.bundleIdentifier,
                   app.bundleIdentifier != AssistiveKeyboard.bundleID
@@ -3721,5 +3727,250 @@ final class CommandBarService: ObservableObject {
         case kVK_ANSI_9, kVK_ANSI_Keypad9: return 8
         default: return nil
         }
+    }
+}
+
+// MARK: - Command Bar 3.0 (Panel Pre-Warming, Multi-Turn AI Threads, Vision & Plugins)
+
+extension CommandBarService {
+    private static let maxAIThreads = 20
+    private static let maxVisionImageDimension: CGFloat = 1536
+
+    /// Pre-warms the `OverlayPanel` and SwiftUI `NSHostingController` view hierarchy off-screen
+    /// lazily after launch so hotkey summon latency stays near 0 ms.
+    func prewarmPanelIfNeeded() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.prewarmPanelIfNeeded() }
+            return
+        }
+        guard AppFeature.commandBar.isAvailable, !hasPrewarmedPanel else { return }
+        hasPrewarmedPanel = true
+        let panel = ensurePanel()
+        if !panel.isVisible {
+            panel.alphaValue = 0
+            panel.contentView?.wantsLayer = true
+            panel.contentViewController?.view.layoutSubtreeIfNeeded()
+            if let size = panel.contentViewController?.view.fittingSize,
+               size.width > 0, size.height > 0 {
+                panel.setContentSize(size)
+            }
+            panel.display()
+        }
+    }
+
+    var activeAIThread: AIChatThread? {
+        if let activeAIThreadID,
+           let match = aiThreads.first(where: { $0.id == activeAIThreadID }) {
+            return match
+        }
+        return aiThreads.first
+    }
+
+    @discardableResult
+    func startNewAIThread(title: String = "New Chat") -> AIChatThread {
+        CommandBarQuickAIService.shared.reset()
+        pendingAIImageBase64 = nil
+        pendingAIImageThumbnail = nil
+        let thread = AIChatThread(id: UUID(), title: title, messages: [], updatedAt: Date())
+        aiThreads.insert(thread, at: 0)
+        if aiThreads.count > Self.maxAIThreads {
+            aiThreads = Array(aiThreads.prefix(Self.maxAIThreads))
+        }
+        activeAIThreadID = thread.id
+        return thread
+    }
+
+    func selectAIThread(_ threadID: UUID) {
+        guard activeAIThreadID != threadID,
+              aiThreads.contains(where: { $0.id == threadID }) else { return }
+        CommandBarQuickAIService.shared.reset()
+        activeAIThreadID = threadID
+    }
+
+    @discardableResult
+    func attachClipboardImageForAI() -> Bool {
+        let pasteboard = NSPasteboard.general
+        if let pngData = pasteboard.data(forType: .png),
+           let image = NSImage(data: pngData),
+           let encoded = Self.encodePNGDataBase64(from: image) {
+            pendingAIImageBase64 = encoded.base64
+            pendingAIImageThumbnail = encoded.thumbnail
+            return true
+        }
+        if let image = NSImage(pasteboard: pasteboard),
+           let encoded = Self.encodePNGDataBase64(from: image) {
+            pendingAIImageBase64 = encoded.base64
+            pendingAIImageThumbnail = encoded.thumbnail
+            return true
+        }
+        return false
+    }
+
+    func attachImageFromFilePickerForAI() {
+        isPresentingAttachmentPicker = true
+        let openPanel = NSOpenPanel()
+        openPanel.canChooseFiles = true
+        openPanel.canChooseDirectories = false
+        openPanel.allowsMultipleSelection = false
+        openPanel.allowedContentTypes = [.image, .png, .jpeg]
+        let response = openPanel.runModal()
+        isPresentingAttachmentPicker = false
+        if response == .OK,
+           let url = openPanel.url,
+           let image = NSImage(contentsOf: url),
+           let encoded = Self.encodePNGDataBase64(from: image) {
+            pendingAIImageBase64 = encoded.base64
+            pendingAIImageThumbnail = encoded.thumbnail
+        }
+        if let panel, panel.isVisible {
+            panel.makeKey()
+            _ = focusField(in: panel)
+        }
+    }
+
+    func attachAIImageFromClipboardOrPicker() {
+        if !attachClipboardImageForAI() {
+            attachImageFromFilePickerForAI()
+        }
+    }
+
+    func clearPendingAIImage() {
+        pendingAIImageBase64 = nil
+        pendingAIImageThumbnail = nil
+    }
+
+    func sendAIQuestion(_ rawPrompt: String, attachedTokens: Set<QuickAIContextToken> = []) {
+        let trimmed = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imagePayload = pendingAIImageBase64
+        guard !trimmed.isEmpty || imagePayload != nil else { return }
+
+        let promptText = trimmed.isEmpty ? "Describe this image." : trimmed
+        let threadID: UUID
+        if let current = activeAIThread {
+            threadID = current.id
+        } else {
+            threadID = startNewAIThread(title: String(promptText.prefix(36))).id
+        }
+
+        pendingAIImageBase64 = nil
+        pendingAIImageThumbnail = nil
+
+        let userMessage = AIChatMessage(
+            id: UUID(),
+            role: "user",
+            text: promptText,
+            imagePNGDataBase64: imagePayload,
+            createdAt: Date()
+        )
+        guard let idx = aiThreads.firstIndex(where: { $0.id == threadID }) else { return }
+        if aiThreads[idx].messages.isEmpty {
+            aiThreads[idx].title = String(promptText.prefix(36))
+        }
+        aiThreads[idx].messages.append(userMessage)
+        aiThreads[idx].updatedAt = Date()
+        let conversation = aiThreads[idx].messages
+
+        CommandBarQuickAIService.shared.sendConversation(
+            messages: conversation,
+            attachedTokens: attachedTokens
+        ) { [weak self] assistantText in
+            let cleaned = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return }
+            DispatchQueue.main.async {
+                guard let self,
+                      let threadIndex = self.aiThreads.firstIndex(where: { $0.id == threadID }) else { return }
+                let reply = AIChatMessage(
+                    id: UUID(),
+                    role: "assistant",
+                    text: cleaned,
+                    imagePNGDataBase64: nil,
+                    createdAt: Date()
+                )
+                self.aiThreads[threadIndex].messages.append(reply)
+                self.aiThreads[threadIndex].updatedAt = Date()
+            }
+        }
+    }
+
+    func executePluginAction(_ action: PluginActionItem,
+                             link: CommandBarLink? = nil,
+                             formValues: [String: String] = [:]) {
+        switch action.kind {
+        case .copy:
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.declareVorssaintSource()
+            let ok = pasteboard.setString(action.value, forType: .string)
+            let copyFailed = FeatureStrings.commandBar(L10n.shared.language).copyFailed
+            QuickToolHUD.show(
+                icon: ok ? "doc.on.doc" : "exclamationmark.circle",
+                message: ok ? action.value : copyFailed
+            )
+        case .openURL:
+            if let url = URL(string: action.value) {
+                NSWorkspace.shared.open(url)
+            }
+        case .paste:
+            let textToPaste = action.value
+            hide()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                _ = TransientPaste.shared.paste(textToPaste)
+            }
+        case .runSubcommand:
+            guard let link else { return }
+            var args = [action.value]
+            let sortedFieldArgs = formValues.keys.sorted().compactMap { key -> String? in
+                let val = formValues[key] ?? ""
+                return val.isEmpty ? nil : val
+            }
+            args.append(contentsOf: sortedFieldArgs)
+            scriptRunner.runWithArguments(link: link, arguments: args)
+        }
+    }
+
+    @MainActor
+    func openInlineAISelectionHUD() {
+        let captured = selectedText
+        hide()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            InlineAISelectionHUDController.shared.show(preselectedText: captured.isEmpty ? nil : captured)
+        }
+    }
+
+    private static func encodePNGDataBase64(from image: NSImage) -> (base64: String, thumbnail: NSImage)? {
+        let originalSize = image.size
+        guard originalSize.width > 0, originalSize.height > 0 else { return nil }
+        let longest = max(originalSize.width, originalSize.height)
+        let scale = longest > maxVisionImageDimension ? (maxVisionImageDimension / longest) : 1.0
+        let targetSize = NSSize(
+            width: max(1, (originalSize.width * scale).rounded()),
+            height: max(1, (originalSize.height * scale).rounded())
+        )
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(targetSize.width),
+            pixelsHigh: Int(targetSize.height),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return nil }
+        rep.size = targetSize
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(
+            in: NSRect(origin: .zero, size: targetSize),
+            from: .zero,
+            operation: .copy,
+            fraction: 1.0
+        )
+        NSGraphicsContext.restoreGraphicsState()
+        guard let pngData = rep.representation(using: .png, properties: [:]) else { return nil }
+        let thumb = NSImage(size: targetSize)
+        thumb.addRepresentation(rep)
+        return (pngData.base64EncodedString(), thumb)
     }
 }

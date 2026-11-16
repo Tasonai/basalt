@@ -15,6 +15,142 @@ enum CommandBarLayoutMode: String, CaseIterable, Codable, Equatable, Sendable {
     case grid
 }
 
+/// One message turn in Command Bar 3.0 Quick AI multi-turn threads, with optional PNG vision payload.
+struct AIChatMessage: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let role: String
+    let text: String
+    let imagePNGDataBase64: String?
+    let createdAt: Date
+
+    init(id: UUID = UUID(),
+         role: String,
+         text: String,
+         imagePNGDataBase64: String? = nil,
+         createdAt: Date = Date()) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.imagePNGDataBase64 = imagePNGDataBase64
+        self.createdAt = createdAt
+    }
+}
+
+/// Persistent in-session Quick AI conversation thread for Command Bar 3.0.
+struct AIChatThread: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    var title: String
+    var messages: [AIChatMessage]
+    var updatedAt: Date
+
+    init(id: UUID = UUID(),
+         title: String = "New Chat",
+         messages: [AIChatMessage] = [],
+         updatedAt: Date = Date()) {
+        self.id = id
+        self.title = title
+        self.messages = messages
+        self.updatedAt = updatedAt
+    }
+}
+
+/// Actions offered by the floating Inline AI Selection HUD over selected text.
+enum InlineAIRewriteAction: String, CaseIterable, Identifiable, Sendable {
+    case improveWriting
+    case fixGrammar
+    case summarize
+    case translate
+    case explainCode
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .improveWriting: return "Improve Writing"
+        case .fixGrammar: return "Fix Grammar"
+        case .summarize: return "Summarize"
+        case .translate: return "Translate"
+        case .explainCode: return "Explain Code"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .improveWriting: return "wand.and.stars"
+        case .fixGrammar: return "textformat.abc"
+        case .summarize: return "text.alignleft"
+        case .translate: return "globe"
+        case .explainCode: return "chevron.left.forwardslash.chevron.right"
+        }
+    }
+
+    func prompt(for selectedText: String) -> String {
+        switch self {
+        case .improveWriting:
+            return "Improve the clarity, flow, and tone of the following text. Return only the improved text:\n\n\(selectedText)"
+        case .fixGrammar:
+            return "Fix grammar, spelling, and punctuation in the following text without changing its meaning. Return only the corrected text:\n\n\(selectedText)"
+        case .summarize:
+            return "Summarize the following text concisely:\n\n\(selectedText)"
+        case .translate:
+            return "Translate the following text into clear natural English (or into Spanish if it is already in English), preserving formatting. Return only the translation:\n\n\(selectedText)"
+        case .explainCode:
+            return "Explain clearly what the following code or technical snippet does:\n\n\(selectedText)"
+        }
+    }
+}
+
+/// Action kind declared by rich JSON script plugin outputs.
+enum PluginActionKind: String, Codable, Sendable {
+    case copy
+    case openURL
+    case paste
+    case runSubcommand
+}
+
+/// Interactive button descriptor emitted in a script plugin's JSON payload.
+struct PluginActionItem: Identifiable, Codable, Equatable, Sendable {
+    let id: String
+    let title: String
+    let kind: PluginActionKind
+    let value: String
+
+    init(id: String, title: String, kind: PluginActionKind, value: String) {
+        self.id = id
+        self.title = title
+        self.kind = kind
+        self.value = value
+    }
+}
+
+/// Declarative form field emitted by rich JSON plugin outputs.
+struct PluginFormField: Identifiable, Codable, Equatable, Sendable {
+    let id: String
+    let label: String
+    let defaultValue: String
+    let options: [String]
+
+    init(id: String, label: String, defaultValue: String = "", options: [String] = []) {
+        self.id = id
+        self.label = label
+        self.defaultValue = defaultValue
+        self.options = options
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, defaultValue, options
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedLabel = try container.decode(String.self, forKey: .label)
+        self.label = decodedLabel
+        self.id = try container.decodeIfPresent(String.self, forKey: .id) ?? decodedLabel
+        self.defaultValue = try container.decodeIfPresent(String.self, forKey: .defaultValue) ?? ""
+        self.options = try container.decodeIfPresent([String].self, forKey: .options) ?? []
+    }
+}
+
 /// Secondary action descriptor displayed in the `⌘K` Action Panel.
 struct CommandBarActionItem: Identifiable, Equatable, Sendable {
     let id: String
@@ -542,6 +678,7 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
     private var streamTask: Task<Void, Never>?
     private let processLock = NSLock()
     private var activeProcess: Process?
+    private var completionHandler: ((String) -> Void)?
 
     init(secretStore: any QuickAISecretStore = KeychainQuickAISecretStore(),
          defaults: UserDefaults? = nil) {
@@ -587,10 +724,11 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
         secretStore.deleteSecret(account: provider.rawValue)
     }
 
-    func beginThinking(prompt: String) {
+    func beginThinking(prompt: String, onCompletion: ((String) -> Void)? = nil) {
         streamTask?.cancel()
         streamTask = nil
         terminateActiveProcess()
+        completionHandler = onCompletion
         lastPrompt = prompt
         responseText = ""
         errorText = nil
@@ -607,18 +745,23 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
     func finishSuccess() {
         isStreaming = false
         dropletState = .celebrate
+        let handler = completionHandler
+        completionHandler = nil
+        handler?(responseText)
     }
 
     func finishWithError(_ message: String) {
         isStreaming = false
         errorText = message
         dropletState = .idle
+        completionHandler = nil
     }
 
     func reset() {
         streamTask?.cancel()
         streamTask = nil
         terminateActiveProcess()
+        completionHandler = nil
         isStreaming = false
         responseText = ""
         errorText = nil
@@ -637,7 +780,7 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// Parses one NDJSON line emitted by Ollama's `/api/generate` endpoint.
+    /// Parses one NDJSON line emitted by Ollama's `/api/generate` or `/api/chat` endpoint.
     static func parseOllamaStreamLine(_ line: String) -> (token: String?, done: Bool) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
@@ -645,7 +788,8 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return (nil, false)
         }
-        let token = object["response"] as? String
+        let messageContent = (object["message"] as? [String: Any])?["content"] as? String
+        let token = (object["response"] as? String) ?? messageContent
         let done = object["done"] as? Bool ?? false
         return (token, done)
     }
@@ -766,6 +910,100 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Sends a multi-turn thread (with optional PNG base64 vision attachments on turns)
+    /// while resolving `@clipboard`, `@frontApp`, `@selection`, and `@browser` context on the latest user turn.
+    func sendConversation(
+        messages: [AIChatMessage],
+        attachedTokens: Set<QuickAIContextToken> = [],
+        rawModel: String? = nil,
+        onCompletion: ((String) -> Void)? = nil
+    ) {
+        let nonEmpty = messages.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || ($0.imagePNGDataBase64?.isEmpty == false)
+        }
+        guard let last = nonEmpty.last else { return }
+
+        let allTokens = attachedTokens.union(QuickAIContextResolver.tokensPresent(in: last.text))
+        if allTokens.isEmpty {
+            dispatchConversation(nonEmpty, rawModel: rawModel, onCompletion: onCompletion)
+            return
+        }
+
+        beginThinking(prompt: last.text, onCompletion: onCompletion)
+        let box = WeakBox(self)
+        streamTask = Task {
+            let snapshot = await QuickAIContextResolver.captureLiveContext(
+                includeClipboard: allTokens.contains(.clipboard),
+                includeFrontApp: allTokens.contains(.frontApp),
+                includeSelection: allTokens.contains(.selection),
+                includeBrowser: allTokens.contains(.browser)
+            )
+            if Task.isCancelled { return }
+            let resolvedText = QuickAIContextResolver.resolvePrompt(
+                last.text,
+                attachedTokens: attachedTokens,
+                snapshot: snapshot
+            )
+            var updated = nonEmpty
+            let replacement = AIChatMessage(
+                id: last.id,
+                role: last.role,
+                text: resolvedText,
+                imagePNGDataBase64: last.imagePNGDataBase64,
+                createdAt: last.createdAt
+            )
+            updated[updated.count - 1] = replacement
+            let finalMessages = updated
+            await MainActor.run {
+                guard let service = box.value, service.isStreaming else { return }
+                service.streamTask = nil
+                service.dispatchConversation(finalMessages, rawModel: rawModel, onCompletion: onCompletion)
+            }
+        }
+    }
+
+    private func dispatchConversation(
+        _ messages: [AIChatMessage],
+        rawModel: String? = nil,
+        onCompletion: ((String) -> Void)? = nil
+    ) {
+        guard let last = messages.last else { return }
+        let customModel = rawModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (customModel?.isEmpty == false) ? customModel : nil
+
+        switch selectedProvider {
+        case .ollama:
+            let hasVisionOrHistory = messages.count > 1 || messages.contains(where: { $0.imagePNGDataBase64?.isEmpty == false })
+            if hasVisionOrHistory {
+                askLocalOllamaConversation(messages: messages, model: model ?? "llama3.2", onCompletion: onCompletion)
+            } else {
+                askLocalOllama(prompt: last.text, model: model ?? "llama3.2", onCompletion: onCompletion)
+            }
+        case .claudeCLI:
+            askCLI(provider: .claudeCLI, prompt: Self.flattenedConversationPrompt(messages), onCompletion: onCompletion)
+        case .codexCLI:
+            askCLI(provider: .codexCLI, prompt: Self.flattenedConversationPrompt(messages), onCompletion: onCompletion)
+        case .byokOpenAI:
+            askOpenAIConversation(messages: messages, model: model ?? "gpt-4o-mini", onCompletion: onCompletion)
+        case .byokAnthropic:
+            askAnthropicConversation(messages: messages, model: model ?? "claude-3-5-sonnet-latest", onCompletion: onCompletion)
+        }
+    }
+
+    private static func flattenedConversationPrompt(_ messages: [AIChatMessage]) -> String {
+        if messages.count == 1, let only = messages.first, only.imagePNGDataBase64 == nil {
+            return only.text
+        }
+        return messages.map { message in
+            let speaker = message.role == "assistant" ? "Assistant" : "User"
+            if let b64 = message.imagePNGDataBase64, !b64.isEmpty {
+                return "\(speaker): [Attached PNG image (\(b64.count) base64 chars)]\n\(message.text)"
+            }
+            return "\(speaker): \(message.text)"
+        }.joined(separator: "\n\n")
+    }
+
     /// Resolves `@clipboard`, `@frontApp`, `@selection`, and `@browser` context tokens
     /// asynchronously off the main thread before dispatching to the active provider.
     func sendContextualPrompt(
@@ -825,10 +1063,50 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
         }
     }
 
-    func askLocalOllama(prompt: String, model: String = "llama3.2", endpoint: URL = URL(string: "http://127.0.0.1:11434/api/generate")!) {
+    func askLocalOllama(
+        prompt: String,
+        model: String = "llama3.2",
+        endpoint: URL = URL(string: "http://127.0.0.1:11434/api/generate")!,
+        onCompletion: ((String) -> Void)? = nil
+    ) {
         let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPrompt.isEmpty else { return }
-        beginThinking(prompt: cleanPrompt)
+        let body: [String: Any] = ["model": model, "prompt": cleanPrompt, "stream": true]
+        streamOllamaRequest(promptTitle: cleanPrompt, endpoint: endpoint, body: body, onCompletion: onCompletion)
+    }
+
+    func askLocalOllamaConversation(
+        messages: [AIChatMessage],
+        model: String = "llama3.2",
+        endpoint: URL = URL(string: "http://127.0.0.1:11434/api/chat")!,
+        onCompletion: ((String) -> Void)? = nil
+    ) {
+        guard let last = messages.last else { return }
+        let payloadMessages: [[String: Any]] = messages.map { msg in
+            var entry: [String: Any] = [
+                "role": msg.role == "assistant" ? "assistant" : "user",
+                "content": msg.text,
+            ]
+            if let b64 = msg.imagePNGDataBase64, !b64.isEmpty {
+                entry["images"] = [b64]
+            }
+            return entry
+        }
+        let body: [String: Any] = ["model": model, "messages": payloadMessages, "stream": true]
+        streamOllamaRequest(promptTitle: last.text, endpoint: endpoint, body: body, onCompletion: onCompletion)
+    }
+
+    private func streamOllamaRequest(
+        promptTitle: String,
+        endpoint: URL,
+        body: [String: Any],
+        onCompletion: ((String) -> Void)?
+    ) {
+        beginThinking(prompt: promptTitle, onCompletion: onCompletion)
+        guard let encodedBody = try? JSONSerialization.data(withJSONObject: body) else {
+            finishWithError("Failed to encode Ollama request.")
+            return
+        }
         let box = WeakBox(self)
         streamTask = Task {
             do {
@@ -836,8 +1114,7 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.timeoutInterval = 30
-                let body: [String: Any] = ["model": model, "prompt": cleanPrompt, "stream": true]
-                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                request.httpBody = encodedBody
                 let (bytes, response) = try await URLSession.shared.bytes(for: request)
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                     await MainActor.run {
@@ -872,60 +1149,55 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
     ) {
         let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPrompt.isEmpty else { return }
-        beginThinking(prompt: cleanPrompt)
+        askOpenAIConversation(
+            messages: [AIChatMessage(role: "user", text: cleanPrompt)],
+            model: model,
+            endpoint: endpoint
+        )
+    }
+
+    func askOpenAIConversation(
+        messages: [AIChatMessage],
+        model: String = "gpt-4o-mini",
+        endpoint: URL = URL(string: "https://api.openai.com/v1/chat/completions")!,
+        onCompletion: ((String) -> Void)? = nil
+    ) {
+        guard let last = messages.last else { return }
+        beginThinking(prompt: last.text, onCompletion: onCompletion)
         guard let key = apiKey(for: .byokOpenAI), !key.isEmpty else {
             missingKeyProvider = .byokOpenAI
             finishWithError("OpenAI API key is not configured in Keychain.")
             return
         }
 
-        let box = WeakBox(self)
-        streamTask = Task {
-            do {
-                var request = URLRequest(url: endpoint)
-                request.httpMethod = "POST"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-                request.timeoutInterval = 60
-                let body: [String: Any] = [
-                    "model": model,
-                    "stream": true,
-                    "messages": [["role": "user", "content": cleanPrompt]],
+        let payloadMessages: [[String: Any]] = messages.map { msg in
+            let role = msg.role == "assistant" ? "assistant" : "user"
+            if role == "user", let b64 = msg.imagePNGDataBase64, !b64.isEmpty {
+                let parts: [[String: Any]] = [
+                    ["type": "text", "text": msg.text.isEmpty ? "Describe this image." : msg.text],
+                    ["type": "image_url", "image_url": ["url": "data:image/png;base64,\(b64)"]],
                 ]
-                request.httpBody = try JSONSerialization.data(withJSONObject: body)
-                let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                    var errorDetail: String?
-                    for try await line in bytes.lines.prefix(8) {
-                        if let parsed = Self.parseSSEErrorMessage(from: line) {
-                            errorDetail = parsed
-                            break
-                        }
-                    }
-                    let message = errorDetail ?? "HTTP \(http.statusCode)"
-                    await MainActor.run { box.value?.finishWithError(message) }
-                    return
-                }
-                for try await line in bytes.lines {
-                    if Task.isCancelled { return }
-                    if let err = Self.parseSSEErrorMessage(from: line) {
-                        await MainActor.run { box.value?.finishWithError(err) }
-                        return
-                    }
-                    let parsed = Self.parseOpenAISSELine(line)
-                    await MainActor.run {
-                        if let token = parsed.token { box.value?.appendStreamChunk(token) }
-                        if parsed.done { box.value?.finishSuccess() }
-                    }
-                }
-                await MainActor.run {
-                    if box.value?.isStreaming == true { box.value?.finishSuccess() }
-                }
-            } catch {
-                if Task.isCancelled { return }
-                await MainActor.run { box.value?.finishWithError(error.localizedDescription) }
+                return ["role": role, "content": parts]
             }
+            return ["role": role, "content": msg.text]
         }
+        let body: [String: Any] = [
+            "model": model,
+            "stream": true,
+            "messages": payloadMessages,
+        ]
+        guard let encodedBody = try? JSONSerialization.data(withJSONObject: body) else {
+            finishWithError("Failed to encode OpenAI request.")
+            return
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 60
+        request.httpBody = encodedBody
+        streamSSERequest(request) { Self.parseOpenAISSELine($0) }
     }
 
     func askAnthropic(
@@ -935,29 +1207,81 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
     ) {
         let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPrompt.isEmpty else { return }
-        beginThinking(prompt: cleanPrompt)
+        askAnthropicConversation(
+            messages: [AIChatMessage(role: "user", text: cleanPrompt)],
+            model: model,
+            endpoint: endpoint
+        )
+    }
+
+    func askAnthropicConversation(
+        messages: [AIChatMessage],
+        model: String = "claude-3-5-sonnet-latest",
+        endpoint: URL = URL(string: "https://api.anthropic.com/v1/messages")!,
+        onCompletion: ((String) -> Void)? = nil
+    ) {
+        guard let last = messages.last else { return }
+        beginThinking(prompt: last.text, onCompletion: onCompletion)
         guard let key = apiKey(for: .byokAnthropic), !key.isEmpty else {
             missingKeyProvider = .byokAnthropic
             finishWithError("Anthropic API key is not configured in Keychain.")
             return
         }
 
+        // Normalize alternating user/assistant turns required by Anthropic's Messages API.
+        var normalizedTurns: [(role: String, blocks: [[String: Any]])] = []
+        for msg in messages {
+            let role = msg.role == "assistant" ? "assistant" : "user"
+            var blocks: [[String: Any]] = []
+            if role == "user", let b64 = msg.imagePNGDataBase64, !b64.isEmpty {
+                blocks.append([
+                    "type": "image",
+                    "source": [
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": b64,
+                    ],
+                ])
+            }
+            let text = msg.text.isEmpty ? "Describe this image." : msg.text
+            blocks.append(["type": "text", "text": text])
+            if let lastTurn = normalizedTurns.last, lastTurn.role == role {
+                normalizedTurns[normalizedTurns.count - 1].blocks.append(contentsOf: blocks)
+            } else {
+                normalizedTurns.append((role: role, blocks: blocks))
+            }
+        }
+        let payloadMessages: [[String: Any]] = normalizedTurns.map { turn in
+            ["role": turn.role, "content": turn.blocks]
+        }
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": 2048,
+            "stream": true,
+            "messages": payloadMessages,
+        ]
+        guard let encodedBody = try? JSONSerialization.data(withJSONObject: body) else {
+            finishWithError("Failed to encode Anthropic request.")
+            return
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(key, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 60
+        request.httpBody = encodedBody
+        streamSSERequest(request) { Self.parseAnthropicSSELine($0) }
+    }
+
+    private func streamSSERequest(
+        _ request: URLRequest,
+        parseLine: @escaping @Sendable (String) -> (token: String?, done: Bool)
+    ) {
         let box = WeakBox(self)
         streamTask = Task {
             do {
-                var request = URLRequest(url: endpoint)
-                request.httpMethod = "POST"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(key, forHTTPHeaderField: "x-api-key")
-                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-                request.timeoutInterval = 60
-                let body: [String: Any] = [
-                    "model": model,
-                    "max_tokens": 2048,
-                    "stream": true,
-                    "messages": [["role": "user", "content": cleanPrompt]],
-                ]
-                request.httpBody = try JSONSerialization.data(withJSONObject: body)
                 let (bytes, response) = try await URLSession.shared.bytes(for: request)
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                     var errorDetail: String?
@@ -977,7 +1301,7 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
                         await MainActor.run { box.value?.finishWithError(err) }
                         return
                     }
-                    let parsed = Self.parseAnthropicSSELine(line)
+                    let parsed = parseLine(line)
                     await MainActor.run {
                         if let token = parsed.token { box.value?.appendStreamChunk(token) }
                         if parsed.done { box.value?.finishSuccess() }
@@ -996,7 +1320,8 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
     func askCLI(
         provider: QuickAIProvider,
         prompt: String,
-        searchPaths: [String] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+        searchPaths: [String] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
+        onCompletion: ((String) -> Void)? = nil
     ) {
         let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPrompt.isEmpty else { return }
@@ -1011,12 +1336,12 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
             binaryName = "codex"
             args = ["exec", cleanPrompt]
         default:
-            beginThinking(prompt: cleanPrompt)
+            beginThinking(prompt: cleanPrompt, onCompletion: onCompletion)
             finishWithError("\(provider.displayName) is not a CLI provider.")
             return
         }
 
-        beginThinking(prompt: cleanPrompt)
+        beginThinking(prompt: cleanPrompt, onCompletion: onCompletion)
 
         let fileManager = FileManager.default
         guard let executablePath = searchPaths
@@ -1150,6 +1475,27 @@ struct ScriptCommandJSONPayload: Decodable, Equatable, Sendable {
     let copyText: String?
     let badge: String?
     let openURL: String?
+    let markdownBody: String?
+    let actions: [PluginActionItem]?
+    let formFields: [PluginFormField]?
+
+    init(title: String,
+         subtitle: String? = nil,
+         copyText: String? = nil,
+         badge: String? = nil,
+         openURL: String? = nil,
+         markdownBody: String? = nil,
+         actions: [PluginActionItem]? = nil,
+         formFields: [PluginFormField]? = nil) {
+        self.title = title
+        self.subtitle = subtitle
+        self.copyText = copyText
+        self.badge = badge
+        self.openURL = openURL
+        self.markdownBody = markdownBody
+        self.actions = actions
+        self.formFields = formFields
+    }
 }
 
 /// Parses Raycast-compatible and Vorssaint-native comment metadata headers and JSON outputs.

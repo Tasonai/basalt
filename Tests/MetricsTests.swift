@@ -258,6 +258,7 @@ struct MetricsTests {
             ("wave4-v3-display-hidpi", { Wave4V3DisplayHiDPIAndSolarContract.run(suite) }),
             ("wave5-v3-menubar-ioreport", { Wave5V3MenuBarAndIOReportContract.run(suite) }),
             ("wave6-v3-studio-screenshots", { Wave6V3StudioAndScreenshot3Contract.run(suite) }),
+            ("wave7-v3-clipboard-ai", { Wave7V3SQLiteClipboardAndAI3Contract.run(suite) }),
         ]
         var selected = Set<String>()
         var listOnly = false
