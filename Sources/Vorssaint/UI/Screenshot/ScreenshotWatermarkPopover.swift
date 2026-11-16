@@ -46,14 +46,15 @@ struct ScreenshotWatermarkPopover: View {
     // MARK: - Content
 
     private var kindPicker: some View {
-        Picker("", selection: kindBinding) {
-            Text(strings.backdropNone).tag(ScreenshotSupport.WatermarkStyle.Kind.none)
-            Text(strings.toolText).tag(ScreenshotSupport.WatermarkStyle.Kind.text)
-            Text(strings.watermarkImageLabel).tag(ScreenshotSupport.WatermarkStyle.Kind.image)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .controlSize(.small)
+        VorssaintSegmentedTabs(
+            selection: kindBinding,
+            options: [
+                .init(.none, title: strings.backdropNone),
+                .init(.text, title: strings.toolText),
+                .init(.image, title: strings.watermarkImageLabel),
+            ],
+            tone: .tools
+        )
         .accessibilityLabel(strings.watermarkLabel)
     }
 
@@ -227,22 +228,21 @@ struct ScreenshotWatermarkPopover: View {
             }
             HStack(spacing: 8) {
                 sliderLabel(strings.watermarkSizeLabel)
-                Slider(value: sizeBinding, in: 0...1)
-                    .controlSize(.small)
+                VorssaintDetentSlider(value: sizeBinding, in: 0...1, tone: .tools)
                     .accessibilityLabel(strings.watermarkSizeLabel)
             }
             HStack(spacing: 8) {
                 sliderLabel(strings.watermarkOpacityLabel)
-                Slider(value: opacityBinding, in: ScreenshotSupport.WatermarkStyle.opacityRange)
-                    .controlSize(.small)
+                VorssaintDetentSlider(value: opacityBinding, in: ScreenshotSupport.WatermarkStyle.opacityRange, tone: .tools)
                     .accessibilityLabel(strings.watermarkOpacityLabel)
             }
             HStack(spacing: 8) {
                 sliderLabel(strings.watermarkRotationLabel)
-                Slider(value: rotationBinding,
-                       in: ScreenshotSupport.WatermarkStyle.rotationRange,
-                       step: 1)
-                    .controlSize(.small)
+                VorssaintDetentSlider(value: rotationBinding,
+                                      in: ScreenshotSupport.WatermarkStyle.rotationRange,
+                                      step: 1,
+                                      detent: 0,
+                                      tone: .tools)
                     .accessibilityLabel(strings.watermarkRotationLabel)
                     .accessibilityValue("\(Int(model.watermarkStyle.rotation.rounded()))°")
                 Text("\(Int(model.watermarkStyle.rotation.rounded()))°")

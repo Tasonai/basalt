@@ -258,13 +258,15 @@ struct ScreenshotBackdropPopover<Model: BackdropEditing>: View {
     private var customSection: some View {
         VStack(spacing: 9) {
             HStack(spacing: 8) {
-                Picker("", selection: $customIsGradient) {
-                    Text(strings.backdropSolidLabel).tag(false)
-                    Text(strings.backdropGradientLabel).tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
+                VorssaintSegmentedTabs(
+                    selection: $customIsGradient,
+                    options: [
+                        .init(false, title: strings.backdropSolidLabel),
+                        .init(true, title: strings.backdropGradientLabel),
+                    ],
+                    tone: .tools
+                )
+                .fixedSize()
                 .onChange(of: customIsGradient) { _, _ in
                     activeWell = 0
                     applyCustom()
@@ -374,8 +376,7 @@ struct ScreenshotBackdropPopover<Model: BackdropEditing>: View {
                     .minimumScaleFactor(0.82)
                     .frame(width: 64, alignment: .leading)
                     .foregroundStyle(model.showsBackdrop ? .secondary : .tertiary)
-                Slider(value: paddingBinding, in: 0...1)
-                    .controlSize(.small)
+                VorssaintDetentSlider(value: paddingBinding, in: 0...1, tone: .tools)
                     .disabled(!model.showsBackdrop)
             }
             HStack(spacing: 8) {
@@ -388,8 +389,7 @@ struct ScreenshotBackdropPopover<Model: BackdropEditing>: View {
                     .minimumScaleFactor(0.82)
                     .frame(width: 64, alignment: .leading)
                     .foregroundStyle(.secondary)
-                Slider(value: cornerBinding, in: 0...1)
-                    .controlSize(.small)
+                VorssaintDetentSlider(value: cornerBinding, in: 0...1, tone: .tools)
             }
             HStack(spacing: 8) {
                 Text(strings.backdropBlurLabel)
@@ -401,8 +401,7 @@ struct ScreenshotBackdropPopover<Model: BackdropEditing>: View {
                     .minimumScaleFactor(0.82)
                     .frame(width: 64, alignment: .leading)
                     .foregroundStyle(model.showsBackdrop ? .secondary : .tertiary)
-                Slider(value: blurBinding, in: 0...1)
-                    .controlSize(.small)
+                VorssaintDetentSlider(value: blurBinding, in: 0...1, tone: .tools)
                     .disabled(!model.showsBackdrop)
             }
         }

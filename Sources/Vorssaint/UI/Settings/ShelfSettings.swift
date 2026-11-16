@@ -29,7 +29,7 @@ struct ShelfSettings: View {
                             caption: l10n.s.shelfEnableCaption) {
                     Toggle(l10n.s.shelfEnable, isOn: $enabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: enabled) { _, _ in
                             ShelfService.shared.syncWithPreferences()
                         }
@@ -68,7 +68,7 @@ struct ShelfSettings: View {
                     SettingsRow(symbol: "keyboard", title: l10n.s.shelfShortcutToggle) {
                         Toggle(l10n.s.shelfShortcutToggle, isOn: $shortcutEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: shortcutEnabled) { _, _ in
                                 ShelfService.shared.syncHotkey()
                             }
@@ -89,7 +89,7 @@ struct ShelfSettings: View {
                                     caption: l10n.s.shelfShortcutFinderSelectionCaption) {
                             Toggle(l10n.s.shelfShortcutFinderSelection, isOn: $shortcutAddsFinderSelection)
                                 .labelsHidden()
-                                .toggleStyle(.switch)
+                                .toggleStyle(VorssaintCompactSwitchStyle())
                         }
                         .padding(.leading, settingsRowTextInset)
                         if shortcutAddsFinderSelection {
@@ -105,7 +105,7 @@ struct ShelfSettings: View {
                                 caption: l10n.s.shelfShakeCaption) {
                         Toggle(l10n.s.shelfShakeToggle, isOn: $shake)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: shake) { _, _ in
                                 ShelfService.shared.syncDragMonitor()
                             }
@@ -115,7 +115,7 @@ struct ShelfSettings: View {
                                     ? l10n.s.shelfDropZoneCaptionTopCenter : l10n.s.shelfDropZoneCaption) {
                         Toggle(l10n.s.shelfDropZoneToggle, isOn: $dropZone)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: dropZone) { _, _ in
                                 ShelfService.shared.syncDragMonitor()
                             }
@@ -143,7 +143,7 @@ struct ShelfSettings: View {
                                 caption: l10n.s.shelfEdgeCaption) {
                         Toggle(l10n.s.shelfEdgeToggle, isOn: $edgeDrag)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: edgeDrag) { _, _ in
                                 ShelfService.shared.syncDragMonitor()
                             }
@@ -163,19 +163,19 @@ struct ShelfSettings: View {
                                 caption: l10n.s.shelfCloseAfterDropCaption) {
                         Toggle(l10n.s.shelfCloseAfterDrop, isOn: $closeAfterDrop)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                     }
                     SettingsRow(symbol: "trash", title: l10n.s.shelfRemoveAfterDrop,
                                 caption: l10n.s.shelfRemoveAfterDropCaption) {
                         Toggle(l10n.s.shelfRemoveAfterDrop, isOn: $removeAfterDrop)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                     }
                     SettingsRow(symbol: "sparkles", title: l10n.s.shelfClearOnClose,
                                 caption: l10n.s.shelfClearOnCloseCaption) {
                         Toggle(l10n.s.shelfClearOnClose, isOn: $clearOnClose)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                     }
                     SettingsRow(symbol: "camera.viewfinder",
                                 title: l10n.language == .ru ? "Перехватывать системные скриншоты" : "Catch system screenshots",
@@ -185,7 +185,7 @@ struct ShelfSettings: View {
                         Toggle(l10n.language == .ru ? "Перехватывать системные скриншоты" : "Catch system screenshots",
                                isOn: $catchSystemScreenshots)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: catchSystemScreenshots) { _, _ in
                                 ShelfService.shared.syncDragMonitor()
                             }

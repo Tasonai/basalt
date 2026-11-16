@@ -73,7 +73,7 @@ struct NotchMascotSettings: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
-            Toggle(text.title, isOn: $enabled).labelsHidden().toggleStyle(.switch)
+            Toggle(text.title, isOn: $enabled).labelsHidden().toggleStyle(VorssaintCompactSwitchStyle())
                 .accessibilityLabel(text.title)
         }
     }
@@ -255,7 +255,7 @@ struct NotchMascotSettings: View {
     /// An option with its icon, a line about it and a switch, like the rest of Settings.
     private func switchRow(_ symbol: String, _ title: String, caption: String? = nil, isOn: Binding<Bool>) -> some View {
         SettingsRow(symbol: symbol, title: title, caption: caption) {
-            Toggle(title, isOn: isOn).labelsHidden().toggleStyle(.switch)
+            Toggle(title, isOn: isOn).labelsHidden().toggleStyle(VorssaintCompactSwitchStyle())
         }
     }
 }

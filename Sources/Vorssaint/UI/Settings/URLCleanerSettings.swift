@@ -193,7 +193,7 @@ struct URLCleanerSettings: View {
             ForEach(group.entries) { entry in
                 HStack(spacing: 4) {
                     Toggle(entry.name, isOn: enabledBinding(site: group.site, name: entry.name))
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(VorssaintCheckPillStyle())
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if !entry.isBuiltIn {

@@ -25,7 +25,7 @@ struct KeyboardDebounceSettings: View {
                 SettingsRow(symbol: "keyboard", title: l10n.s.keyDebounceEnable) {
                     Toggle(l10n.s.keyDebounceEnable, isOn: $enabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: enabled) { _, value in
                             KeyboardDebounceService.shared.syncWithPreferences()
                             guard value, !permissions.accessibility else { return }

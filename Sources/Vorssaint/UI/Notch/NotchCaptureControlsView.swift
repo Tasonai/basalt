@@ -106,7 +106,7 @@ private struct NotchRecordingAudioOptions: View {
             Toggle(FeatureStrings.recorder(l10n.language).microphoneTrackLabel, isOn: $options.microphone)
                 .focused(focusedControl, equals: .microphone)
         }
-        .toggleStyle(.switch)
+        .toggleStyle(VorssaintCompactSwitchStyle())
         .tint(.green)
         .controlSize(.small)
         .fixedSize()

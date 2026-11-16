@@ -205,7 +205,7 @@ struct UninstallerView: View {
 
     private func row(_ item: AppUninstaller.Leftover) -> some View {
         HStack(spacing: 10) {
-            Toggle("", isOn: includeBinding(item)).labelsHidden().toggleStyle(.checkbox)
+            Toggle("", isOn: includeBinding(item)).labelsHidden().toggleStyle(VorssaintCheckPillStyle())
             Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
                 .resizable().frame(width: 22, height: 22)
             VStack(alignment: .leading, spacing: 1) {

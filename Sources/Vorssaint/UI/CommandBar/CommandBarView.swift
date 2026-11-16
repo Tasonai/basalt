@@ -1172,7 +1172,7 @@ struct CommandBarView: View {
         HStack(spacing: 7) {
             Toggle(item.name, isOn: uninstallIncludeBinding(item))
                 .labelsHidden()
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintCheckPillStyle())
                 .focusable(interactions: .edit)
                 .onKeyPress(.space) {
                     let included = uninstaller.items.first(where: { $0.id == item.id })?.include ?? false

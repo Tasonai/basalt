@@ -1661,11 +1661,11 @@ struct ScreenshotEditorView: View {
             Image(systemName: "aqi.low")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-            Slider(value: Binding(get: { Double(model.blurLevel) },
-                                  set: { model.blurLevel = Int($0.rounded()) }),
-                   in: Double(levels.lowerBound)...Double(levels.upperBound),
-                   step: 1)
-                .controlSize(.mini)
+            VorssaintDetentSlider(value: Binding(get: { Double(model.blurLevel) },
+                                                 set: { model.blurLevel = Int($0.rounded()) }),
+                                  in: Double(levels.lowerBound)...Double(levels.upperBound),
+                                  step: 1,
+                                  tone: .tools)
                 .frame(width: 84)
             Image(systemName: "aqi.high")
                 .font(.system(size: 11, weight: .medium))

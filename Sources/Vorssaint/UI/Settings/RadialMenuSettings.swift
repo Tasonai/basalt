@@ -67,7 +67,7 @@ struct RadialMenuSettings: View {
                 SettingsRow(symbol: "circle.grid.cross", title: text.enableLabel, caption: text.enableCaption) {
                     Toggle(text.enableLabel, isOn: $enabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 if service.registrationFailed {
                     Text(l10n.s.shortcutInvalid)
@@ -404,7 +404,7 @@ struct RadialMenuSettings: View {
                 }
             ))
             .labelsHidden()
-            .toggleStyle(.switch)
+            .toggleStyle(VorssaintCompactSwitchStyle())
         }
         .disabled(!enabled)
 

@@ -88,7 +88,7 @@ struct SwitcherSettings: View {
             .frame(maxWidth: .infinity)
             .padding(22)
         }
-        .toggleStyle(.switch)
+        .toggleStyle(VorssaintCompactSwitchStyle())
         .observesSecureInput(isActive: switcherReplacesSystemShortcuts)
     }
 
@@ -211,11 +211,14 @@ struct SwitcherSettings: View {
             SettingsRow(symbol: "timer", title: l10n.s.switcherAppearanceDelay,
                         caption: l10n.s.switcherAppearanceDelayCaption) {
                 HStack(spacing: 8) {
-                    Slider(value: switcherAppearanceDelayBinding,
-                           in: Double(SwitcherSupport.appearanceDelayMillisecondsRange.lowerBound)
-                               ... Double(SwitcherSupport.appearanceDelayMillisecondsRange.upperBound),
-                           step: 25)
-                        .frame(width: 140)
+                    VorssaintDetentSlider(
+                        value: switcherAppearanceDelayBinding,
+                        in: Double(SwitcherSupport.appearanceDelayMillisecondsRange.lowerBound)
+                            ... Double(SwitcherSupport.appearanceDelayMillisecondsRange.upperBound),
+                        step: 25,
+                        tone: .windowsDock
+                    )
+                    .frame(width: 140)
                     Text("\(sanitizedSwitcherAppearanceDelay) ms")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -225,12 +228,15 @@ struct SwitcherSettings: View {
             SettingsRow(symbol: "square.grid.3x2", title: l10n.s.switcherMaxColumns,
                         caption: l10n.s.switcherMaxColumnsCaption) {
                 HStack(spacing: 8) {
-                    Slider(value: switcherMaxColumnsBinding,
-                           in: Double(SwitcherSupport.maxColumnsRange.lowerBound - 1)
-                               ... Double(SwitcherSupport.maxColumnsRange.upperBound),
-                           step: 1)
-                        .frame(width: 140)
-                        .accessibilityValue(switcherMaxColumnsLabel)
+                    VorssaintDetentSlider(
+                        value: switcherMaxColumnsBinding,
+                        in: Double(SwitcherSupport.maxColumnsRange.lowerBound - 1)
+                            ... Double(SwitcherSupport.maxColumnsRange.upperBound),
+                        step: 1,
+                        tone: .windowsDock
+                    )
+                    .frame(width: 140)
+                    .accessibilityValue(switcherMaxColumnsLabel)
                     Text(switcherMaxColumnsLabel)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)

@@ -119,13 +119,15 @@ struct HomebrewSettings: View {
             }
 
             HStack(spacing: 8) {
-                Picker("", selection: $installedFilter) {
-                    Text("\(l10n.s.homebrewAll) \(homebrew.installed.count)").tag(HomebrewInstalledFilter.all)
-                    Text("\(l10n.s.homebrewCasks) \(installedCaskCount)").tag(HomebrewInstalledFilter.cask)
-                    Text("\(l10n.s.homebrewFormulas) \(installedFormulaCount)").tag(HomebrewInstalledFilter.formula)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 300)
+                VorssaintSegmentedTabs(
+                    selection: $installedFilter,
+                    options: [
+                        .init(.all, title: "\(l10n.s.homebrewAll) \(homebrew.installed.count)"),
+                        .init(.cask, title: "\(l10n.s.homebrewCasks) \(installedCaskCount)"),
+                        .init(.formula, title: "\(l10n.s.homebrewFormulas) \(installedFormulaCount)"),
+                    ],
+                    tone: .tools
+                )
                 outdatedSummary
             }
             HStack {

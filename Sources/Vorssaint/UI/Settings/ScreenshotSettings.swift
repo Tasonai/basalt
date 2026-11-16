@@ -92,7 +92,7 @@ struct ScreenshotCaptureSettings: View {
                             title: strings.fullScreenShortcutTitle) {
                     Toggle(strings.fullScreenShortcutTitle, isOn: $fullScreenShortcutEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: fullScreenShortcutEnabled) { _, _ in
                             ScreenshotService.shared.syncWithPreferences()
                         }
@@ -112,7 +112,7 @@ struct ScreenshotCaptureSettings: View {
                 SettingsRow(symbol: "photo.on.rectangle", title: strings.editLastCapture) {
                     Toggle(strings.editLastCapture, isOn: $lastCaptureShortcutEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: lastCaptureShortcutEnabled) { _, _ in
                             ScreenshotService.shared.syncWithPreferences()
                         }
@@ -133,7 +133,7 @@ struct ScreenshotCaptureSettings: View {
                 SettingsRow(symbol: "doc.on.clipboard", title: strings.editClipboardImage) {
                     Toggle(strings.editClipboardImage, isOn: $clipboardShortcutEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: clipboardShortcutEnabled) { _, _ in
                             ScreenshotService.shared.syncWithPreferences()
                         }
@@ -162,19 +162,19 @@ struct ScreenshotCaptureSettings: View {
                             caption: strings.freezeCaption) {
                     Toggle(strings.freezeToggle, isOn: $freeze)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 SettingsRow(symbol: "eye.slash", title: strings.hideVorssaintWindowsToggle) {
                     Toggle(strings.hideVorssaintWindowsToggle, isOn: $hideVorssaintWindows)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 SettingsRow(symbol: "desktopcomputer",
                             title: OverhaulStrings.wave2(l10n.language).hideDesktopIconsLabel) {
                     Toggle(OverhaulStrings.wave2(l10n.language).hideDesktopIconsLabel,
                            isOn: $hideDesktopIcons)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 Divider()
                 SettingsChoiceRow(symbol: "timer", title: strings.delayLabel, selection: $delay) {
@@ -190,18 +190,18 @@ struct ScreenshotCaptureSettings: View {
                 SettingsRow(symbol: "cursorarrow", title: strings.pointerToggle) {
                     Toggle(strings.pointerToggle, isOn: $includePointer)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 SettingsRow(symbol: "rectangle.dashed", title: strings.lastRegionToggle) {
                     Toggle(strings.lastRegionToggle, isOn: $showLastRegion)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 SettingsRow(symbol: "macwindow", title: strings.highlightWindowsToggle,
                             caption: strings.highlightWindowsCaption) {
                     Toggle(strings.highlightWindowsToggle, isOn: $highlightWindows)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 Divider()
                 DisclosureGroup {
@@ -209,12 +209,12 @@ struct ScreenshotCaptureSettings: View {
                         SettingsRow(symbol: "magnifyingglass", title: strings.loupeStartsOnToggle) {
                             Toggle(strings.loupeStartsOnToggle, isOn: $loupeStartsOn)
                                 .labelsHidden()
-                                .toggleStyle(.switch)
+                                .toggleStyle(VorssaintCompactSwitchStyle())
                         }
                         SettingsRow(symbol: "plus.magnifyingglass", title: strings.loupeRememberZoomToggle) {
                             Toggle(strings.loupeRememberZoomToggle, isOn: $rememberLoupeZoom)
                                 .labelsHidden()
-                                .toggleStyle(.switch)
+                                .toggleStyle(VorssaintCompactSwitchStyle())
                         }
                         if !rememberLoupeZoom {
                             SettingsMenuRow(symbol: "viewfinder", title: strings.loupeDefaultZoomLabel,
@@ -252,19 +252,19 @@ struct ScreenshotCaptureSettings: View {
                             caption: strings.autoCopyCaption) {
                     Toggle(strings.autoCopyToggle, isOn: autoCopyBinding)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 SettingsRow(symbol: "photo", title: strings.copyImageOnlyToggle,
                             caption: strings.copyImageOnlyCaption) {
                     Toggle(strings.copyImageOnlyToggle, isOn: $copyImageOnly)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 SettingsRow(symbol: "tray.and.arrow.down", title: strings.addToShelfToggle,
                             caption: strings.addToShelfCaption) {
                     Toggle(strings.addToShelfToggle, isOn: addToShelfBinding)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .disabled(!shelfIsOn)
                 }
                 Divider()
@@ -276,7 +276,7 @@ struct ScreenshotCaptureSettings: View {
                             caption: strings.downscaleCaption) {
                     Toggle(strings.downscaleToggle, isOn: $downscale)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
             }
 
@@ -291,7 +291,7 @@ struct ScreenshotCaptureSettings: View {
                             caption: sharingEnabled ? strings.shareCaption : nil) {
                     Toggle(strings.shareEnabledToggle, isOn: $sharingEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: sharingEnabled) { _, _ in service.syncWithPreferences() }
                 }
                 if sharingEnabled {
@@ -299,7 +299,7 @@ struct ScreenshotCaptureSettings: View {
                     SettingsRow(symbol: "keyboard", title: strings.uploadLastCapture) {
                         Toggle(strings.uploadLastCapture, isOn: $uploadShortcutEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: uploadShortcutEnabled) { _, _ in service.syncWithPreferences() }
                     }
                     ShortcutPreferenceRow(role: .screenshotUpload,
@@ -534,7 +534,7 @@ struct ScreenshotCaptureSettings: View {
                 SettingsRow(symbol: "photo", title: strings.confirmationPreviewToggle) {
                     Toggle(strings.confirmationPreviewToggle, isOn: $previewEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 if previewEnabled {
                     SettingsMenuRow(symbol: "timer", title: strings.confirmationPreviewDurationLabel,
@@ -571,7 +571,7 @@ struct ScreenshotCaptureSettings: View {
                     caption: strings.previewFocusCaption) {
             Toggle(strings.previewFocusToggle, isOn: $previewTakesFocus)
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
         }
     }
 

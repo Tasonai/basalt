@@ -18,7 +18,7 @@ struct DisplayBrightnessShortcutControls: View {
                             caption: strings.displayBrightnessShortcutCaption) {
                     Toggle(strings.displayBrightnessShortcuts, isOn: $enabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
             } else {
                 Toggle(isOn: $enabled) {

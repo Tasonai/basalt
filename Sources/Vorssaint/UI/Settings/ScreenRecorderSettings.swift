@@ -89,13 +89,13 @@ struct ScreenRecordingCaptureSettings: View {
                             caption: strings.systemAudioCaption) {
                     Toggle(strings.systemAudioToggle, isOn: $systemAudio)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 SettingsRow(symbol: "mic", title: strings.microphoneToggle,
                             caption: strings.microphoneCaption) {
                     Toggle(strings.microphoneToggle, isOn: $microphone)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: microphone) { _, enabled in
                             if enabled, permissions.microphone == .undetermined {
                                 permissions.requestMicrophone()
@@ -111,13 +111,13 @@ struct ScreenRecordingCaptureSettings: View {
                             caption: strings.openEditorCaption) {
                     Toggle(strings.openEditorToggle, isOn: $opensEditor)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 SettingsRow(symbol: "video", title: strings.automaticZoomToggle,
                             caption: strings.automaticZoomCaption) {
                     Toggle(strings.automaticZoomToggle, isOn: $automaticZoom)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
             }
 
@@ -168,7 +168,7 @@ struct ScreenRecordingCaptureSettings: View {
                             caption: sharingEnabled ? shareStrings.caption : nil) {
                     Toggle(screenshotStrings.shareEnabledToggle, isOn: $sharingEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 Divider()
                 Button {

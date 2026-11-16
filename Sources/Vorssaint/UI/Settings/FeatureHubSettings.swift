@@ -70,12 +70,14 @@ struct FeatureHubSettings: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Picker(hub.pageTitle, selection: $tab) {
-                        Text(hub.tabFeatures).tag(Tab.features)
-                        Text(hub.tabPermissions).tag(Tab.permissions)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    VorssaintSegmentedTabs(
+                        selection: $tab,
+                        options: [
+                            .init(.features, title: hub.tabFeatures, symbol: "square.grid.2x2"),
+                            .init(.permissions, title: hub.tabPermissions, symbol: "hand.raised"),
+                        ],
+                        tone: .brand
+                    )
                     // The restart notice comes first on either tab.
                     if features.needsRestartToUnload {
                         restartCard
@@ -333,7 +335,7 @@ struct FeatureHubSettings: View {
                             }
                             Toggle("", isOn: $whatsAppDownloadsEnabled)
                                 .labelsHidden()
-                                .toggleStyle(.switch)
+                                .toggleStyle(VorssaintCompactSwitchStyle())
                         }
                     }
                 }

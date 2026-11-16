@@ -319,7 +319,7 @@ private struct NotchWatchSetupView: View {
         if !enabled {
             if AppFeature.notchWatch.isAvailable {
                 Toggle(text.title, isOn: $enabled)
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: enabled) { NotchService.shared.syncWithPreferences() }
             }
         } else if !permissions.screenRecording {

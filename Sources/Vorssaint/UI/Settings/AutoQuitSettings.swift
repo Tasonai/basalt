@@ -22,7 +22,7 @@ struct AutoQuitSettings: View {
                             caption: l10n.s.autoQuitEnableCaption) {
                     Toggle(l10n.s.autoQuitEnable, isOn: $enabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: enabled) { _, _ in
                             AutoQuitService.shared.syncWithPreferences()
                         }

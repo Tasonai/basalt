@@ -54,7 +54,7 @@ struct WindowLayoutSettings: View {
                     SettingsRow(symbol: "rectangle.3.group", title: text.showInPanel) {
                         Toggle(text.showInPanel, isOn: $showInPanel)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                     }
                     Label(text.permissionCaption, systemImage: "hand.raised")
                         .font(.caption)
@@ -85,7 +85,7 @@ struct WindowLayoutSettings: View {
                         Toggle(WindowStageManagerStrings.localized(l10n.language).title,
                                isOn: $reserveStageManagerSpace)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                     }
                 }
             }
@@ -97,7 +97,7 @@ struct WindowLayoutSettings: View {
                                 caption: text.edgeSnapCaption) {
                         Toggle(text.edgeSnapEnable, isOn: $edgeSnapEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: edgeSnapEnabled) { _, _ in
                                 WindowLayoutService.shared.syncWithPreferences()
                             }
@@ -135,7 +135,7 @@ struct WindowLayoutSettings: View {
                                 caption: text.gestureCaption) {
                         Toggle(text.gestureEnable, isOn: $gestureEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: gestureEnabled) { _, _ in
                                 WindowLayoutService.shared.syncWithPreferences()
                             }
@@ -164,7 +164,7 @@ struct WindowLayoutSettings: View {
                                 caption: titlebarGestureHelpCaption) {
                         Toggle(v2Strings.titlebarGesturesEnable, isOn: $titlebarScrollGesturesEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: titlebarScrollGesturesEnabled) { _, _ in
                                 TitlebarScrollTap.shared.syncWithPreferences()
                             }
@@ -189,7 +189,7 @@ struct WindowLayoutSettings: View {
                     SettingsRow(symbol: "keyboard", title: text.shortcuts, caption: text.shortcutsCaption) {
                         Toggle(text.shortcuts, isOn: $shortcutsEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: shortcutsEnabled) { _, _ in
                                 WindowLayoutService.shared.syncWithPreferences()
                             }
@@ -207,7 +207,7 @@ struct WindowLayoutSettings: View {
                         Toggle(WindowDirectionalStrings.localized(l10n.language).title,
                                isOn: $directionalEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: directionalEnabled) { _, _ in service.syncWithPreferences() }
                     }
                     if directionalEnabled {
@@ -246,7 +246,7 @@ struct WindowLayoutSettings: View {
                         Toggle(PointerDisplayStrings.localized(l10n.language).title,
                                isOn: $pointerDisplayEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: pointerDisplayEnabled) { _, _ in
                                 // Also syncs the pointer key, and starts or stops
                                 // watching app switches for Ignore apps.
@@ -275,7 +275,7 @@ struct WindowLayoutSettings: View {
                                 caption: l10n.s.dockClickCycleWindowsCaption) {
                         Toggle(l10n.s.dockClickCycleWindows, isOn: $dockClickCycleWindows)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: dockClickCycleWindows) { _, _ in
                                 DockClickService.shared.syncWithPreferences()
                             }
@@ -324,7 +324,7 @@ struct WindowLayoutSettings: View {
                         caption: l10n.s.windowMaximizeCaption) {
                 Toggle(l10n.s.windowMaximizeName, isOn: $maximizeEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: maximizeEnabled) { _, _ in
                         WindowMaximizer.shared.syncWithPreferences()
                     }
@@ -385,15 +385,17 @@ struct WindowLayoutSettings: View {
             HStack(spacing: 10) {
                 Text(wave4Strings.customSnapGridLabel)
                 Spacer()
-                Picker("", selection: $customGridColumns) {
-                    Text("2x2").tag(2)
-                    Text("3x2").tag(3)
-                    Text("4x2").tag(4)
-                    Text("6x2").tag(6)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 190)
+                VorssaintSegmentedTabs(
+                    selection: $customGridColumns,
+                    options: [
+                        .init(2, title: "2x2"),
+                        .init(3, title: "3x2"),
+                        .init(4, title: "4x2"),
+                        .init(6, title: "6x2"),
+                    ],
+                    tone: .windowsDock
+                )
+                .fixedSize()
                 Button {
                     CustomSnapGridOverlayController.shared.show()
                 } label: {
@@ -509,10 +511,10 @@ struct WindowLayoutSettings: View {
         HStack(spacing: 12) {
             Text(text.marginPerEdge)
                 .foregroundStyle(.secondary)
-            Slider(value: Binding(
+            VorssaintDetentSlider(value: Binding(
                 get: { WindowLayoutMargin.sanitizedPercent(marginPercent) },
                 set: { marginPercent = WindowLayoutMargin.sanitizedPercent($0) }
-            ), in: WindowLayoutMargin.percentRange, step: 1)
+            ), in: WindowLayoutMargin.percentRange, step: 1, detent: 0, tone: .windowsDock)
             Text(WindowLayoutMargin.sanitizedPercent(marginPercent) / 100,
                  format: .percent.precision(.fractionLength(0)))
                 .font(.caption.monospacedDigit())
@@ -571,7 +573,7 @@ struct WindowLayoutSettings: View {
                         caption: text.sideRepeatCycleCaption) {
                 Toggle(text.sideRepeatCycle, isOn: $sideRepeatCyclesThirds)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
             }
         }
         actionSection(text.thirds, Self.thirdActions)

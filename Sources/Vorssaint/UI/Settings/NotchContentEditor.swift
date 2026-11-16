@@ -292,7 +292,7 @@ struct NotchSectionListRow: View {
                 // A section whose feature is off cannot show, whatever was chosen.
                 Toggle(title, isOn: available ? $included : .constant(false))
                     .labelsHidden()
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(VorssaintCheckPillStyle())
                     .disabled(!available)
                 Button(action: select) {
                     HStack(spacing: 8) {

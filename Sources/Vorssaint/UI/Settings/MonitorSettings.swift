@@ -71,7 +71,7 @@ struct MonitorSettings: View {
                 .padding(22)
             }
         }
-        .toggleStyle(.switch)
+        .toggleStyle(VorssaintCompactSwitchStyle())
         .onAppear {
             interval = Defaults.sanitizedMonitorInterval(interval)
             metricAppearance = Defaults.sanitizedMenuBarMetricAppearance(metricAppearance)
@@ -140,12 +140,14 @@ struct MonitorSettings: View {
             }
             Divider()
             SettingsRow(symbol: "arrow.left.and.right", title: l10n.s.menuBarSpacingLabel) {
-                Picker(l10n.s.menuBarSpacingLabel, selection: $metricSpacing) {
-                    Text(l10n.s.menuBarSpacingStandard).tag("standard")
-                    Text(l10n.s.menuBarSpacingCompact).tag("compact")
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                VorssaintSegmentedTabs(
+                    selection: $metricSpacing,
+                    options: [
+                        .init("standard", title: l10n.s.menuBarSpacingStandard),
+                        .init("compact", title: l10n.s.menuBarSpacingCompact),
+                    ],
+                    tone: .monitor
+                )
                 .fixedSize()
             }
             SettingsRow(symbol: "eye.slash", title: l10n.s.menuBarHideIconToggle,
@@ -170,34 +172,40 @@ struct MonitorSettings: View {
                 }
             }
             SettingsRow(symbol: "thermometer.medium", title: l10n.s.temperatures) {
-                Picker(l10n.s.temperatures, selection: $temperatureUnit) {
-                    Text("°C").tag(TemperatureUnit.celsius.rawValue)
-                    Text("°F").tag(TemperatureUnit.fahrenheit.rawValue)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                VorssaintSegmentedTabs(
+                    selection: $temperatureUnit,
+                    options: [
+                        .init(TemperatureUnit.celsius.rawValue, title: "°C"),
+                        .init(TemperatureUnit.fahrenheit.rawValue, title: "°F"),
+                    ],
+                    tone: .monitor
+                )
                 .fixedSize()
             }
             if AppFeature.monitorNetwork.isAvailable {
                 let title = FeatureStrings.monitorLayout(l10n.language).networkSpeedUnit
                 SettingsRow(symbol: "network", title: title) {
-                    Picker(title, selection: $networkSpeedUnit) {
-                        Text("MB/s").tag(NetworkSpeedUnit.bytes)
-                        Text("Mbps").tag(NetworkSpeedUnit.bits)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    VorssaintSegmentedTabs(
+                        selection: $networkSpeedUnit,
+                        options: [
+                            .init(.bytes, title: "MB/s"),
+                            .init(.bits, title: "Mbps"),
+                        ],
+                        tone: .monitor
+                    )
                     .fixedSize()
                 }
             }
             if AppFeature.monitorMemory.isAvailable {
                 SettingsRow(symbol: "memorychip", title: l10n.s.monitorMemoryMetricLabel) {
-                    Picker(l10n.s.monitorMemoryMetricLabel, selection: $memoryMetric) {
-                        Text(l10n.s.memoryMetricUsed).tag("used")
-                        Text(l10n.s.memoryMetricApp).tag("app")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    VorssaintSegmentedTabs(
+                        selection: $memoryMetric,
+                        options: [
+                            .init("used", title: l10n.s.memoryMetricUsed),
+                            .init("app", title: l10n.s.memoryMetricApp),
+                        ],
+                        tone: .monitor
+                    )
                     .fixedSize()
                 }
             }

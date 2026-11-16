@@ -59,7 +59,7 @@ struct ClipboardSettings: View {
                     SettingsRow(symbol: "doc.on.clipboard", title: text.enable, caption: text.caption) {
                         Toggle(text.enable, isOn: $enabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: enabled) { _, _ in
                                 ClipboardHistoryService.shared.syncWithPreferences()
                             }
@@ -86,14 +86,14 @@ struct ClipboardSettings: View {
                                 caption: text.includeImagesFilesCaption) {
                         Toggle(text.includeImagesFiles, isOn: $includeImagesFiles)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .disabled(!enabled)
                     }
                     SettingsRow(symbol: "shield.lefthalf.filled", title: text.skipSensitive,
                                 caption: text.skipSensitiveCaption) {
                         Toggle(text.skipSensitive, isOn: $skipSensitive)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .disabled(!enabled)
                     }
                     Divider()
@@ -127,7 +127,7 @@ struct ClipboardSettings: View {
                     SettingsRow(symbol: "sidebar.left", title: text.showInPanel) {
                         Toggle(text.showInPanel, isOn: $showInPanel)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                     }
                 }
 
@@ -140,7 +140,7 @@ struct ClipboardSettings: View {
                                 caption: text.pasteImageAsFileCaption) {
                         Toggle(text.pasteImageAsFile, isOn: $pasteImageAsFile)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: pasteImageAsFile) { _, _ in
                                 FinderCutPaste.shared.syncWithPreferences()
                             }
@@ -158,7 +158,7 @@ struct ClipboardSettings: View {
                                 caption: l10n.s.pastePlainCaption) {
                         Toggle(l10n.s.pastePlainName, isOn: $pastePlainEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: pastePlainEnabled) { _, _ in
                                 PastePlainService.shared.syncWithPreferences()
                             }
@@ -227,7 +227,7 @@ struct ClipboardSettings: View {
             SettingsRow(symbol: "keyboard", title: text.shortcut, caption: text.shortcutCaption) {
                 Toggle(text.shortcut, isOn: $shortcutEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: shortcutEnabled) { _, _ in
                         ClipboardHistoryService.shared.syncHotkey()
                     }
@@ -256,7 +256,7 @@ struct ClipboardSettings: View {
             SettingsRow(symbol: "app.badge", title: text.showSourceAppIconsInList) {
                 Toggle(text.showSourceAppIconsInList, isOn: $showSourceAppIcons)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
             }
             Divider()
             HStack {
@@ -275,7 +275,7 @@ struct ClipboardSettings: View {
                         caption: text.menuBarPreviewCaption) {
                 Toggle(text.menuBarPreview, isOn: $menuBarPreview)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .disabled(!enabled)
             }
             SettingsRow(symbol: "textformat", title: text.menuBarPreviewLength) {
@@ -317,7 +317,7 @@ struct ClipboardSettings: View {
                         .foregroundStyle(.secondary)
                     Toggle(text.autoClearEnable, isOn: $autoClearOnDelay)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: autoClearOnDelay) { _, _ in
                             ClipboardAutoClearService.shared.syncWithPreferences()
                         }
@@ -326,7 +326,7 @@ struct ClipboardSettings: View {
             SettingsRow(symbol: "moon.zzz", title: text.autoClearOnSleep) {
                 Toggle(text.autoClearOnSleep, isOn: $autoClearOnSleep)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: autoClearOnSleep) { _, _ in
                         ClipboardAutoClearService.shared.syncWithPreferences()
                     }
@@ -334,7 +334,7 @@ struct ClipboardSettings: View {
             SettingsRow(symbol: "display", title: text.autoClearOnDisplaySleep) {
                 Toggle(text.autoClearOnDisplaySleep, isOn: $autoClearOnDisplaySleep)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: autoClearOnDisplaySleep) { _, _ in
                         ClipboardAutoClearService.shared.syncWithPreferences()
                     }
@@ -342,7 +342,7 @@ struct ClipboardSettings: View {
             SettingsRow(symbol: "lock", title: text.autoClearOnScreenLock) {
                 Toggle(text.autoClearOnScreenLock, isOn: $autoClearOnScreenLock)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: autoClearOnScreenLock) { _, _ in
                         ClipboardAutoClearService.shared.syncWithPreferences()
                     }

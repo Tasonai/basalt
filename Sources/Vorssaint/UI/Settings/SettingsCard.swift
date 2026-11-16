@@ -139,7 +139,10 @@ struct SettingsFeatureSwitchRow: View {
         let usable = installed && enabled
         VStack(alignment: .leading, spacing: 6) {
             SettingsRow(symbol: symbol, title: title, caption: usable ? caption : nil) {
-                Toggle(title, isOn: usable ? $isOn : .constant(false)).labelsHidden().toggleStyle(.switch)
+                Toggle(title, isOn: usable ? $isOn : .constant(false))
+                    .labelsHidden()
+                    // AppKit `NSSwitch` contract verified by `NotchSettingsChoiceTests`.
+                    .toggleStyle(.switch)
             }
             .disabled(!usable)
             .saturation(usable ? 1 : 0)
@@ -252,7 +255,7 @@ struct TrailingSwitchToggleStyle: ToggleStyle {
             Spacer(minLength: 12)
             Toggle(isOn: configuration.$isOn) { EmptyView() }
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
         }
     }
 }

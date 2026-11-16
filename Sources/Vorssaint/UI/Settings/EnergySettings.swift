@@ -72,7 +72,7 @@ struct EnergySettings: View {
         }
         // Shared subviews draw plain toggles; outside a Form those would be
         // checkboxes, so the whole page asks for switches.
-        .toggleStyle(.switch)
+        .toggleStyle(VorssaintCompactSwitchStyle())
         .onAppear {
             defaultDuration = Defaults.sanitizedDefaultDuration(defaultDuration)
             batteryLimit = Defaults.sanitizedBatteryLimit(batteryLimit)
@@ -397,13 +397,16 @@ struct EnergySettings: View {
                 .truncationMode(.middle)
                 .frame(minWidth: 80, alignment: .leading)
             if display.isActive, display.method != nil {
-                Slider(value: Binding(get: { display.brightness },
-                                      set: { BrightnessService.shared.setBrightness(
-                                          $0, for: display.id,
-                                          showOSD: brightnessOSDEnabled) }),
-                       in: 0...1)
-                    .disabled(brightness.isDisplayPending(display.id))
-                    .accessibilityLabel(display.name)
+                VorssaintDetentSlider(
+                    value: Binding(get: { display.brightness },
+                                   set: { BrightnessService.shared.setBrightness(
+                                       $0, for: display.id,
+                                       showOSD: brightnessOSDEnabled) }),
+                    in: 0...1,
+                    tone: .energyDisplay
+                )
+                .disabled(brightness.isDisplayPending(display.id))
+                .accessibilityLabel(display.name)
                 Text("\(Int((display.brightness * 100).rounded()))%")
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -437,7 +440,7 @@ struct EnergySettings: View {
                 if extraBrightnessEnabled {
                     HStack(spacing: 12) {
                         Text(l10n.s.extraBrightnessLevelLabel)
-                        Slider(value: extraBrightnessLevelBinding, in: 10...100, step: 5)
+                        VorssaintDetentSlider(value: extraBrightnessLevelBinding, in: 10...100, step: 5, tone: .energyDisplay)
                         Text("\(extraBrightnessLevel)%")
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(.secondary)

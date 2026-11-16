@@ -203,13 +203,13 @@ private struct ScreenTextCaptureSettings: View {
                         caption: l10n.s.ocrRemoveLineBreaksCaption) {
                 Toggle(l10n.s.ocrRemoveLineBreaksToggle, isOn: $removesLineBreaks)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
             }
             SettingsRow(symbol: "qrcode", title: l10n.s.ocrQRToggle,
                         caption: l10n.s.ocrQRCaption) {
                 Toggle(l10n.s.ocrQRToggle, isOn: $detectsQRCodes)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
             }
             if !permissions.screenRecording {
                 Divider()
@@ -245,7 +245,7 @@ private struct ColorCaptureSettings: View {
                 SettingsRow(symbol: "number", title: l10n.s.colorPickerBareHexToggle) {
                     Toggle(l10n.s.colorPickerBareHexToggle, isOn: $usesBareHex)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
             }
         }

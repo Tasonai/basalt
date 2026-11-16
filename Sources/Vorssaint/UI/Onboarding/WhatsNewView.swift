@@ -49,7 +49,7 @@ struct UpdatePreviewView: View {
 
             HStack(spacing: 12) {
                 Toggle(FeatureStrings.whatsNew(l10n.language).skipPreviewCheckbox, isOn: $skipNextTime)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(VorssaintCheckPillStyle())
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 Button(l10n.s.uninstallerCancel) { onCancel() }

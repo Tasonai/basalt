@@ -93,14 +93,14 @@ struct KillProcessView: View {
 
             HStack(spacing: 18) {
                 Toggle(strings.groupToggle, isOn: groupBinding)
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .controlSize(.mini)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .help(strings.groupCaption)
 
                 Toggle(strings.commandBarToggle, isOn: $commandBarEnabled)
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .controlSize(.mini)
                     .font(.caption)
                     .foregroundStyle(.secondary)

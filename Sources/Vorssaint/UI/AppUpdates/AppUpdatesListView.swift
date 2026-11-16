@@ -336,7 +336,7 @@ struct AppUpdatesListView: View {
                     EmptyView()
                 }
                 .labelsHidden()
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintCheckPillStyle())
                 .accessibilityLabel(item.name)
             } else {
                 Color.clear

@@ -907,7 +907,7 @@ struct MixerOptionsControls: View {
             Spacer(minLength: 6)
             Toggle(label, isOn: $hideInactiveApps)
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.mini)
                 .accessibilityLabel(label)
         }

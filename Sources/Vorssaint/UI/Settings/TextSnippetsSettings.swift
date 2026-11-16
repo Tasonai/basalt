@@ -31,7 +31,7 @@ struct TextSnippetsSettings: View {
                 SettingsRow(symbol: "text.append", title: text.enable, caption: text.enableCaption) {
                     Toggle(text.enable, isOn: $enabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: enabled) { _, _ in
                             TextSnippetService.shared.syncWithPreferences()
                         }
@@ -46,7 +46,7 @@ struct TextSnippetsSettings: View {
                                 caption: text.soundCaption) {
                         Toggle(text.soundToggle, isOn: $soundEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: soundEnabled) { _, _ in
                                 TextSnippetService.shared.syncExpansionSound()
                             }
@@ -82,7 +82,7 @@ struct TextSnippetsSettings: View {
                             caption: text.libraryCaption) {
                     Toggle(text.libraryToggle, isOn: $libraryEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: libraryEnabled) { _, _ in
                             SnippetLibraryService.shared.syncWithPreferences()
                         }
@@ -228,7 +228,7 @@ private struct SnippetRow: View {
                 .foregroundStyle(.tertiary)
             Toggle("", isOn: Binding(get: { snippet.enabled }, set: toggle))
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.small)
         }
         .padding(.vertical, 1)

@@ -69,12 +69,15 @@ struct DateVariableBuilder: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker(text.dateTimeTypeLabel, selection: $kind) {
-                Text(text.dateTimeKindDate).tag(TextSnippetSupport.DateVariableKind.date)
-                Text(text.dateTimeKindTime).tag(TextSnippetSupport.DateVariableKind.time)
-                Text(text.dateTimeKindDateTime).tag(TextSnippetSupport.DateVariableKind.datetime)
-            }
-            .pickerStyle(.segmented)
+            VorssaintSegmentedTabs(
+                selection: $kind,
+                options: [
+                    .init(.date, title: text.dateTimeKindDate),
+                    .init(.time, title: text.dateTimeKindTime),
+                    .init(.datetime, title: text.dateTimeKindDateTime),
+                ],
+                tone: .mouseKeyboard
+            )
 
             Picker(text.dateTimeStyleLabel, selection: $style) {
                 Text(text.dateTimeStyleShort).tag(TextSnippetSupport.DateVariableStyle.short)

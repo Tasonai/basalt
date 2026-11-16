@@ -82,14 +82,16 @@ struct RecorderInspector: View {
     }
 
     private var tabPicker: some View {
-        Picker("", selection: $tab) {
-            Text(strings.lookLabel).tag(Tab.look)
-            Text(strings.pointerSectionLabel).tag(Tab.pointer)
-            Text(strings.zoomSectionLabel).tag(Tab.zoom)
-            Text(wave2.studioTabTitle).tag(Tab.studio)
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
+        VorssaintSegmentedTabs(
+            selection: $tab,
+            options: [
+                .init(.look, title: strings.lookLabel),
+                .init(.pointer, title: strings.pointerSectionLabel),
+                .init(.zoom, title: strings.zoomSectionLabel),
+                .init(.studio, title: wave2.studioTabTitle),
+            ],
+            tone: .tools
+        )
     }
 
     // MARK: - Look
@@ -262,9 +264,12 @@ struct RecorderInspector: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .frame(width: 64, alignment: .leading)
-            Slider(value: Binding(get: { value }, set: onChange), in: 0...1)
-                .controlSize(.mini)
-                .onTapGesture(count: 2) { onReset() }
+            VorssaintDetentSlider(
+                value: Binding(get: { value }, set: onChange),
+                in: 0...1,
+                tone: .tools
+            )
+            .onTapGesture(count: 2) { onReset() }
             Text(String(format: "%.0f%%", locale: MetricFormat.locale, value * 100))
                 .font(.system(size: 10.5, weight: .medium))
                 .monospacedDigit()
@@ -311,20 +316,23 @@ struct RecorderInspector: View {
                 Text(strings.zoomWhereLabel)
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.72))
-                Picker("", selection: Binding(
-                    get: { segment.followsPointer },
-                    set: { follows in
-                        if follows {
-                            model.setSelectedZoomFocus(nil)
-                        } else {
-                            model.beginAiming()
+                VorssaintSegmentedTabs(
+                    selection: Binding(
+                        get: { segment.followsPointer },
+                        set: { follows in
+                            if follows {
+                                model.setSelectedZoomFocus(nil)
+                            } else {
+                                model.beginAiming()
+                            }
                         }
-                    })) {
-                        Text(strings.zoomFollowsPointer).tag(true)
-                        Text(strings.zoomPickSpot).tag(false)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
+                    ),
+                    options: [
+                        .init(true, title: strings.zoomFollowsPointer),
+                        .init(false, title: strings.zoomPickSpot),
+                    ],
+                    tone: .tools
+                )
                 if !segment.followsPointer {
                     Button(strings.zoomPickSpotHint) { model.beginAiming() }
                         .buttonStyle(.borderless)
@@ -635,19 +643,13 @@ struct RecorderInspector: View {
                     .monospacedDigit()
                     .foregroundStyle(Color(white: 0.86))
             }
-            Group {
-                if let step {
-                    Slider(value: Binding(get: { value }, set: onChange),
-                           in: range,
-                           step: step,
-                           onEditingChanged: { editing in if !editing { onCommit() } })
-                } else {
-                    Slider(value: Binding(get: { value }, set: onChange),
-                           in: range,
-                           onEditingChanged: { editing in if !editing { onCommit() } })
-                }
-            }
-            .controlSize(.small)
+            VorssaintDetentSlider(
+                value: Binding(get: { value }, set: onChange),
+                in: range,
+                step: step,
+                tone: .tools,
+                onEditingChanged: { editing in if !editing { onCommit() } }
+            )
             .onTapGesture(count: 2) { onReset() }
         }
     }
@@ -658,7 +660,7 @@ struct RecorderInspector: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle(strings.pointerSectionLabel)
             Toggle(strings.pointerShowToggle, isOn: boolBinding(\.showsPointer))
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.mini)
             if model.document.showsPointer {
                 Picker(strings.pointerSmoothingLabel, selection: smoothingBinding) {
@@ -679,7 +681,7 @@ struct RecorderInspector: View {
                             onChange: { doubleBinding(\.pointerSize).wrappedValue = $0 },
                             onReset: { doubleBinding(\.pointerSize).wrappedValue = 1 })
                 Toggle(strings.clickRingToggle, isOn: boolBinding(\.showsClickRing))
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .controlSize(.mini)
             }
         }
@@ -694,7 +696,7 @@ struct RecorderInspector: View {
                 Toggle(strings.zoomToggle, isOn: Binding(
                     get: { model.document.zoomEnabled },
                     set: model.setAutomaticZoomEnabled))
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .controlSize(.mini)
             }
             if model.document.zoomEnabled {
@@ -702,7 +704,7 @@ struct RecorderInspector: View {
                     Toggle(strings.typingZoomToggle, isOn: Binding(
                         get: { model.document.zoomsOnTyping },
                         set: model.setTypingZoomEnabled))
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .controlSize(.mini)
                     Text(strings.typingZoomCaption)
                         .font(.system(size: 10.5))

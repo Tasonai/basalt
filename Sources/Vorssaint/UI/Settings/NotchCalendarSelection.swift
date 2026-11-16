@@ -28,7 +28,7 @@ struct NotchCalendarSelection: View {
                                 Text(choice.title).lineLimit(1)
                             }
                         }
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(VorssaintCheckPillStyle())
                         .accessibilityLabel(choice.title)
                     }
                 }

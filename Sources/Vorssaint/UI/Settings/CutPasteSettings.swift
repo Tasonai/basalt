@@ -37,7 +37,7 @@ struct CutPasteSettings: View {
                                 caption: l10n.s.cutPasteEnableCaption) {
                         Toggle(l10n.s.cutPasteEnable, isOn: $enabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: enabled) { _, _ in
                                 FinderCutPaste.shared.syncWithPreferences()
                             }
@@ -48,7 +48,7 @@ struct CutPasteSettings: View {
                                     caption: l10n.s.cutPasteShowHUDCaption) {
                             Toggle(l10n.s.cutPasteShowHUD, isOn: $showHUD)
                                 .labelsHidden()
-                                .toggleStyle(.switch)
+                                .toggleStyle(VorssaintCompactSwitchStyle())
                                 .onChange(of: showHUD) { _, _ in
                                     FinderCutPaste.shared.syncWithPreferences()
                                 }
@@ -80,7 +80,7 @@ struct CutPasteSettings: View {
                                 caption: renameText.caption) {
                         Toggle(renameText.enableLabel, isOn: $renameEnabled)
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .onChange(of: renameEnabled) { _, _ in
                                 FinderRenameService.shared.syncWithPreferences()
                             }

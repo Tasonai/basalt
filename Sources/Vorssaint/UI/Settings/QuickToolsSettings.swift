@@ -91,7 +91,7 @@ struct QuickToolsSettings: View {
             SettingsRow(symbol: "keyboard", title: l10n.s.quickToolShortcutToggle) {
                 Toggle(l10n.s.quickToolShortcutToggle, isOn: $launcherShortcutEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: launcherShortcutEnabled) { _, _ in
                         QuickLauncherService.shared.syncWithPreferences()
                     }
@@ -132,13 +132,13 @@ struct QuickToolsSettings: View {
                         set: { brightness.setKeyboardLightEnabled($0) }
                     ))
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 HStack(spacing: 8) {
-                    Slider(value: Binding(
+                    VorssaintDetentSlider(value: Binding(
                         get: { Double(brightness.keyboardLightLevel ?? 0) },
                         set: { brightness.setKeyboardLightLevel(Float($0)) }
-                    ), in: 0...1, onEditingChanged: brightness.keyboardLightDragChanged)
+                    ), in: 0...1, tone: .energyDisplay, onEditingChanged: brightness.keyboardLightDragChanged)
                     .accessibilityLabel(
                         FeatureStrings.brightness(l10n.language).keyboardLight)
                     Text("\(Int(((brightness.keyboardLightLevel ?? 0) * 100).rounded()))%")
@@ -172,7 +172,7 @@ struct QuickToolsSettings: View {
                 Toggle("\(l10n.s.quickToolShortcutToggle): \(qtStrings.quitAllTitle)",
                        isOn: $quitAllShortcutEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: quitAllShortcutEnabled) { _, _ in
                         QuickTogglesService.shared.syncWithPreferences()
                     }
@@ -194,7 +194,7 @@ struct QuickToolsSettings: View {
                 Toggle("\(l10n.s.quickToolShortcutToggle): \(qtStrings.quitOthersTitle)",
                        isOn: $quitOthersShortcutEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: quitOthersShortcutEnabled) { _, _ in
                         QuickTogglesService.shared.syncWithPreferences()
                     }
@@ -236,13 +236,13 @@ struct QuickToolsSettings: View {
                         caption: l10n.s.micMuteMenuBarCaption) {
                 Toggle(l10n.s.micMuteMenuBarToggle, isOn: $micMenuBarIndicator)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
             }
             Divider()
             SettingsRow(symbol: "keyboard", title: l10n.s.quickToolShortcutToggle) {
                 Toggle(l10n.s.quickToolShortcutToggle, isOn: $micShortcutEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: micShortcutEnabled) { _, _ in
                         MicMuteService.shared.syncWithPreferences()
                     }
@@ -276,7 +276,7 @@ struct QuickToolsSettings: View {
             SettingsRow(symbol: "keyboard", title: l10n.s.quickToolShortcutToggle) {
                 Toggle(l10n.s.quickToolShortcutToggle, isOn: $cameraShortcutEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: cameraShortcutEnabled) { _, _ in
                         CameraPreviewService.shared.syncWithPreferences()
                     }
@@ -308,7 +308,7 @@ struct QuickToolsSettings: View {
                     set: { WallpaperService.shared.applyAllDisplays = $0 }
                 ))
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
             }
             Divider()
             Button {
@@ -351,7 +351,7 @@ struct QuickToolsSettings: View {
             SettingsRow(symbol: "cursorarrow.click", title: padStrings.closeOnClickOutside) {
                 Toggle(padStrings.closeOnClickOutside, isOn: $scratchpadCloseOnClickOutside)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: scratchpadCloseOnClickOutside) { _, _ in
                         ScratchpadService.shared.outsideClickPreferenceDidChange()
                     }
@@ -365,16 +365,18 @@ struct QuickToolsSettings: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Slider(value: scratchpadTextSizeBinding,
-                       in: ScratchpadSupport.textSizeRange,
-                       step: 1)
+                VorssaintDetentSlider(value: scratchpadTextSizeBinding,
+                                      in: ScratchpadSupport.textSizeRange,
+                                      step: 1,
+                                      tone: .tools)
             }
             Divider()
             VStack(alignment: .leading, spacing: 6) {
                 Text(padStrings.backgroundOpacity)
-                Slider(value: scratchpadBackgroundOpacityBinding,
-                       in: ScratchpadSupport.backgroundOpacityRange,
-                       step: 0.05)
+                VorssaintDetentSlider(value: scratchpadBackgroundOpacityBinding,
+                                      in: ScratchpadSupport.backgroundOpacityRange,
+                                      step: 0.05,
+                                      tone: .tools)
                 HStack {
                     Text(padStrings.backgroundTranslucent)
                     Spacer()
@@ -387,7 +389,7 @@ struct QuickToolsSettings: View {
             SettingsRow(symbol: "keyboard", title: l10n.s.quickToolShortcutToggle) {
                 Toggle(l10n.s.quickToolShortcutToggle, isOn: $scratchpadShortcutEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: scratchpadShortcutEnabled) { _, _ in
                         ScratchpadService.shared.syncWithPreferences()
                     }
@@ -421,7 +423,7 @@ struct QuickToolsSettings: View {
                         caption: l10n.s.cleaningKeepScreenVisibleCaption) {
                 Toggle(l10n.s.cleaningKeepScreenVisibleToggle, isOn: $cleaningModeKeepScreenVisible)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
             }
         }
     }

@@ -86,6 +86,7 @@ struct MenuPanelView: View {
     @AppStorage(DefaultsKey.panelShowToggles) private var showToggles = true
     @AppStorage(DefaultsKey.panelShowWallpaper) private var showWallpaper = true
     @AppStorage(DefaultsKey.panelSectionOrder) private var sectionOrderRaw = ""
+    @AppStorage("menuPanelDensityMode") private var panelDensityRaw = PanelDensityMode.calm.rawValue
     @State private var navigableContentHeight: CGFloat = 0
     @State private var metricContentHeight: CGFloat = 0
     @State private var updateBannerHeight: CGFloat = 0
@@ -144,6 +145,7 @@ struct MenuPanelView: View {
         .onChange(of: focusedSection) { _, section in
             if let section { selectedSection = section }
         }
+        .environment(\.menuPanelDensity, PanelDensityMode(rawValue: panelDensityRaw) ?? .calm)
     }
 
     private var monitorNeeds: SystemMonitorPanelNeeds {
@@ -623,6 +625,7 @@ private struct BentoQuickModeTile: View {
 
     @State private var isHovered = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.menuPanelDensity) private var panelDensity
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -1012,6 +1015,7 @@ private struct BentoQuickToggleTileView: View {
 
     @State private var isHovered = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.menuPanelDensity) private var panelDensity
 
     var body: some View {
         let tileColor = needsAttention ? Color.orange : accent
@@ -1051,7 +1055,7 @@ private struct BentoQuickToggleTileView: View {
                             }
                         }
                         Spacer(minLength: 4)
-                        if let shortcutHint {
+                        if let shortcutHint, panelDensity == .pro || isHovered {
                             Text(shortcutHint)
                                 .font(.system(size: 8.5, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.secondary)
@@ -1133,15 +1137,21 @@ private struct BentoQuickToggleTileView: View {
 private struct MenuPanelHeader: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var l10n = L10n.shared
+    @AppStorage("menuPanelDensityMode") private var panelDensityRaw = PanelDensityMode.calm.rawValue
+
+    private var densityMode: PanelDensityMode {
+        PanelDensityMode(rawValue: panelDensityRaw) ?? .calm
+    }
 
     var body: some View {
+        let v3 = OverhaulV3Strings.localized(l10n.language)
         ZStack {
             BrandMark(width: 48, tint: markTint)
                 .frame(height: 28)
                 .accessibilityHidden(true)
 
-            if AppInfo.isBeta {
-                HStack {
+            HStack {
+                if AppInfo.isBeta {
                     Text(l10n.s.betaBadgeLabel.uppercased())
                         .font(.system(size: 9, weight: .bold))
                         .padding(.horizontal, 6)
@@ -1149,20 +1159,43 @@ private struct MenuPanelHeader: View {
                         .background(Color.orange.opacity(0.18))
                         .foregroundStyle(.orange)
                         .clipShape(Capsule())
+                }
 
-                    Spacer()
+                Spacer()
 
+                HStack(spacing: 4) {
                     Button {
-                        appDelegate()?.openFeedbackWindow()
+                        VorssaintHaptics.generic()
+                        let next: PanelDensityMode = densityMode == .calm ? .pro : .calm
+                        panelDensityRaw = next.rawValue
                     } label: {
-                        Image(systemName: "bubble.left.and.text.bubble.right")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .padding(4)
-                            .contentShape(Rectangle())
+                        Text(densityMode == .calm ? v3.panelDensityCalm : v3.panelDensityPro)
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(densityMode == .pro ? Color.accentColor : Color.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(densityMode == .pro
+                                          ? Color.accentColor.opacity(0.15)
+                                          : Color.primary.opacity(colorScheme == .dark ? 0.09 : 0.06))
+                            )
                     }
-                    .buttonStyle(.plain)
-                    .help(FeatureStrings.feedback(l10n.language).openButton)
+                    .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: 8))
+
+                    if AppInfo.isBeta {
+                        Button {
+                            appDelegate()?.openFeedbackWindow()
+                        } label: {
+                            Image(systemName: "bubble.left.and.text.bubble.right")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(4)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(FeatureStrings.feedback(l10n.language).openButton)
+                    }
                 }
             }
         }
@@ -2627,7 +2660,7 @@ struct QuickControlsSection: View {
             Spacer(minLength: 8)
             Toggle(title, isOn: $switcherIconRowMode)
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.mini)
                 .disabled(switcherSimpleMode)
                 .accessibilityHint(l10n.s.switcherIconRowModeCaption)
@@ -2945,7 +2978,7 @@ struct PanelToggleRow: View {
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .controlSize(.small)
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .accessibilityHint(showsCaption ? "" : caption)
         }
     }
@@ -3385,7 +3418,7 @@ struct KeepAwakeCard: View {
                         Spacer(minLength: 4)
                     }
                     Toggle(l10n.s.keepAwakeTitle, isOn: activeBinding)
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .labelsHidden()
                 }
 
@@ -3591,7 +3624,7 @@ struct KeepAwakeCard: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 Toggle(title, isOn: isOn)
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .controlSize(.mini)
                     .labelsHidden()
             }
@@ -3781,7 +3814,7 @@ struct KeepAwakeCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: 8)
             Toggle(title, isOn: isOn)
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.mini)
                 .labelsHidden()
                 .disabled(disabled)

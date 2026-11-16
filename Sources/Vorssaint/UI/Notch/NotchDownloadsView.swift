@@ -87,7 +87,7 @@ private struct NotchDownloadsSetupView: View {
             EmptyView()
         } else if !enabled {
             Toggle(text.downloadsTitle, isOn: $enabled)
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .onChange(of: enabled) { NotchService.shared.syncWithPreferences() }
         } else {
             chooseActions

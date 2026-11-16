@@ -492,13 +492,13 @@ struct QuickLauncherView: View {
                     }
                 }
             case .colorPicker:
-                Picker(l10n.s.colorPickerFormatLabel, selection: $colorFormat) {
-                    ForEach(ColorCopyFormat.allCases) { format in
-                        Text(format.label).tag(format.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                VorssaintSegmentedTabs(
+                    selection: $colorFormat,
+                    options: ColorCopyFormat.allCases.map {
+                        .init($0.rawValue, title: $0.label)
+                    },
+                    tone: .tools
+                )
                 if colorFormat == ColorCopyFormat.hex.rawValue {
                     Toggle(l10n.s.colorPickerBareHexToggle, isOn: $colorBareHex)
                 }
@@ -507,7 +507,7 @@ struct QuickLauncherView: View {
             }
         }
         .font(.system(size: 11))
-        .toggleStyle(.switch)
+        .toggleStyle(VorssaintCompactSwitchStyle())
         .controlSize(.small)
         .padding(10)
         .background(

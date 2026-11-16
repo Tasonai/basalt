@@ -326,7 +326,7 @@ struct MediaWorkspaceView: View {
                         }
                     }
                 }
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.mini)
 
                 Spacer(minLength: 4)
@@ -456,7 +456,7 @@ struct MediaWorkspaceView: View {
             }
             if selectedTool == .imageCompressor, inputURLs.count > 1 {
                 Toggle(imageText.saveInSubfolder, isOn: $imageSaveInSubfolder)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(VorssaintCheckPillStyle())
                     .disabled(isRunning)
             }
         }
@@ -491,7 +491,7 @@ struct MediaWorkspaceView: View {
                     targetSizeRow(value: $gifTargetMegabytes)
                 }
                 Toggle(l10n.s.mediaLoopGIF, isOn: $gifLoops)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(VorssaintCheckPillStyle())
             }
             .panelCard()
         case .imageCompressor:
@@ -518,13 +518,13 @@ struct MediaWorkspaceView: View {
                         // into the document), so the toggle would be a dead control.
                         if MediaImageFormat.sanitized(imageFormatRaw) != .pdf {
                             Toggle(l10n.s.mediaStripMetadata, isOn: $imageStripMetadata)
-                                .toggleStyle(.checkbox)
+                                .toggleStyle(VorssaintCheckPillStyle())
                         }
                         imageBackgroundSection
                         imageWatermarkSection
                         imageRenameSection
                         Toggle(imageText.preserveDate, isOn: $imagePreserveModificationDate)
-                            .toggleStyle(.checkbox)
+                            .toggleStyle(VorssaintCheckPillStyle())
                     }
                     .padding(.top, 6)
                     .disclosureIndent()
@@ -1108,7 +1108,7 @@ struct MediaWorkspaceView: View {
                     .font(.system(size: compact ? 10 : 11, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            Slider(value: value, in: range, step: 1)
+            VorssaintDetentSlider(value: value, in: range, step: 1, tone: .tools)
         }
     }
 

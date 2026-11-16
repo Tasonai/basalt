@@ -91,7 +91,7 @@ struct CommandBarSettings: View {
                             caption: text.compactModeCaption) {
                     Toggle(text.compactModeToggle, isOn: $compactMode)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
                 if CommandBarPreferences.isEnabled(.emoji, disabledRaw: disabledSources) {
                     SettingsChoiceRow(symbol: "face.smiling", title: text.emojiSkinToneLabel,
@@ -113,7 +113,7 @@ struct CommandBarSettings: View {
                 SettingsRow(symbol: "command", title: text.shortcutToggle) {
                     Toggle(text.shortcutToggle, isOn: $shortcutEnabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: shortcutEnabled) { _, _ in
                             CommandBarService.shared.syncWithPreferences()
                         }
@@ -176,7 +176,7 @@ struct CommandBarSettings: View {
                     SettingsRow(symbol: source.symbolName, title: title(for: source)) {
                         Toggle(title(for: source), isOn: binding(for: source))
                             .labelsHidden()
-                            .toggleStyle(.switch)
+                            .toggleStyle(VorssaintCompactSwitchStyle())
                             .disabled(source.isAlwaysOn)
                     }
                 }
@@ -735,13 +735,15 @@ private struct CommandBarLinkEditor: View {
             Text(text.linksTitle)
                 .font(.system(size: 15, weight: .semibold))
 
-            Picker("", selection: $draft.kind) {
-                Text(text.linkKindLink).tag(CommandBarLink.Kind.link)
-                Text(text.linkKindPlace).tag(CommandBarLink.Kind.place)
-                Text(text.linkKindScript).tag(CommandBarLink.Kind.script)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            VorssaintSegmentedTabs(
+                selection: $draft.kind,
+                options: [
+                    .init(.link, title: text.linkKindLink),
+                    .init(.place, title: text.linkKindPlace),
+                    .init(.script, title: text.linkKindScript),
+                ],
+                tone: .tools
+            )
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(common.nameLabel)

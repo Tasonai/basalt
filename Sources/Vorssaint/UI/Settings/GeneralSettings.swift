@@ -57,7 +57,7 @@ struct GeneralSettings: View {
                         set: { setLaunchAtLogin($0) }
                     ))
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .disabled(loginPending)
                 }
             }
@@ -127,7 +127,7 @@ struct GeneralSettings: View {
             SettingsRow(symbol: "keyboard", title: l10n.s.hotkeyToggle, caption: l10n.s.hotkeyCaption) {
                 Toggle(l10n.s.hotkeyToggle, isOn: $hotkeyEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: hotkeyEnabled) { _, enabled in
                         HotkeyManager.shared.setEnabled(enabled)
                     }

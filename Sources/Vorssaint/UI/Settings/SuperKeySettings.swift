@@ -35,7 +35,7 @@ struct SuperKeySettings: View {
                 SettingsRow(symbol: "command", title: text.enableToggle, caption: text.enableCaption) {
                     Toggle(text.enableToggle, isOn: $enabled)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .onChange(of: enabled) { _, value in
                             SuperKeyService.shared.syncWithPreferences()
                             guard value, !permissions.accessibility else { return }

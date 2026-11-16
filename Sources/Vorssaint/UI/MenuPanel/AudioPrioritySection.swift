@@ -90,7 +90,7 @@ struct AudioPriorityDisclosure: View {
             Spacer(minLength: 4)
             Toggle(help, isOn: enabled)
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.mini)
                 .help(help)
                 .accessibilityLabel(help)

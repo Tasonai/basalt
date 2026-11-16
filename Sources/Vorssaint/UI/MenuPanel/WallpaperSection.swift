@@ -111,7 +111,7 @@ struct WallpaperSection: View {
                     get: { service.applyAllDisplays },
                     set: { service.applyAllDisplays = $0 }
                 ))
-                .toggleStyle(.switch)
+                .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.small)
             }
 

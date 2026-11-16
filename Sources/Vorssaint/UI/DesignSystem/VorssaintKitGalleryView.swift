@@ -75,7 +75,7 @@ private struct GalleryColumn: View {
                 SettingsCard(title: "SettingsCard & Rows") {
                     SettingsRow(symbol: "sparkles", title: "Dynamic Island 2.5",
                                 caption: "Ambient album art glow & haptics.") {
-                        Toggle("", isOn: $toggleA).labelsHidden().toggleStyle(.switch)
+                        Toggle("", isOn: $toggleA).labelsHidden().toggleStyle(VorssaintCompactSwitchStyle())
                     }
                     Divider()
                     SettingsRow(symbol: "slider.horizontal.3", title: "Tactile Pill Toggle",

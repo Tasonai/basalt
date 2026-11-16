@@ -49,7 +49,7 @@ struct BrightnessSection: View {
                     Divider()
                     Toggle(strings.osdToggle, isOn: $brightnessOSDEnabled)
                         .font(.system(size: 10.5, weight: .medium))
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .controlSize(.mini)
                         .help(strings.osdCaption)
                         .onChange(of: brightnessOSDEnabled) { _, isOn in
@@ -239,8 +239,7 @@ struct BrightnessSection: View {
                 DisplayPowerButton(display: display, compact: true)
             }
             if display.isActive, display.method != nil {
-                Slider(value: brightnessBinding(display), in: 0...1)
-                    .controlSize(.small)
+                VorssaintDetentSlider(value: brightnessBinding(display), in: 0...1, tone: .energyDisplay)
                     .disabled(service.isDisplayPending(display.id))
                     .accessibilityLabel(display.name)
             }
@@ -266,9 +265,10 @@ struct BrightnessSection: View {
                     .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Slider(value: keyboardLightBinding, in: 0...1,
-                   onEditingChanged: service.keyboardLightDragChanged)
-                .controlSize(.small)
+            VorssaintDetentSlider(value: keyboardLightBinding,
+                                  in: 0...1,
+                                  tone: .energyDisplay,
+                                  onEditingChanged: service.keyboardLightDragChanged)
                 .accessibilityLabel(strings.keyboardLight)
         }
     }
@@ -405,7 +405,7 @@ private struct ExtraBrightnessPanelToggle: View {
     var body: some View {
         Toggle(l10n.s.extraBrightnessName, isOn: $enabled)
             .font(.system(size: 10.5, weight: .medium))
-            .toggleStyle(.switch)
+            .toggleStyle(VorssaintCompactSwitchStyle())
             .controlSize(.mini)
             .disabled(!service.supported && !enabled)
             .help(service.supported ? l10n.s.extraBrightnessCaption : l10n.s.extraBrightnessUnsupported)

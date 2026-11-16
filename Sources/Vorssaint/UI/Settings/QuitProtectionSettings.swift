@@ -98,7 +98,7 @@ struct QuitProtectionSettings: View {
             SettingsRow(symbol: "shield.lefthalf.filled", title: strings.enabled, caption: strings.enabledCaption) {
                 Toggle(strings.enabled, isOn: enabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: enabled.wrappedValue) { _, _ in service.syncWithPreferences() }
             }
 
@@ -114,9 +114,10 @@ struct QuitProtectionSettings: View {
             if currentMode == .hold {
                 SettingsRow(symbol: "timer", title: strings.holdDuration) {
                     HStack(spacing: 8) {
-                        Slider(value: holdDuration,
-                               in: QuitProtectionSupport.holdDurationRange,
-                               step: 50)
+                        VorssaintDetentSlider(value: holdDuration,
+                                              in: QuitProtectionSupport.holdDurationRange,
+                                              step: 50,
+                                              tone: .mouseKeyboard)
                             .frame(width: 150)
                             .onChange(of: holdDuration.wrappedValue) { _, _ in service.syncWithPreferences() }
                         Text("\(Int(holdDuration.wrappedValue.rounded())) ms")
@@ -130,9 +131,10 @@ struct QuitProtectionSettings: View {
             if currentMode == .doublePress {
                 SettingsRow(symbol: "timer", title: strings.doublePressInterval) {
                     HStack(spacing: 8) {
-                        Slider(value: doubleInterval,
-                               in: QuitProtectionSupport.doublePressIntervalRange,
-                               step: 50)
+                        VorssaintDetentSlider(value: doubleInterval,
+                                              in: QuitProtectionSupport.doublePressIntervalRange,
+                                              step: 50,
+                                              tone: .mouseKeyboard)
                             .frame(width: 150)
                             .onChange(of: doubleInterval.wrappedValue) { _, _ in service.syncWithPreferences() }
                         Text("\(Int(doubleInterval.wrappedValue.rounded())) ms")
@@ -172,7 +174,7 @@ struct QuitProtectionSettings: View {
             SettingsRow(symbol: "sparkles", title: strings.feedback) {
                 Toggle(strings.feedback, isOn: showFeedback)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: showFeedback.wrappedValue) { _, _ in service.syncWithPreferences() }
             }
         }

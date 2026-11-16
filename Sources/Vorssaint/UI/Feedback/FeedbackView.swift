@@ -60,12 +60,14 @@ struct FeedbackView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Picker("", selection: $kind) {
-                        Text(strings.bugTitle).tag(FeedbackKind.bug)
-                        Text(strings.featureTitle).tag(FeedbackKind.feature)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
+                    VorssaintSegmentedTabs(
+                        selection: $kind,
+                        options: [
+                            .init(.bug, title: strings.bugTitle, symbol: "ant"),
+                            .init(.feature, title: strings.featureTitle, symbol: "sparkles"),
+                        ],
+                        tone: .brand
+                    )
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text(strings.messageLabel)

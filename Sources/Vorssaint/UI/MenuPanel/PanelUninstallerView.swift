@@ -259,7 +259,7 @@ struct PanelUninstallerView: View {
         HStack(spacing: 7) {
             Toggle("", isOn: includeBinding(item))
                 .labelsHidden()
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintCheckPillStyle())
             Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
                 .resizable()
                 .frame(width: 17, height: 17)

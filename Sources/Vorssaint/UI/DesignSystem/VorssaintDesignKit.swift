@@ -112,6 +112,100 @@ struct VorssaintPillToggleStyle: ToggleStyle {
     }
 }
 
+/// Compact 30x17 trailing pill toggle for `SettingsRow` and table accessories without forcing `maxWidth: .infinity`.
+struct VorssaintCompactSwitchStyle: ToggleStyle {
+    var tone: SemanticCategoryTone = .brand
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let highContrast = colorSchemeContrast == .increased
+        let tint = tone.color(scheme: colorScheme, highContrast: highContrast)
+        let offTrack = Color.primary.opacity(colorScheme == .dark ? (highContrast ? 0.28 : 0.18) : (highContrast ? 0.24 : 0.13))
+        Button {
+            VorssaintHaptics.generic()
+            configuration.isOn.toggle()
+        } label: {
+            ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                Capsule(style: .continuous)
+                    .fill(configuration.isOn ? tint : offTrack)
+                    .frame(width: 30, height: 17)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .strokeBorder(Color.primary.opacity(highContrast ? 0.35 : 0.08), lineWidth: 0.5)
+                    )
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.24), radius: 1.5, x: 0, y: 0.5)
+                    .frame(width: 13, height: 13)
+                    .padding(2)
+            }
+            .scaleEffect(isEnabled ? 1.0 : 0.98)
+            .opacity(appearsActive ? 1.0 : 0.86)
+            .animation(reduceMotion ? nil : DesignMotion.emilPress, value: configuration.isOn)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: 9))
+        .opacity(isEnabled ? 1.0 : 0.45)
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) {
+                configuration.label
+            }
+        }
+    }
+}
+
+/// Tactile rounded-square checkbox replacement matching VorssaintDesignKit surfaces and focus semantics.
+struct VorssaintCheckPillStyle: ToggleStyle {
+    var tone: SemanticCategoryTone = .brand
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let highContrast = colorSchemeContrast == .increased
+        let tint = tone.color(scheme: colorScheme, highContrast: highContrast)
+        Button {
+            VorssaintHaptics.generic()
+            configuration.isOn.toggle()
+        } label: {
+            HStack(spacing: DesignSpace.xs + 3) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(configuration.isOn ? tint : Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.06))
+                        .frame(width: 16, height: 16)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(configuration.isOn ? tint : Color.primary.opacity(highContrast ? 0.42 : 0.22),
+                                              lineWidth: 1)
+                        )
+                    if configuration.isOn {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundStyle(.white)
+                            .transition(.scale(scale: 0.8).combined(with: .opacity))
+                    }
+                }
+                .animation(reduceMotion ? nil : DesignMotion.emilPress, value: configuration.isOn)
+                configuration.label
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: 6))
+        .opacity(isEnabled ? (appearsActive ? 1.0 : 0.88) : 0.45)
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) {
+                configuration.label
+            }
+        }
+    }
+}
+
 /// Sliding-capsule segmented tabs using `matchedGeometryEffect`, matching the Dynamic Island aesthetic.
 struct VorssaintSegmentedTabs<SelectionValue: Hashable>: View {
     struct Option: Identifiable {
@@ -194,12 +288,56 @@ struct VorssaintSegmentedTabs<SelectionValue: Hashable>: View {
 struct VorssaintDetentSlider: View {
     @Binding var value: Double
     var range: ClosedRange<Double> = 0...1
+    var step: Double? = nil
     var detent: Double? = nil
     var tone: SemanticCategoryTone = .brand
     var icon: String? = nil
     var title: String? = nil
     var formattedValue: String? = nil
     var onEditingChanged: ((Bool) -> Void)? = nil
+
+    init(value: Binding<Double>,
+         range: ClosedRange<Double> = 0...1,
+         step: Double? = nil,
+         detent: Double? = nil,
+         tone: SemanticCategoryTone = .brand,
+         icon: String? = nil,
+         title: String? = nil,
+         formattedValue: String? = nil,
+         onEditingChanged: ((Bool) -> Void)? = nil) {
+        self._value = value
+        self.range = range
+        self.step = step
+        self.detent = detent
+        self.tone = tone
+        self.icon = icon
+        self.title = title
+        self.formattedValue = formattedValue
+        self.onEditingChanged = onEditingChanged
+    }
+
+    init<V: BinaryFloatingPoint>(value: Binding<V>,
+                                 in bounds: ClosedRange<V>,
+                                 step: V? = nil,
+                                 detent: V? = nil,
+                                 tone: SemanticCategoryTone = .brand,
+                                 icon: String? = nil,
+                                 title: String? = nil,
+                                 formattedValue: String? = nil,
+                                 onEditingChanged: ((Bool) -> Void)? = nil) {
+        self._value = Binding(
+            get: { Double(value.wrappedValue) },
+            set: { value.wrappedValue = V($0) }
+        )
+        self.range = Double(bounds.lowerBound)...Double(bounds.upperBound)
+        self.step = step.map { Double($0) }
+        self.detent = detent.map { Double($0) }
+        self.tone = tone
+        self.icon = icon
+        self.title = title
+        self.formattedValue = formattedValue
+        self.onEditingChanged = onEditingChanged
+    }
 
     @State private var isDragging = false
     @Environment(\.colorScheme) private var colorScheme
@@ -282,8 +420,11 @@ struct VorssaintDetentSlider: View {
                             }
                             let frac = min(max(Double(drag.location.x / width), 0), 1)
                             let raw = range.lowerBound + frac * (range.upperBound - range.lowerBound)
+                            let stepped = step.map { s in
+                                s > 0 ? min(range.upperBound, max(range.lowerBound, (raw / s).rounded() * s)) : raw
+                            } ?? raw
                             let snapped = VorssaintDesignKitMath.snappedDetentValue(
-                                rawValue: raw, range: range, detent: detent
+                                rawValue: stepped, range: range, detent: detent
                             )
                             if VorssaintDesignKitMath.didCrossDetent(previous: value, next: snapped, detent: detent) {
                                 VorssaintHaptics.alignment()

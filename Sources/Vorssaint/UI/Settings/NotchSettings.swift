@@ -160,7 +160,7 @@ struct NotchSettings: View {
                     Text(text.description).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
-                Toggle(text.enable, isOn: $enabled).labelsHidden().toggleStyle(.switch)
+                Toggle(text.enable, isOn: $enabled).labelsHidden().toggleStyle(VorssaintCompactSwitchStyle())
                     .disabled(!AppFeature.notch.isAvailable).accessibilityLabel(text.enable)
             }
             if enabled, AppFeature.notch.isAvailable, !(hover && hideUntilHover && !hiddenShowsActivity), !notch.geometry.isNotched, !permissions.accessibility {
@@ -835,9 +835,9 @@ struct NotchSettings: View {
                 Spacer()
                 Text(formatted).monospacedDigit().foregroundStyle(.secondary)
             }
-            Slider(value: slider, in: Double(range.lowerBound)...Double(range.upperBound), step: 1) {
-                Text(title)
-            }.labelsHidden().accessibilityValue(formatted)
+            VorssaintDetentSlider(value: slider, in: Double(range.lowerBound)...Double(range.upperBound), step: 1, tone: .dynamicIsland)
+                .accessibilityLabel(title)
+                .accessibilityValue(formatted)
         }.padding(.leading, settingsRowTextInset)
     }
 
@@ -861,9 +861,9 @@ struct NotchSettings: View {
                 Spacer()
                 Text(formatted).monospacedDigit().foregroundStyle(.secondary)
             }
-            Slider(value: value, in: range, step: 0.05) {
-                Text(title)
-            }.labelsHidden().accessibilityValue(formatted)
+            VorssaintDetentSlider(value: value, in: range, step: 0.05, tone: .dynamicIsland)
+                .accessibilityLabel(title)
+                .accessibilityValue(formatted)
             Text(hint).font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1058,7 +1058,7 @@ struct NotchSettings: View {
     /// An option with its icon, one line and a switch, like every other page.
     private func switchRow(_ symbol: String, _ title: String, caption: String? = nil, isOn: Binding<Bool>) -> some View {
         SettingsRow(symbol: symbol, title: title, caption: caption) {
-            Toggle(title, isOn: isOn).labelsHidden().toggleStyle(.switch)
+            Toggle(title, isOn: isOn).labelsHidden().toggleStyle(VorssaintCompactSwitchStyle())
         }
     }
 
@@ -1068,7 +1068,8 @@ struct NotchSettings: View {
         return GridRow {
             // The slider carries the name for VoiceOver.
             Text(title).fixedSize().accessibilityHidden(true)
-            Slider(value: bounded, in: range, step: 10) { Text(title) }.labelsHidden()
+            VorssaintDetentSlider(value: bounded, in: range, step: 10, detent: fallback, tone: .dynamicIsland)
+                .accessibilityLabel(title)
             Text(Int(bounded.wrappedValue), format: .number)
                 .monospacedDigit().foregroundStyle(.secondary).frame(width: 38)
         }
@@ -1084,7 +1085,8 @@ struct NotchSettings: View {
         return GridRow {
             Text(title).fixedSize().accessibilityHidden(true)
             // Other cards have sliders with the same names.
-            Slider(value: bounded, in: range, step: step) { Text("\(card), \(title)") }.labelsHidden()
+            VorssaintDetentSlider(value: bounded, in: range, step: step, detent: 0, tone: .dynamicIsland)
+                .accessibilityLabel("\(card), \(title)")
                 .accessibilityValue(formatted)
             Text(formatted).monospacedDigit().foregroundStyle(.secondary).frame(width: 38)
         }

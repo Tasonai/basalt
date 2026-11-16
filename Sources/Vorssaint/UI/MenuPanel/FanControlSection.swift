@@ -137,7 +137,7 @@ struct FanControlCardContent: View {
             if canConfigure, mode != .system {
                 Toggle(strings.resumeAfterRestart, isOn: $resume)
                     .font(.system(size: 10.5, weight: .medium))
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .controlSize(.mini)
             }
 
@@ -183,32 +183,29 @@ struct FanControlCardContent: View {
     }
 
     private var modePicker: some View {
-        Picker(strings.mode, selection: $mode) {
-            Text(strings.systemControl).tag(FanControlMode.system)
-            Text(strings.manualControl).tag(FanControlMode.manual)
-            Text(strings.customCurve).tag(FanControlMode.curve)
-        }
-        .pickerStyle(.segmented)
-        .controlSize(.small)
+        VorssaintSegmentedTabs(
+            selection: $mode,
+            options: [
+                .init(.system, title: strings.systemControl),
+                .init(.manual, title: strings.manualControl),
+                .init(.curve, title: strings.customCurve),
+            ],
+            tone: .monitor
+        )
         .disabled(isWorking)
     }
 
     private var manualControl: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(strings.coolingIntensity)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(selectedCoolingLevel)%")
-                    .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
-            }
-            Slider(value: coolingLevelBinding,
-                   in: Double(FanControlPolicy.minimumCoolingLevel)...Double(FanControlPolicy.maximumCoolingLevel),
-                   step: Double(FanControlPolicy.coolingLevelStep))
-                .controlSize(.small)
-                .disabled(isWorking)
-        }
+        VorssaintDetentSlider(
+            value: coolingLevelBinding,
+            in: Double(FanControlPolicy.minimumCoolingLevel)...Double(FanControlPolicy.maximumCoolingLevel),
+            step: Double(FanControlPolicy.coolingLevelStep),
+            tone: .monitor,
+            icon: "fanblades",
+            title: strings.coolingIntensity,
+            formattedValue: "\(selectedCoolingLevel)%"
+        )
+        .disabled(isWorking)
     }
 
     private var statusHeader: some View {

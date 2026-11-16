@@ -206,7 +206,7 @@ struct MonitorAlertsControls: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .toggleStyle(.checkbox)
+        .toggleStyle(VorssaintCheckPillStyle())
         .controlSize(.small)
         .font(.system(size: 10.5))
     }

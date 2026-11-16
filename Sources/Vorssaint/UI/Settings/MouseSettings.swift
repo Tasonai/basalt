@@ -114,7 +114,7 @@ struct MouseSettings: View {
             .frame(maxWidth: .infinity)
             .padding(22)
         }
-        .toggleStyle(.switch)
+        .toggleStyle(VorssaintCompactSwitchStyle())
         .onAppear {
             MiddleClickService.shared.refreshDragGestureConflict()
         }
@@ -439,10 +439,8 @@ struct MouseSettings: View {
         HStack(spacing: 12) {
             Text(title)
                 .frame(minWidth: 96, alignment: .leading)
-            Slider(value: value, in: range, step: step) {
-                Text(title)
-            }
-            .labelsHidden()
+            VorssaintDetentSlider(value: value, in: range, step: step, tone: .mouseKeyboard)
+                .accessibilityLabel(title)
             Text(readout)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)

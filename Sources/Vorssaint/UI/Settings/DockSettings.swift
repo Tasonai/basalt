@@ -71,7 +71,7 @@ struct DockSettings: View {
             .frame(maxWidth: .infinity)
             .padding(22)
         }
-        .toggleStyle(.switch)
+        .toggleStyle(VorssaintCompactSwitchStyle())
     }
 
     private var dockPreviewCard: some View {
@@ -112,10 +112,13 @@ struct DockSettings: View {
                                 ? l10n.s.dockPreviewBackgroundOpacityGlassCaption
                                 : l10n.s.dockPreviewBackgroundOpacityCaption) {
                     HStack(spacing: 8) {
-                        Slider(value: dockPreviewBackgroundOpacityBinding,
-                               in: DockPreviewSupport.backgroundOpacityRange,
-                               step: 0.05)
-                            .frame(width: 140)
+                        VorssaintDetentSlider(
+                            value: dockPreviewBackgroundOpacityBinding,
+                            in: DockPreviewSupport.backgroundOpacityRange,
+                            step: 0.05,
+                            tone: .windowsDock
+                        )
+                        .frame(width: 140)
                         Text("\(dockPreviewBackgroundOpacityPercent)%")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)

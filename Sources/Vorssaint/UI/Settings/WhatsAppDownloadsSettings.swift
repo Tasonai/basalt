@@ -101,7 +101,7 @@ struct WhatsAppDownloadsSettings: View {
                         caption: organizerEnabled ? organizerText.privacyNote : text.intro) {
                 Toggle(text.title, isOn: $enabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
             }
             Divider()
             HStack(spacing: 8) {
@@ -155,7 +155,7 @@ struct WhatsAppDownloadsSettings: View {
                         caption: text.automaticCaption) {
                 Toggle(text.automatic, isOn: automaticBinding)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
             }
             Divider()
             SettingsRow(symbol: "calendar", title: text.retention, caption: text.retentionCaption) {
@@ -176,7 +176,7 @@ struct WhatsAppDownloadsSettings: View {
             SettingsRow(symbol: "bell.badge", title: l10n.s.cleanerScheduleNotifyToggle) {
                 Toggle(l10n.s.cleanerScheduleNotifyToggle, isOn: $notify)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: notify) { _, enabled in
                         if enabled { Notifier.requestPermission() }
                     }
@@ -216,7 +216,7 @@ struct WhatsAppDownloadsSettings: View {
     private var typesSection: some View {
         SettingsCard(title: text.fileTypes) {
             Toggle(text.allTypes, isOn: allCategoriesBinding)
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintCheckPillStyle())
             Divider()
             categoryPair(.image, .video)
             categoryPair(.audio, .document)
@@ -244,7 +244,7 @@ struct WhatsAppDownloadsSettings: View {
             SettingsRow(symbol: "folder.badge.gearshape", title: organizerText.enabled) {
                 Toggle(organizerText.enabled, isOn: $organizerEnabled)
                     .labelsHidden()
-                    .toggleStyle(.switch)
+                    .toggleStyle(VorssaintCompactSwitchStyle())
                     .onChange(of: organizerEnabled) { _, enabled in
                         if enabled {
                             manager.scan()
@@ -311,7 +311,7 @@ struct WhatsAppDownloadsSettings: View {
                     if showingOrganizerFileTypes {
                         Group {
                             Toggle(text.allTypes, isOn: allOrganizerCategoriesBinding)
-                                .toggleStyle(.checkbox)
+                                .toggleStyle(VorssaintCheckPillStyle())
                             organizerCategoryPair(.image, .video)
                             organizerCategoryPair(.audio, .document)
                             organizerCategoryPair(.archive, .other)
@@ -410,10 +410,10 @@ struct WhatsAppDownloadsSettings: View {
                                        _ second: WhatsAppDownloadCategory) -> some View {
         HStack(spacing: 24) {
             Toggle(categoryName(first), isOn: organizerCategoryBinding(first))
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintCheckPillStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
             Toggle(categoryName(second), isOn: organizerCategoryBinding(second))
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintCheckPillStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -463,10 +463,10 @@ struct WhatsAppDownloadsSettings: View {
                               _ second: WhatsAppDownloadCategory) -> some View {
         HStack(spacing: 24) {
             Toggle(categoryName(first), isOn: categoryBinding(first))
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintCheckPillStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
             Toggle(categoryName(second), isOn: categoryBinding(second))
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintCheckPillStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -601,7 +601,7 @@ struct WhatsAppDownloadsSettings: View {
                 set: { manager.setInclude($0, for: candidate.id) }
             ))
             .labelsHidden()
-            .toggleStyle(.checkbox)
+            .toggleStyle(VorssaintCheckPillStyle())
             .disabled(candidate.excluded)
             Image(systemName: categoryIcon(candidate.category))
                 .frame(width: 18)

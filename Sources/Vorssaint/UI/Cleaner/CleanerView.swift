@@ -28,16 +28,14 @@ struct CleanerSettings: View {
     var body: some View {
         VStack(spacing: 0) {
             if whatsAppEnabled {
-                Picker("", selection: $tool) {
-                    Label(l10n.s.cleanerName, systemImage: "sparkles")
-                        .tag(Tool.system)
-                    Label(FeatureStrings.whatsAppDownloads(l10n.language).title,
-                          systemImage: "arrow.down.doc")
-                        .tag(Tool.whatsApp)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 440)
+                VorssaintSegmentedTabs(
+                    selection: $tool,
+                    options: [
+                        .init(.system, title: l10n.s.cleanerName, symbol: "sparkles"),
+                        .init(.whatsApp, title: FeatureStrings.whatsAppDownloads(l10n.language).title, symbol: "arrow.down.doc"),
+                    ],
+                    tone: .tools
+                )
                 .padding(.horizontal, 24)
                 .padding(.vertical, 14)
 
@@ -1040,7 +1038,7 @@ struct CleanerView: View {
                     }
                 }
                 Toggle(l10n.s.cleanerScheduleNotifyToggle, isOn: $scheduleNotify)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(VorssaintCheckPillStyle())
                     .font(.system(size: 11.5))
                 if scheduleNotify, notificationsDenied {
                     Text(l10n.s.cleanerNotifDenied)
@@ -1285,7 +1283,7 @@ struct CleanerView: View {
             ForEach(group_items) { item in itemRow(item) }
         } label: {
             HStack(spacing: 10) {
-                Toggle("", isOn: groupBinding(group)).labelsHidden().toggleStyle(.checkbox)
+                Toggle("", isOn: groupBinding(group)).labelsHidden().toggleStyle(VorssaintCheckPillStyle())
                 Image(systemName: group.icon)
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
@@ -1306,7 +1304,7 @@ struct CleanerView: View {
 
     private func itemRow(_ item: JunkCleaner.Item) -> some View {
         HStack(spacing: 10) {
-            Toggle("", isOn: includeBinding(item)).labelsHidden().toggleStyle(.checkbox)
+            Toggle("", isOn: includeBinding(item)).labelsHidden().toggleStyle(VorssaintCheckPillStyle())
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.name).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
                 Text(prettyPath(item.url))

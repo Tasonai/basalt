@@ -53,13 +53,15 @@ struct CommandBarAppShortcutsView: View {
                 }
                 .padding(7)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
-                Picker(text.sourceApps, selection: $filter) {
-                    Text(text.categoryAll).tag(AppFilter.all)
-                    Text(text.pinnedTitle).tag(AppFilter.pinned)
-                    Text(text.appShortcutsFilter).tag(AppFilter.shortcuts)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
+                VorssaintSegmentedTabs(
+                    selection: $filter,
+                    options: [
+                        .init(.all, title: text.categoryAll),
+                        .init(.pinned, title: text.pinnedTitle),
+                        .init(.shortcuts, title: text.appShortcutsFilter),
+                    ],
+                    tone: .tools
+                )
                 .fixedSize()
             }
 

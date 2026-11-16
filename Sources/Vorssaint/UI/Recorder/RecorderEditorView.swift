@@ -648,9 +648,11 @@ struct RecorderAudioLane: View {
                 .frame(maxWidth: .infinity)
                 .opacity(isKept ? 1 : 0.3)
 
-            Slider(value: Binding(get: { gain },
-                                  set: { model.setAudioGain($0, for: source) }),
-                   in: RecorderSupport.audioGainRange)
+            VorssaintDetentSlider(value: Binding(get: { gain },
+                                                 set: { model.setAudioGain($0, for: source) }),
+                                  in: RecorderSupport.audioGainRange,
+                                  detent: 1.0,
+                                  tone: .tools)
                 .frame(width: 92)
                 .disabled(!isKept)
                 .screenshotSafeHelp(strings.audioVolumeLabel)

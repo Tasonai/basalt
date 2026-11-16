@@ -622,6 +622,7 @@ if (( TEST )); then
         Sources/Vorssaint/Core/SecureInputSupport.swift
         Sources/Vorssaint/Core/OverhaulStrings.swift
         Sources/Vorssaint/Core/OverhaulV2Strings.swift
+        Sources/Vorssaint/Core/OverhaulV3Strings.swift
         Sources/Vorssaint/Services/Audio/MixerParametricEQ.swift
         Sources/Vorssaint/Services/Cleaner/SpaceLensSupport.swift
         Sources/Vorssaint/Services/Clipboard/ClipboardProSupport.swift

@@ -61,7 +61,11 @@ struct RecorderExportSpeedControl: View {
                     }
                 }
                 .accessibilityValue(label(draftSpeed))
-                Slider(value: $draftSpeed, in: RecorderExportTiming.speedRange, step: 0.01)
+                VorssaintDetentSlider(value: $draftSpeed,
+                                      in: RecorderExportTiming.speedRange,
+                                      step: 0.01,
+                                      detent: 1.0,
+                                      tone: .tools)
                     .accessibilityLabel(strings.custom)
                     .accessibilityValue(label(draftSpeed))
                 HStack {

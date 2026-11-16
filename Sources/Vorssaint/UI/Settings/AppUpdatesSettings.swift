@@ -24,13 +24,15 @@ struct AppUpdatesSettings: View {
             }
 
             SettingsCard(title: text.frequencyLabel) {
-                Picker(text.frequencyLabel, selection: frequencyBinding) {
-                    Text(text.frequencyOff).tag(AppUpdatesSupport.CheckFrequency.off)
-                    Text(text.frequencyDaily).tag(AppUpdatesSupport.CheckFrequency.daily)
-                    Text(text.frequencyWeekly).tag(AppUpdatesSupport.CheckFrequency.weekly)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
+                VorssaintSegmentedTabs(
+                    selection: frequencyBinding,
+                    options: [
+                        .init(.off, title: text.frequencyOff),
+                        .init(.daily, title: text.frequencyDaily),
+                        .init(.weekly, title: text.frequencyWeekly),
+                    ],
+                    tone: .brand
+                )
                 if let next = updates.nextCheck {
                     Text(String(format: text.nextCheckFormat, nextCheckText(next)))
                         .font(.caption)
@@ -41,7 +43,7 @@ struct AppUpdatesSettings: View {
                 SettingsRow(symbol: "bell.badge", title: text.notifyToggle) {
                     Toggle(text.notifyToggle, isOn: $notify)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .disabled(AppUpdatesSupport.CheckFrequency.sanitized(frequencyRaw) == .off)
                         .onChange(of: notify) { _, value in
                             guard value else { return }
@@ -54,7 +56,7 @@ struct AppUpdatesSettings: View {
                 SettingsRow(symbol: "shippingbox", title: text.includeHomebrewToggle) {
                     Toggle(text.includeHomebrewToggle, isOn: $includeHomebrewApps)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .disabled(includeHomebrewApps && enabledSourceCount == 1)
                         .onChange(of: includeHomebrewApps) { _, _ in
                             updates.sourceSelectionDidChange()
@@ -65,7 +67,7 @@ struct AppUpdatesSettings: View {
                             caption: text.includeStoreCaption) {
                     Toggle(text.includeStoreToggle, isOn: $includeAppStore)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .disabled(includeAppStore && enabledSourceCount == 1)
                         .onChange(of: includeAppStore) { _, _ in
                             updates.sourceSelectionDidChange()
@@ -76,7 +78,7 @@ struct AppUpdatesSettings: View {
                             caption: text.includeOnlineCaption) {
                     Toggle(text.includeOnlineToggle, isOn: $includeOnlineCatalog)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                         .disabled(includeOnlineCatalog && enabledSourceCount == 1)
                         .onChange(of: includeOnlineCatalog) { _, _ in
                             updates.sourceSelectionDidChange()
@@ -88,7 +90,7 @@ struct AppUpdatesSettings: View {
                 SettingsRow(symbol: "menubar.rectangle", title: text.showInPanel) {
                     Toggle(text.showInPanel, isOn: $showInPanel)
                         .labelsHidden()
-                        .toggleStyle(.switch)
+                        .toggleStyle(VorssaintCompactSwitchStyle())
                 }
             }
         }

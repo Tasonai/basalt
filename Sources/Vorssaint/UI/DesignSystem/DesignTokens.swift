@@ -3,6 +3,28 @@
 
 import SwiftUI
 
+/// 4pt / 8pt layout grid spacing scale shared across cards, windows, and overlays.
+enum DesignSpace {
+    static let xxs: CGFloat = 2
+    static let xs: CGFloat = 4
+    static let sm: CGFloat = 8
+    static let md: CGFloat = 12
+    static let lg: CGFloat = 16
+    static let xl: CGFloat = 20
+    static let xxl: CGFloat = 24
+    static let section: CGFloat = 32
+
+    static func concentricInner(outer: CGFloat, inset: CGFloat) -> CGFloat {
+        max(4, outer - inset)
+    }
+}
+
+/// Progressive disclosure density mode for MenuPanelView.
+enum PanelDensityMode: String, CaseIterable, Equatable, Sendable {
+    case calm
+    case pro
+}
+
 /// Concentric corner radii across panels, cards, inner groups, and tiles.
 enum DesignRadius {
     static let window: CGFloat = 20
@@ -42,6 +64,9 @@ enum DesignMotion {
     static let snappy = Animation.spring(response: 0.24, dampingFraction: 0.82)
     static let smooth = Animation.spring(response: 0.34, dampingFraction: 0.86)
     static let gentle = Animation.easeOut(duration: 0.22)
+    static let emilPress = Animation.timingCurve(0.23, 1.0, 0.32, 1.0, duration: 0.14)
+    static let fluidX = Animation.spring(response: 0.30, dampingFraction: 0.84)
+    static let fluidY = Animation.spring(response: 0.34, dampingFraction: 0.88)
 
     static func resolve(_ animation: Animation, reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : animation
