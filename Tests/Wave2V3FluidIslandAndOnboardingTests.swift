@@ -97,7 +97,7 @@ enum Wave2V3FluidIslandAndOnboardingContract {
 
         suite.expect(notchView.contains("NotchFluidKinematics")
                      && notchView.contains("DesignMotion.fluidX")
-                     && notchView.contains("NotchMascotView"),
+                     && notchView.contains("NotchMascotTrackView"),
                      "NotchView integrates NotchFluidKinematics springs and preserves Mascot")
     }
 }
