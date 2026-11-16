@@ -95,6 +95,16 @@ final class BrightnessService: ObservableObject {
     @Published private(set) var ddcVolumeLevels: [CGDirectDisplayID: Double] = [:]
     @Published private(set) var ddcMutedDisplays = Set<CGDirectDisplayID>()
     @Published private(set) var ddcInputSources: [CGDirectDisplayID: DisplayInputSourcePreset] = [:]
+    @Published var solarSyncEnabled: Bool = UserDefaults.standard.bool(forKey: "displaySolarSyncEnabled") {
+        didSet {
+            guard oldValue != solarSyncEnabled else { return }
+            UserDefaults.standard.set(solarSyncEnabled, forKey: Self.solarSyncDefaultsKey)
+            syncSolarSyncTimer()
+        }
+    }
+    @Published private(set) var solarSyncTargetLuminance: Double = SolarSyncCurve.targetLuminance(
+        hour: BrightnessService.localSolarHour(for: Date())
+    )
 
     /// Whether the island's brightness slider is on and shows the focused
     /// display, so a key that moved it moves the slider.
@@ -316,6 +326,12 @@ final class BrightnessService: ObservableObject {
     /// The topology a queued or running rebuild already covers. Opening the
     /// panel must not put the same slow monitor probe behind itself again.
     private var rebuildingTopology: BrightnessSupport.DisplayTopology?
+    private var solarSyncTimer: Timer?
+
+    deinit {
+        solarSyncTimer?.invalidate()
+        solarSyncTimer = nil
+    }
 
     private init() {
         SessionActivity.shared.onChange { [weak self] _ in self?.syncKeyTap() }
@@ -567,12 +583,14 @@ final class BrightnessService: ObservableObject {
         }
         installWakeObservers()
         refresh()
+        syncSolarSyncTimer()
     }
 
     func stop() {
         // Keep the reset guard intact while preferences or feature state
         // changes during the asynchronous permission teardown. The reset
         // owner releases it explicitly through resumeInputTaps().
+        stopSolarSyncTimer()
         keyboardNoticeWork?.cancel(); keyboardNoticeWork = nil
         keyboardLevelWork?.cancel(); keyboardLevelWork = nil
         keyboardDragStart = nil
@@ -2422,6 +2440,9 @@ final class BrightnessService: ObservableObject {
             self.refreshKeyboardLight()
             self.syncKeyTap()
             self.hydrateDDCProState(for: resolved)
+            if self.solarSyncEnabled {
+                self.applySolarSyncNow()
+            }
         }
     }
 
@@ -3053,8 +3074,93 @@ extension BrightnessService {
     private static let ddcVolumeDefaultsKey = "brightnessDDCVolumeByFingerprint"
     private static let ddcMutedDefaultsKey = "brightnessDDCMutedByFingerprint"
     private static let ddcInputDefaultsKey = "brightnessDDCInputByFingerprint"
+    private static let solarSyncDefaultsKey = "displaySolarSyncEnabled"
+    private static let solarSyncInterval: TimeInterval = 60
+    private static let solarSyncTolerance: TimeInterval = 10
     private static let defaultDDCContrast: Double = 75
     private static let defaultDDCVolume: Double = 60
+
+    static func localSolarHour(for date: Date = Date()) -> Double {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return Double(components.hour ?? 12) + Double(components.minute ?? 0) / 60.0
+    }
+
+    func applySolarSyncNow(date: Date = Date()) {
+        let hour = Self.localSolarHour(for: date)
+        let target = SolarSyncCurve.targetLuminance(hour: hour)
+        let apply = { [weak self] in
+            guard let self else { return }
+            if abs(self.solarSyncTargetLuminance - target) > 0.0005 {
+                self.solarSyncTargetLuminance = target
+            }
+            guard self.running else { return }
+            let targets = self.displays.filter { $0.isActive && $0.method != nil }
+            for display in targets {
+                self.setBrightness(target, for: display.id, showOSD: false, smooth: true, announces: false)
+            }
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
+    }
+
+    private func syncSolarSyncTimer() {
+        let apply = { [weak self] in
+            guard let self else { return }
+            self.solarSyncTimer?.invalidate()
+            self.solarSyncTimer = nil
+            guard self.solarSyncEnabled, self.running else { return }
+            self.applySolarSyncNow()
+            let timer = Timer(timeInterval: Self.solarSyncInterval, repeats: true) { [weak self] _ in
+                guard let self, self.solarSyncEnabled, self.running else {
+                    self?.stopSolarSyncTimer()
+                    return
+                }
+                self.applySolarSyncNow()
+            }
+            timer.tolerance = Self.solarSyncTolerance
+            RunLoop.main.add(timer, forMode: .common)
+            self.solarSyncTimer = timer
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
+    }
+
+    private func stopSolarSyncTimer() {
+        if Thread.isMainThread {
+            solarSyncTimer?.invalidate()
+            solarSyncTimer = nil
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.solarSyncTimer?.invalidate()
+                self?.solarSyncTimer = nil
+            }
+        }
+    }
+
+    @discardableResult
+    func sendDDCPowerStandby(displayID: CGDirectDisplayID) -> Bool {
+        stateLock.lock()
+        let route = routes[displayID]
+        stateLock.unlock()
+        guard let route, route.method == .ddc, route.service != nil else {
+            return false
+        }
+        let packet = DDCPacketBuilder.setVCPValuePacket(
+            code: DDCControlCode.powerMode.rawValue,
+            value: DDCPowerState.standby.rawValue
+        )
+        guard DDCPacketBuilder.verifySetVCPPacket(packet) else {
+            return false
+        }
+        enqueueDDCProWrite(code: .powerMode, value: DDCPowerState.standby.rawValue, for: displayID)
+        return true
+    }
 
     func ddcContrast(for id: CGDirectDisplayID) -> Double {
         ddcContrastLevels[id] ?? persistedDDCContrast(for: id) ?? Self.defaultDDCContrast

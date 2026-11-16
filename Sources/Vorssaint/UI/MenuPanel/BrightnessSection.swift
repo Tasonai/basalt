@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import AppKit
 import SwiftUI
 
 /// Panel section with one brightness slider per adjustable display. Values
 /// refresh whenever the section appears, so changes made with the keyboard,
 /// in System Settings or on the monitor itself are picked up.
 struct BrightnessSection: View {
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var service = BrightnessService.shared
     @ObservedObject private var permissions = Permissions.shared
@@ -17,12 +19,74 @@ struct BrightnessSection: View {
     @AppStorage(DefaultsKey.brightnessKeysEnabled) private var brightnessKeysEnabled = false
     @AppStorage(DefaultsKey.displayAmbientSyncEnabled) private var ambientSyncEnabled = false
     @State private var optionsExpanded = false
+    @State private var selectedMirrorDisplayID: CGDirectDisplayID?
+    @State private var selectedMirrorRefreshPreset: CustomRefreshRatePreset = .hz60
     var collapsible = true
 
     private var strings: BrightnessFeatureStrings { FeatureStrings.brightness(l10n.language) }
     private var wave4Strings: OverhaulWave4Strings { OverhaulStrings.wave4(l10n.language) }
     private var v2Strings: OverhaulV2Strings { OverhaulV2Strings.localized(l10n.language) }
     private var ddcDisplays: [BrightnessDisplay] { service.displays.filter { $0.isActive && $0.method == .ddc } }
+
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
+    }
+
+    private var physicalMirrorCandidates: [BrightnessDisplay] {
+        let virtualIDs = Set(virtualDisplays.virtualDisplayIDs.values)
+        let active = service.displays.filter { $0.isActive && !virtualIDs.contains($0.id) }
+        let external = active.filter { !$0.isBuiltIn }
+        return external.isEmpty ? active : external
+    }
+
+    private var resolvedMirrorDisplay: BrightnessDisplay? {
+        if let selectedMirrorDisplayID,
+           let match = physicalMirrorCandidates.first(where: { $0.id == selectedMirrorDisplayID }) {
+            return match
+        }
+        if let boundID = virtualDisplays.mirroredPhysicalDisplayID,
+           let match = physicalMirrorCandidates.first(where: { $0.id == boundID }) {
+            return match
+        }
+        return physicalMirrorCandidates.first(where: { !$0.isBuiltIn }) ?? physicalMirrorCandidates.first
+    }
+
+    private var frontmostRuleTarget: (bundleID: String, displayName: String)? {
+        let ownBundleID = Bundle.main.bundleIdentifier
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != ownPID,
+           let bundleID = front.bundleIdentifier,
+           !bundleID.isEmpty,
+           bundleID != ownBundleID {
+            return (bundleID, front.localizedName ?? bundleID)
+        }
+        if let pid = (NSApp.delegate as? AppDelegate)?.panelActivationSourcePID,
+           let app = NSRunningApplication(processIdentifier: pid),
+           !app.isTerminated,
+           let bundleID = app.bundleIdentifier,
+           !bundleID.isEmpty,
+           bundleID != ownBundleID {
+            return (bundleID, app.localizedName ?? bundleID)
+        }
+        if let tracked = xdrUpscale.frontmostBundleID,
+           !tracked.isEmpty,
+           tracked != ownBundleID {
+            return (tracked, displayNameForBundleID(tracked))
+        }
+        return nil
+    }
+
+    private func displayNameForBundleID(_ bundleID: String) -> String {
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
+           let name = running.localizedName, !name.isEmpty {
+            return name
+        }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return FileManager.default.displayName(atPath: url.path)
+        }
+        return bundleID
+    }
 
     var body: some View {
         PanelSection(.brightness, title: strings.pageTitle, collapsible: collapsible) {
@@ -61,6 +125,10 @@ struct BrightnessSection: View {
                     Divider()
                     ExtraBrightnessPanelToggle()
                 }
+                if virtualDisplays.mirrorGate.isPending {
+                    Divider()
+                    mirrorConfirmationBanner
+                }
                 Divider()
                 optionsDisclosure
             }
@@ -70,6 +138,12 @@ struct BrightnessSection: View {
                 service.refreshKeyboardLight()
                 if ambientSync.isEnabled != ambientSyncEnabled {
                     ambientSync.isEnabled = ambientSyncEnabled
+                }
+                if let preset = CustomRefreshRatePreset(rawValue: virtualDisplays.selectedMirrorRefreshHz) {
+                    selectedMirrorRefreshPreset = preset
+                }
+                if selectedMirrorDisplayID == nil {
+                    selectedMirrorDisplayID = resolvedMirrorDisplay?.id
                 }
             }
         }
@@ -145,6 +219,7 @@ struct BrightnessSection: View {
                             formattedValue: String(format: "%+.0f%%", locale: Locale.current, ambientSync.userBias * 100)
                         )
                     }
+                    solarSyncRow
                     Divider()
                     Toggle(v2Strings.xdrBoostLabel, isOn: $xdrUpscale.isEnabled)
                         .disabled(!xdrUpscale.isXDRCapable && !xdrUpscale.isEnabled)
@@ -153,7 +228,7 @@ struct BrightnessSection: View {
                         .font(.system(size: 9.5))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if xdrUpscale.isEnabled {
+                    if xdrUpscale.isEnabled || xdrUpscale.isAutoBoostTriggeredByFrontmostApp || !xdrUpscale.xdrAutoBoostBundleIDs.isEmpty {
                         VorssaintDetentSlider(
                             value: $xdrUpscale.boostAmount,
                             range: XDRUpscaleOverlayController.minBoostAmount...XDRUpscaleOverlayController.maxBoostAmount,
@@ -164,12 +239,15 @@ struct BrightnessSection: View {
                             formattedValue: String(format: "%.2fx", locale: Locale.current, xdrUpscale.boostAmount)
                         )
                     }
+                    xdrPerAppRulesGroup
                     if !ddcDisplays.isEmpty {
                         Divider()
                         ForEach(ddcDisplays) { display in
                             ddcControlsRow(for: display)
                         }
                     }
+                    Divider()
+                    hidpiMirrorCard
                     Divider()
                     HStack(spacing: 6) {
                         Image(systemName: "rectangle.badge.plus")
@@ -349,7 +427,257 @@ struct BrightnessSection: View {
                 .controlSize(.mini)
                 .fixedSize()
             }
+            HStack(spacing: DesignSpace.sm) {
+                Spacer(minLength: 0)
+                VorssaintActionChip(
+                    title: v3(\OverhaulV3Strings.ddcStandbyAction),
+                    symbol: "moon.zzz.fill",
+                    tone: .energyDisplay
+                ) {
+                    service.sendDDCPowerStandby(displayID: display.id)
+                }
+            }
         }
+    }
+
+    private var solarSyncRow: some View {
+        HStack(spacing: DesignSpace.sm) {
+            Label(v3(\OverhaulV3Strings.solarSyncToggleTitle), systemImage: "sun.and.horizon.fill")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: DesignSpace.xs)
+            if service.solarSyncEnabled {
+                Text("\(Int((service.solarSyncTargetLuminance * 100).rounded()))%")
+                    .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(SemanticCategoryTone.energyDisplay.color(scheme: colorScheme))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(SemanticCategoryTone.energyDisplay.color(scheme: colorScheme).opacity(0.14))
+                    )
+            }
+            Toggle(v3(\OverhaulV3Strings.solarSyncToggleTitle), isOn: $service.solarSyncEnabled)
+                .labelsHidden()
+                .toggleStyle(VorssaintCompactSwitchStyle(tone: .energyDisplay))
+                .accessibilityLabel(v3(\OverhaulV3Strings.solarSyncToggleTitle))
+        }
+    }
+
+    private var xdrPerAppRulesGroup: some View {
+        let configuredIDs = xdrUpscale.xdrAutoBoostBundleIDs.sorted()
+        let frontTarget = frontmostRuleTarget
+        return VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
+            HStack(spacing: DesignSpace.xs + 2) {
+                Image(systemName: "app.badge.checkmark")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(v3(\OverhaulV3Strings.xdrPerAppRulesTitle))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: DesignSpace.xs)
+                if xdrUpscale.isAutoBoostTriggeredByFrontmostApp {
+                    Text("XDR")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(SemanticCategoryTone.energyDisplay.color(scheme: colorScheme))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(SemanticCategoryTone.energyDisplay.color(scheme: colorScheme).opacity(0.14))
+                        )
+                }
+            }
+            if frontTarget != nil || !configuredIDs.isEmpty {
+                FlowLayoutLite(spacing: DesignSpace.xs + 2) {
+                    if let frontTarget, !xdrUpscale.xdrAutoBoostBundleIDs.contains(frontTarget.bundleID) {
+                        VorssaintActionChip(
+                            title: frontTarget.displayName,
+                            symbol: "plus.circle",
+                            tone: .energyDisplay
+                        ) {
+                            xdrUpscale.setAutoBoost(bundleID: frontTarget.bundleID, enabled: true)
+                        }
+                        .help(frontTarget.bundleID)
+                    }
+                    ForEach(configuredIDs, id: \.self) { bundleID in
+                        VorssaintActionChip(
+                            title: displayNameForBundleID(bundleID),
+                            symbol: "xmark.circle.fill",
+                            tone: .energyDisplay,
+                            prominent: xdrUpscale.frontmostBundleID == bundleID
+                        ) {
+                            xdrUpscale.setAutoBoost(bundleID: bundleID, enabled: false)
+                        }
+                        .help(bundleID)
+                    }
+                }
+            }
+        }
+    }
+
+    private var hidpiMirrorCard: some View {
+        VStack(alignment: .leading, spacing: DesignSpace.sm) {
+            HStack(spacing: DesignSpace.xs + 2) {
+                Image(systemName: "rectangle.2.swap")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(SemanticCategoryTone.energyDisplay.color(scheme: colorScheme))
+                Text(v3(\OverhaulV3Strings.hidpiMirrorTitle))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: DesignSpace.xs + 2) {
+                Menu {
+                    ForEach(physicalMirrorCandidates) { candidate in
+                        Button {
+                            selectedMirrorDisplayID = candidate.id
+                        } label: {
+                            Label(
+                                candidate.name,
+                                systemImage: resolvedMirrorDisplay?.id == candidate.id
+                                    ? "checkmark"
+                                    : (candidate.isBuiltIn ? "laptopcomputer" : "display")
+                            )
+                        }
+                    }
+                } label: {
+                    HStack(spacing: DesignSpace.xs) {
+                        Text(resolvedMirrorDisplay?.name ?? strings.noDisplays)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, DesignSpace.sm - 1)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.05))
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(physicalMirrorCandidates.isEmpty)
+
+                Menu {
+                    ForEach(CustomRefreshRatePreset.allCases) { preset in
+                        Button {
+                            selectedMirrorRefreshPreset = preset
+                            virtualDisplays.selectedMirrorRefreshHz = preset.rawValue
+                        } label: {
+                            Label(preset.label, systemImage: selectedMirrorRefreshPreset == preset ? "checkmark" : "gauge.medium")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: DesignSpace.xs) {
+                        Text(selectedMirrorRefreshPreset.label)
+                            .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, DesignSpace.sm - 1)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.05))
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: DesignSpace.xs + 2) {
+                VorssaintActionChip(
+                    title: v3(\OverhaulV3Strings.hidpiMirrorTitle),
+                    symbol: "rectangle.2.swap",
+                    tone: .energyDisplay,
+                    prominent: virtualDisplays.mirroredPhysicalDisplayID != nil
+                ) {
+                    if let target = resolvedMirrorDisplay {
+                        _ = virtualDisplays.bindHardwareMirror(
+                            physicalDisplayID: target.id,
+                            refreshRateHz: Double(selectedMirrorRefreshPreset.rawValue)
+                        )
+                    }
+                }
+                .disabled(resolvedMirrorDisplay == nil || !VirtualDisplayManager.isRuntimeSupported)
+
+                if virtualDisplays.mirroredPhysicalDisplayID != nil && !virtualDisplays.mirrorGate.isPending {
+                    VorssaintActionChip(
+                        title: v3(\OverhaulV3Strings.hidpiMirrorRevertAction),
+                        symbol: "arrow.uturn.backward",
+                        tone: .energyDisplay,
+                        destructive: true
+                    ) {
+                        virtualDisplays.revertMirrorBinding()
+                    }
+                }
+            }
+        }
+        .padding(DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
+        )
+        .hairlineSpecularBorder(cornerRadius: DesignRadius.innerGroup, opacity: 0.14)
+    }
+
+    private var mirrorConfirmationBanner: some View {
+        let accent = SemanticCategoryTone.energyDisplay.color(scheme: colorScheme)
+        return VStack(alignment: .leading, spacing: DesignSpace.sm) {
+            HStack(alignment: .top, spacing: DesignSpace.xs + 2) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(accent)
+                Text(v3(\OverhaulV3Strings.hidpiMirrorConfirmBanner))
+                    .font(.system(size: 10.5, weight: .medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: DesignSpace.xs)
+                Text("\(virtualDisplays.mirrorConfirmationRemainingSeconds)s")
+                    .font(.system(size: 10, weight: .bold).monospacedDigit())
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(accent.opacity(0.16))
+                    )
+            }
+            HStack(spacing: DesignSpace.sm) {
+                VorssaintActionChip(
+                    title: v3(\OverhaulV3Strings.hidpiMirrorConfirmAction),
+                    symbol: "checkmark",
+                    tone: .energyDisplay,
+                    prominent: true
+                ) {
+                    virtualDisplays.confirmMirrorBinding()
+                }
+                VorssaintActionChip(
+                    title: v3(\OverhaulV3Strings.hidpiMirrorRevertAction),
+                    symbol: "arrow.uturn.backward",
+                    tone: .energyDisplay,
+                    destructive: true
+                ) {
+                    virtualDisplays.revertMirrorBinding()
+                }
+            }
+        }
+        .padding(DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .fill(accent.opacity(colorScheme == .dark ? 0.12 : 0.08))
+        )
+        .hairlineSpecularBorder(cornerRadius: DesignRadius.innerGroup, opacity: 0.22)
     }
 
     private var ambientBiasBinding: Binding<Double> {

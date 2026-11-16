@@ -14,6 +14,14 @@ enum DDCControlCode: UInt8, CaseIterable, Sendable {
     case inputSource = 0x60
     case audioSpeakerVolume = 0x62
     case audioMute = 0x8D
+    case powerMode = 0xD6
+}
+
+/// VESA MCCS VCP `0xD6` power states for external monitors.
+enum DDCPowerState: UInt16, Sendable, CaseIterable {
+    case on = 0x01
+    case standby = 0x04
+    case off = 0x05
 }
 
 /// Standard DisplayPort / HDMI / USB-C VCP input source values.
@@ -43,9 +51,13 @@ enum DDCPacketBuilder {
     static let hostSourceAddress: UInt8 = 0x51
 
     static func buildSetVCPPacket(code: DDCControlCode, value: UInt16) -> [UInt8] {
+        setVCPValuePacket(code: code.rawValue, value: value)
+    }
+
+    static func setVCPValuePacket(code: UInt8, value: UInt16) -> [UInt8] {
         let high = UInt8((value >> 8) & 0xFF)
         let low = UInt8(value & 0xFF)
-        let body: [UInt8] = [hostSourceAddress, 0x84, 0x03, code.rawValue, high, low]
+        let body: [UInt8] = [hostSourceAddress, 0x84, 0x03, code, high, low]
         let checksum = body.reduce(slaveWriteAddress, ^)
         return body + [checksum]
     }
@@ -215,6 +227,93 @@ final class AmbientLightSyncService: ObservableObject, @unchecked Sendable {
     }
 }
 
+/// Computes a smooth 24-hour circadian solar luminance curve for external monitors.
+struct SolarSyncCurve: Sendable {
+    static func targetLuminance(hour: Double, minLevel: Double = 0.22, maxLevel: Double = 0.92) -> Double {
+        let safeMinRaw = minLevel.isFinite ? minLevel : 0.22
+        let safeMaxRaw = maxLevel.isFinite ? maxLevel : 0.92
+        let clampedMin = min(max(safeMinRaw, 0.05), 1.0)
+        let clampedMax = min(max(safeMaxRaw, clampedMin), 1.0)
+
+        guard hour.isFinite else { return clampedMin }
+
+        var normalizedHour = hour.truncatingRemainder(dividingBy: 24.0)
+        if normalizedHour < 0 {
+            normalizedHour += 24.0
+        }
+        if normalizedHour >= 24.0 {
+            normalizedHour -= 24.0
+        }
+
+        guard normalizedHour >= 6.0 && normalizedHour < 22.0 else {
+            return clampedMin
+        }
+
+        // Smooth raised-cosine solar elevation from 06:00 (0) through 14:00 (1) to 22:00 (0).
+        let dayProgress = (normalizedHour - 6.0) / 16.0
+        let solarElevation = 0.5 * (1.0 - cos(2.0 * Double.pi * dayProgress))
+        let target = clampedMin + (clampedMax - clampedMin) * solarElevation
+        return min(max(target, clampedMin), clampedMax)
+    }
+}
+
+/// Standard refresh rate presets for virtual HiDPI hardware mirror targets.
+enum CustomRefreshRatePreset: Int, CaseIterable, Identifiable, Sendable {
+    case hz60 = 60
+    case hz75 = 75
+    case hz100 = 100
+    case hz120 = 120
+    case hz144 = 144
+
+    var id: Int { rawValue }
+    var label: String { "\(rawValue) Hz" }
+}
+
+/// Tracks the 15-second confirmation window before a hardware mirror binding auto-reverts.
+struct MirrorConfirmationGate: Equatable, Sendable {
+    private(set) var isPending: Bool = false
+    private(set) var targetDisplayID: CGDirectDisplayID?
+    private(set) var virtualDisplayID: CGDirectDisplayID?
+    private(set) var deadline: Date?
+
+    mutating func begin(
+        targetDisplayID: CGDirectDisplayID,
+        virtualDisplayID: CGDirectDisplayID,
+        now: Date = Date(),
+        timeout: TimeInterval = 15
+    ) {
+        let safeTimeout = timeout.isFinite ? max(0, timeout) : 15
+        isPending = true
+        self.targetDisplayID = targetDisplayID
+        self.virtualDisplayID = virtualDisplayID
+        deadline = now.addingTimeInterval(safeTimeout)
+    }
+
+    mutating func confirm() {
+        isPending = false
+        deadline = nil
+    }
+
+    func shouldAutoRevert(now: Date = Date()) -> Bool {
+        guard isPending, let deadline else { return false }
+        return now >= deadline
+    }
+
+    func remainingSeconds(now: Date = Date()) -> Int {
+        guard isPending, let deadline else { return 0 }
+        let remaining = deadline.timeIntervalSince(now)
+        guard remaining > 0 else { return 0 }
+        return min(max(Int(ceil(remaining)), 0), 15)
+    }
+
+    mutating func cancel() {
+        isPending = false
+        targetDisplayID = nil
+        virtualDisplayID = nil
+        deadline = nil
+    }
+}
+
 /// User-space HiDPI / virtual display manager backed safely by runtime `CGVirtualDisplay` lookup.
 final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
     static let shared = VirtualDisplayManager()
@@ -244,17 +343,46 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
 
     @Published private(set) var activePresetIDs: [String] = []
     @Published private(set) var virtualDisplayIDs: [String: CGDirectDisplayID] = [:]
+    @Published private(set) var mirrorGate = MirrorConfirmationGate()
+    @Published private(set) var mirrorConfirmationRemainingSeconds: Int = 0
+    @Published private(set) var mirroredPhysicalDisplayID: CGDirectDisplayID?
+    @Published var selectedMirrorRefreshHz: Int = CustomRefreshRatePreset.hz60.rawValue
+
+    private struct VirtualDisplaySpec: Equatable {
+        let name: String
+        let logicalWidth: Int
+        let logicalHeight: Int
+        let scaleFactor: Int
+        let refreshRate: Double
+        let productID: UInt32
+        let serialNum: UInt32
+        let sizeInMillimeters: CGSize?
+
+        var backingPixelWidth: Int { logicalWidth * scaleFactor }
+        var backingPixelHeight: Int { logicalHeight * scaleFactor }
+    }
 
     private var virtualDisplays: [String: AnyObject] = [:]
+    private var mirrorVirtualDisplay: AnyObject?
+    private var mirrorVirtualDisplayID: CGDirectDisplayID?
+    private var mirrorVirtualSpec: VirtualDisplaySpec?
+    private var mirrorTimer: Timer?
     private let displayQueue = DispatchQueue(label: "com.vorssaint.virtualdisplay")
     private let stateLock = NSLock()
 
     deinit {
+        mirrorTimer?.invalidate()
+        mirrorTimer = nil
         stateLock.lock()
         let removed = Array(virtualDisplays.values)
+        let removedMirror = mirrorVirtualDisplay
         virtualDisplays.removeAll()
+        mirrorVirtualDisplay = nil
+        mirrorVirtualDisplayID = nil
+        mirrorVirtualSpec = nil
         stateLock.unlock()
         _ = removed
+        _ = removedMirror
     }
 
     func togglePreset(_ preset: ScaledPreset) {
@@ -274,7 +402,18 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
         stateLock.unlock()
 
         guard existingDisplay == nil else { return }
-        if let created = createRuntimeVirtualDisplay(for: preset) {
+        let presetIndex = Self.presets.firstIndex(of: preset) ?? 0
+        let spec = VirtualDisplaySpec(
+            name: "Vorssaint Virtual \(preset.logicalWidth)x\(preset.logicalHeight)",
+            logicalWidth: preset.logicalWidth,
+            logicalHeight: preset.logicalHeight,
+            scaleFactor: preset.scaleFactor,
+            refreshRate: 60.0,
+            productID: UInt32(0x4844 + presetIndex),
+            serialNum: UInt32(presetIndex + 1),
+            sizeInMillimeters: nil
+        )
+        if let created = createRuntimeVirtualDisplay(spec: spec) {
             let stillActive = activePresetIDs.contains(preset.id)
             if stillActive {
                 stateLock.lock()
@@ -295,6 +434,9 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
     }
 
     func deactivateAll() {
+        if mirroredPhysicalDisplayID != nil || mirrorGate.isPending || mirrorVirtualDisplayID != nil {
+            revertMirrorBinding()
+        }
         activePresetIDs.removeAll()
         virtualDisplayIDs.removeAll()
         stateLock.lock()
@@ -304,7 +446,199 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
         _ = removed
     }
 
-    private func createRuntimeVirtualDisplay(for preset: ScaledPreset) -> (display: AnyObject, id: CGDirectDisplayID)? {
+    @discardableResult
+    func bindHardwareMirror(physicalDisplayID: CGDirectDisplayID, refreshRateHz: Double) -> Bool {
+        guard Self.isRuntimeSupported else { return false }
+        guard physicalDisplayID != kCGNullDirectDisplay else { return false }
+        guard refreshRateHz.isFinite, refreshRateHz > 0 else { return false }
+        guard !virtualDisplayIDs.values.contains(physicalDisplayID) else { return false }
+        guard isOnlineDisplay(physicalDisplayID) else { return false }
+
+        let sanitizedHz = min(max(refreshRateHz, 24.0), 240.0)
+
+        stateLock.lock()
+        let existingMirrorDisplay = mirrorVirtualDisplay
+        let existingMirrorID = mirrorVirtualDisplayID
+        let existingMirrorSpec = mirrorVirtualSpec
+        stateLock.unlock()
+
+        guard physicalDisplayID != existingMirrorID else { return false }
+
+        let targetSpec: VirtualDisplaySpec
+        let targetVirtual: (display: AnyObject, id: CGDirectDisplayID)
+        let createdNewVirtual: Bool
+
+        if mirroredPhysicalDisplayID == physicalDisplayID,
+           let existingMirrorDisplay,
+           let existingMirrorID,
+           let existingMirrorSpec,
+           isOnlineDisplay(existingMirrorID),
+           abs(existingMirrorSpec.refreshRate - sanitizedHz) < 0.01 {
+            targetSpec = existingMirrorSpec
+            targetVirtual = (existingMirrorDisplay, existingMirrorID)
+            createdNewVirtual = false
+        } else {
+            if mirroredPhysicalDisplayID != nil || mirrorGate.isPending || existingMirrorDisplay != nil {
+                revertMirrorBinding()
+            }
+            guard let resolvedSpec = makeMirrorVirtualSpec(for: physicalDisplayID, refreshRate: sanitizedHz),
+                  let created = createRuntimeVirtualDisplay(spec: resolvedSpec) else {
+                return false
+            }
+            targetSpec = resolvedSpec
+            targetVirtual = created
+            createdNewVirtual = true
+        }
+
+        guard targetVirtual.id != kCGNullDirectDisplay,
+              targetVirtual.id != physicalDisplayID,
+              configureMirror(display: physicalDisplayID, master: targetVirtual.id) else {
+            if !createdNewVirtual {
+                revertMirrorBinding()
+            } else {
+                _ = targetVirtual.display
+            }
+            return false
+        }
+
+        stateLock.lock()
+        mirrorVirtualDisplay = targetVirtual.display
+        mirrorVirtualDisplayID = targetVirtual.id
+        mirrorVirtualSpec = targetSpec
+        stateLock.unlock()
+
+        let roundedHz = Int(sanitizedHz.rounded())
+        if selectedMirrorRefreshHz != roundedHz {
+            selectedMirrorRefreshHz = roundedHz
+        }
+        mirroredPhysicalDisplayID = physicalDisplayID
+
+        let now = Date()
+        mirrorGate.begin(targetDisplayID: physicalDisplayID, virtualDisplayID: targetVirtual.id, now: now, timeout: 15)
+        mirrorConfirmationRemainingSeconds = mirrorGate.remainingSeconds(now: now)
+        startMirrorCountdownTimer()
+        return true
+    }
+
+    func confirmMirrorBinding() {
+        stopMirrorCountdownTimer()
+        mirrorGate.confirm()
+        mirrorConfirmationRemainingSeconds = 0
+    }
+
+    func revertMirrorBinding() {
+        stopMirrorCountdownTimer()
+        let physicalID = mirroredPhysicalDisplayID ?? mirrorGate.targetDisplayID
+        if let physicalID, physicalID != kCGNullDirectDisplay {
+            _ = configureMirror(display: physicalID, master: kCGNullDirectDisplay)
+        }
+        mirrorGate.cancel()
+        mirrorConfirmationRemainingSeconds = 0
+        mirroredPhysicalDisplayID = nil
+        clearMirrorVirtualDisplay()
+    }
+
+    private func isOnlineDisplay(_ displayID: CGDirectDisplayID) -> Bool {
+        var count: UInt32 = 0
+        var displays = [CGDirectDisplayID](repeating: 0, count: 32)
+        guard CGGetOnlineDisplayList(UInt32(displays.count), &displays, &count) == .success else {
+            return CGDisplayIsOnline(displayID) != 0
+        }
+        return displays.prefix(Int(count)).contains(displayID)
+    }
+
+    private func makeMirrorVirtualSpec(for physicalDisplayID: CGDirectDisplayID, refreshRate: Double) -> VirtualDisplaySpec? {
+        let currentMode = CGDisplayCopyDisplayMode(physicalDisplayID)
+        let width = currentMode?.width ?? CGDisplayPixelsWide(physicalDisplayID)
+        let height = currentMode?.height ?? CGDisplayPixelsHigh(physicalDisplayID)
+        guard width > 0, height > 0 else { return nil }
+
+        let scaleFactor = (width * 2 <= 7680 && height * 2 <= 4320) ? 2 : 1
+        let screenSize = CGDisplayScreenSize(physicalDisplayID)
+        let sizeMM = (screenSize.width > 0 && screenSize.height > 0) ? screenSize : nil
+
+        return VirtualDisplaySpec(
+            name: "Vorssaint HiDPI Mirror \(width)x\(height)",
+            logicalWidth: width,
+            logicalHeight: height,
+            scaleFactor: scaleFactor,
+            refreshRate: refreshRate,
+            productID: 0x4850,
+            serialNum: UInt32(truncatingIfNeeded: physicalDisplayID),
+            sizeInMillimeters: sizeMM
+        )
+    }
+
+    private func configureMirror(display: CGDirectDisplayID, master: CGDirectDisplayID) -> Bool {
+        guard display != kCGNullDirectDisplay, display != master else { return false }
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else {
+            return false
+        }
+        guard CGConfigureDisplayMirrorOfDisplay(config, display, master) == .success else {
+            CGCancelDisplayConfiguration(config)
+            return false
+        }
+        return CGCompleteDisplayConfiguration(config, .forSession) == .success
+    }
+
+    private func clearMirrorVirtualDisplay() {
+        stateLock.lock()
+        let removed = mirrorVirtualDisplay
+        mirrorVirtualDisplay = nil
+        mirrorVirtualDisplayID = nil
+        mirrorVirtualSpec = nil
+        stateLock.unlock()
+        _ = removed
+    }
+
+    private func startMirrorCountdownTimer() {
+        let schedule: @Sendable () -> Void = { [weak self] in
+            guard let self else { return }
+            self.mirrorTimer?.invalidate()
+            self.mirrorTimer = nil
+            guard self.mirrorGate.isPending else { return }
+            let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                let now = Date()
+                guard self.mirrorGate.isPending else {
+                    self.stopMirrorCountdownTimer()
+                    self.mirrorConfirmationRemainingSeconds = 0
+                    return
+                }
+                if self.mirrorGate.shouldAutoRevert(now: now) {
+                    self.revertMirrorBinding()
+                    return
+                }
+                let remaining = self.mirrorGate.remainingSeconds(now: now)
+                if self.mirrorConfirmationRemainingSeconds != remaining {
+                    self.mirrorConfirmationRemainingSeconds = remaining
+                }
+            }
+            timer.tolerance = 0.1
+            RunLoop.main.add(timer, forMode: .common)
+            self.mirrorTimer = timer
+        }
+        if Thread.isMainThread {
+            schedule()
+        } else {
+            DispatchQueue.main.async(execute: schedule)
+        }
+    }
+
+    private func stopMirrorCountdownTimer() {
+        if Thread.isMainThread {
+            mirrorTimer?.invalidate()
+            mirrorTimer = nil
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.mirrorTimer?.invalidate()
+                self?.mirrorTimer = nil
+            }
+        }
+    }
+
+    private func createRuntimeVirtualDisplay(spec: VirtualDisplaySpec) -> (display: AnyObject, id: CGDirectDisplayID)? {
         guard let descriptorClass = NSClassFromString("CGVirtualDisplayDescriptor") as? NSObject.Type,
               let modeClass = NSClassFromString("CGVirtualDisplayMode"),
               let settingsClass = NSClassFromString("CGVirtualDisplaySettings") as? NSObject.Type,
@@ -313,30 +647,30 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
         }
 
         let descriptor = descriptorClass.init()
-        let presetIndex = Self.presets.firstIndex(of: preset) ?? 0
-        setIfResponds(descriptor, key: "name", value: "Vorssaint Virtual \(preset.logicalWidth)x\(preset.logicalHeight)")
-        setIfResponds(descriptor, key: "maxPixelsWide", value: NSNumber(value: UInt32(preset.backingPixelWidth)))
-        setIfResponds(descriptor, key: "maxPixelsHigh", value: NSNumber(value: UInt32(preset.backingPixelHeight)))
-        setIfResponds(descriptor, key: "sizeInMillimeters", value: NSValue(size: CGSize(
-            width: Double(preset.logicalWidth) * 0.23,
-            height: Double(preset.logicalHeight) * 0.23
-        )))
+        let physicalSize = spec.sizeInMillimeters ?? CGSize(
+            width: Double(spec.logicalWidth) * 0.23,
+            height: Double(spec.logicalHeight) * 0.23
+        )
+        setIfResponds(descriptor, key: "name", value: spec.name)
+        setIfResponds(descriptor, key: "maxPixelsWide", value: NSNumber(value: UInt32(spec.backingPixelWidth)))
+        setIfResponds(descriptor, key: "maxPixelsHigh", value: NSNumber(value: UInt32(spec.backingPixelHeight)))
+        setIfResponds(descriptor, key: "sizeInMillimeters", value: NSValue(size: physicalSize))
         setIfResponds(descriptor, key: "vendorID", value: NSNumber(value: UInt32(0x5653)))
-        setIfResponds(descriptor, key: "productID", value: NSNumber(value: UInt32(0x4844 + presetIndex)))
-        setIfResponds(descriptor, key: "serialNum", value: NSNumber(value: UInt32(presetIndex + 1)))
+        setIfResponds(descriptor, key: "productID", value: NSNumber(value: spec.productID))
+        setIfResponds(descriptor, key: "serialNum", value: NSNumber(value: spec.serialNum))
         setIfResponds(descriptor, key: "queue", value: displayQueue)
 
         guard let mode = allocateVirtualDisplayMode(
             modeClass: modeClass,
-            width: UInt32(preset.logicalWidth),
-            height: UInt32(preset.logicalHeight),
-            refreshRate: 60.0
+            width: UInt32(spec.logicalWidth),
+            height: UInt32(spec.logicalHeight),
+            refreshRate: spec.refreshRate
         ) else {
             return nil
         }
 
         let settings = settingsClass.init()
-        setIfResponds(settings, key: "hiDPI", value: NSNumber(value: UInt32(preset.scaleFactor > 1 ? 1 : 0)))
+        setIfResponds(settings, key: "hiDPI", value: NSNumber(value: UInt32(spec.scaleFactor > 1 ? 1 : 0)))
         setIfResponds(settings, key: "modes", value: [mode] as NSArray)
 
         guard let display = allocateVirtualDisplay(displayClass: displayClass, descriptor: descriptor) else {

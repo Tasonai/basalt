@@ -9,8 +9,7 @@ import QuartzCore
 
 /// Per-screen EDR Metal multiply overlay that unlocks sustained 1000-1600 nit
 /// peak headroom on XDR-capable displays.
-@MainActor
-final class XDRUpscaleOverlayController: ObservableObject {
+final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
     static let shared = XDRUpscaleOverlayController()
 
     static let minBoostAmount: Double = 1.0
@@ -19,6 +18,7 @@ final class XDRUpscaleOverlayController: ObservableObject {
 
     private static let enabledDefaultsKey = "xdrUpscaleOverlayEnabled"
     private static let boostAmountDefaultsKey = "xdrUpscaleBoostAmount"
+    private static let autoBoostBundleIDsDefaultsKey = "xdrAutoBoostBundleIDs"
 
     private struct ScreenSpec: Equatable {
         let displayID: CGDirectDisplayID
@@ -37,6 +37,7 @@ final class XDRUpscaleOverlayController: ObservableObject {
         didSet {
             guard oldValue != isEnabled else { return }
             UserDefaults.standard.set(isEnabled, forKey: Self.enabledDefaultsKey)
+            syncWorkspaceActivationObserver()
             syncOverlays()
         }
     }
@@ -50,32 +51,116 @@ final class XDRUpscaleOverlayController: ObservableObject {
             }
             guard oldValue != boostAmount else { return }
             UserDefaults.standard.set(boostAmount, forKey: Self.boostAmountDefaultsKey)
-            if isEnabled {
-                renderOverlays(waitUntilScheduled: false)
+            if isEffectiveBoostActive {
+                runOnMainActor { [weak self] in
+                    self?.renderOverlays(waitUntilScheduled: false)
+                }
             }
         }
     }
 
+    @Published var xdrAutoBoostBundleIDs: Set<String> {
+        didSet {
+            let sanitized = Set(
+                xdrAutoBoostBundleIDs
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+            if sanitized != xdrAutoBoostBundleIDs {
+                xdrAutoBoostBundleIDs = sanitized
+                return
+            }
+            guard oldValue != xdrAutoBoostBundleIDs else { return }
+            UserDefaults.standard.set(xdrAutoBoostBundleIDs.sorted(), forKey: Self.autoBoostBundleIDsDefaultsKey)
+            syncWorkspaceActivationObserver()
+            if !xdrAutoBoostBundleIDs.isEmpty, frontmostBundleID == nil {
+                evaluateFrontmostBundleID(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+            } else {
+                evaluateFrontmostBundleID(frontmostBundleID)
+            }
+        }
+    }
+
+    @Published private(set) var frontmostBundleID: String?
+    @Published private(set) var isAutoBoostTriggeredByFrontmostApp: Bool = false
     @Published private(set) var isXDRCapable: Bool = false
+
+    private var isEffectiveBoostActive: Bool {
+        isEnabled || isAutoBoostTriggeredByFrontmostApp
+    }
 
     private var entries: [OverlayEntry] = []
     private var metalDevice: MTLDevice?
     private var commandQueue: MTLCommandQueue?
     private var heartbeatTimer: Timer?
     private var observers: [NSObjectProtocol] = []
+    private var workspaceActivationObserver: NSObjectProtocol?
     private var screensAsleep = false
 
     init() {
         let defaults = UserDefaults.standard
         let storedEnabled = defaults.bool(forKey: Self.enabledDefaultsKey)
         let rawBoost = defaults.object(forKey: Self.boostAmountDefaultsKey) as? Double ?? Self.defaultBoostAmount
+        let storedBundleIDs = Set(
+            (defaults.stringArray(forKey: Self.autoBoostBundleIDsDefaultsKey) ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
         self.isEnabled = storedEnabled
         self.boostAmount = Self.clampBoost(rawBoost)
-        self.isXDRCapable = Self.hasXDRCapableScreen()
-        installObservers()
+        self.xdrAutoBoostBundleIDs = storedBundleIDs
+        runOnMainActor { [self] in
+            self.isXDRCapable = Self.hasXDRCapableScreen()
+            self.installObservers()
+            self.syncWorkspaceActivationObserver()
+            if !storedBundleIDs.isEmpty {
+                self.evaluateFrontmostBundleID(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+            } else {
+                self.syncOverlaysOnMainActor()
+            }
+        }
+    }
+
+    private func runOnMainActor(_ operation: @escaping @MainActor () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(operation)
+        } else {
+            Task { @MainActor in
+                operation()
+            }
+        }
+    }
+
+    func setAutoBoost(bundleID: String, enabled: Bool) {
+        let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if enabled {
+            xdrAutoBoostBundleIDs.insert(trimmed)
+        } else {
+            xdrAutoBoostBundleIDs.remove(trimmed)
+        }
+    }
+
+    func toggleAutoBoost(bundleID: String) {
+        let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        setAutoBoost(bundleID: trimmed, enabled: !xdrAutoBoostBundleIDs.contains(trimmed))
+    }
+
+    func evaluateFrontmostBundleID(_ bundleID: String?) {
+        let trimmed = bundleID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = (trimmed?.isEmpty == false) ? trimmed : nil
+        if frontmostBundleID != normalized {
+            frontmostBundleID = normalized
+        }
+        let shouldAutoBoost = normalized.map { xdrAutoBoostBundleIDs.contains($0) } ?? false
+        if isAutoBoostTriggeredByFrontmostApp != shouldAutoBoost {
+            isAutoBoostTriggeredByFrontmostApp = shouldAutoBoost
+        }
         syncOverlays()
     }
 
+    @MainActor
     static func hasXDRCapableScreen() -> Bool {
         NSScreen.screens.contains { $0.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0 }
     }
@@ -85,10 +170,12 @@ final class XDRUpscaleOverlayController: ObservableObject {
         return min(max(value, minBoostAmount), maxBoostAmount)
     }
 
+    @MainActor
     private static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
         (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 
+    @MainActor
     private static func xdrScreens() -> [(screen: NSScreen, spec: ScreenSpec)] {
         NSScreen.screens.compactMap { screen in
             guard screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0,
@@ -100,16 +187,29 @@ final class XDRUpscaleOverlayController: ObservableObject {
     }
 
     func syncOverlays() {
+        runOnMainActor { [weak self] in
+            self?.syncOverlaysOnMainActor()
+        }
+    }
+
+    func tearDown() {
+        runOnMainActor { [weak self] in
+            self?.tearDownOnMainActor()
+        }
+    }
+
+    @MainActor
+    private func syncOverlaysOnMainActor() {
         isXDRCapable = Self.hasXDRCapableScreen()
-        guard isEnabled, isXDRCapable else {
-            tearDown()
+        guard isEffectiveBoostActive, isXDRCapable else {
+            tearDownOnMainActor()
             return
         }
 
         let targetScreens = Self.xdrScreens()
         let targetSpecs = targetScreens.map(\.spec)
         guard !targetScreens.isEmpty else {
-            tearDown()
+            tearDownOnMainActor()
             return
         }
 
@@ -118,7 +218,7 @@ final class XDRUpscaleOverlayController: ObservableObject {
             return
         }
 
-        tearDown()
+        tearDownOnMainActor()
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else {
             return
@@ -134,7 +234,7 @@ final class XDRUpscaleOverlayController: ObservableObject {
         }
 
         guard !entries.isEmpty else {
-            tearDown()
+            tearDownOnMainActor()
             return
         }
 
@@ -146,7 +246,8 @@ final class XDRUpscaleOverlayController: ObservableObject {
         startHeartbeat()
     }
 
-    func tearDown() {
+    @MainActor
+    private func tearDownOnMainActor() {
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
 
@@ -161,6 +262,7 @@ final class XDRUpscaleOverlayController: ObservableObject {
         metalDevice = nil
     }
 
+    @MainActor
     private func makeOverlayEntry(
         for screen: NSScreen,
         spec: ScreenSpec,
@@ -193,6 +295,7 @@ final class XDRUpscaleOverlayController: ObservableObject {
         )
     }
 
+    @MainActor
     private func makeOverlayWindow(contentRect: NSRect) -> NSWindow {
         let window = NSWindow(
             contentRect: contentRect,
@@ -232,6 +335,7 @@ final class XDRUpscaleOverlayController: ObservableObject {
         return layer
     }
 
+    @MainActor
     private func startHeartbeat() {
         heartbeatTimer?.invalidate()
         let timer = Timer(timeInterval: 0.35, repeats: true) { [weak self] _ in
@@ -244,8 +348,9 @@ final class XDRUpscaleOverlayController: ObservableObject {
         heartbeatTimer = timer
     }
 
+    @MainActor
     private func renderOverlays(waitUntilScheduled: Bool) {
-        guard isEnabled, !screensAsleep, !entries.isEmpty, let queue = commandQueue else { return }
+        guard isEffectiveBoostActive, !screensAsleep, !entries.isEmpty, let queue = commandQueue else { return }
         let screensByID: [CGDirectDisplayID: NSScreen] = Dictionary(
             uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
                 Self.displayID(of: screen).map { ($0, screen) }
@@ -308,6 +413,7 @@ final class XDRUpscaleOverlayController: ObservableObject {
         }
     }
 
+    @MainActor
     private func installObservers() {
         let center = NotificationCenter.default
         let workspaceCenter = NSWorkspace.shared.notificationCenter
@@ -330,7 +436,8 @@ final class XDRUpscaleOverlayController: ObservableObject {
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.tearDown()
+                    self?.tearDownOnMainActor()
+                    self?.removeWorkspaceActivationObserver()
                 }
             }
         )
@@ -353,23 +460,55 @@ final class XDRUpscaleOverlayController: ObservableObject {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.screensAsleep = false
-                    self?.syncOverlays()
+                    self?.syncOverlaysOnMainActor()
                 }
             }
         )
     }
 
+    private func syncWorkspaceActivationObserver() {
+        let shouldObserve = isEnabled || !xdrAutoBoostBundleIDs.isEmpty
+        if shouldObserve {
+            guard workspaceActivationObserver == nil else { return }
+            workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                let bundleID = app?.bundleIdentifier ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                if Thread.isMainThread {
+                    self?.evaluateFrontmostBundleID(bundleID)
+                } else {
+                    DispatchQueue.main.async {
+                        self?.evaluateFrontmostBundleID(bundleID)
+                    }
+                }
+            }
+        } else {
+            removeWorkspaceActivationObserver()
+        }
+    }
+
+    private func removeWorkspaceActivationObserver() {
+        if let token = workspaceActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+            workspaceActivationObserver = nil
+        }
+    }
+
+    @MainActor
     private func handleScreenParametersChanged() {
         let nextCapability = Self.hasXDRCapableScreen()
         isXDRCapable = nextCapability
-        guard isEnabled, nextCapability else {
-            tearDown()
+        guard isEffectiveBoostActive, nextCapability else {
+            tearDownOnMainActor()
             return
         }
         let nextSpecs = Self.xdrScreens().map(\.spec)
         if entries.map(\.screenSpec) != nextSpecs {
-            tearDown()
-            syncOverlays()
+            tearDownOnMainActor()
+            syncOverlaysOnMainActor()
         } else {
             renderOverlays(waitUntilScheduled: false)
         }
