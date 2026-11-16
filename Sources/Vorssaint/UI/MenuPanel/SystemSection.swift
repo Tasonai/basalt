@@ -57,6 +57,19 @@ struct SystemSection: View {
         TelemetryHorizon(rawValue: telemetryHorizonRaw) ?? .oneMinute
     }
 
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
+    }
+
+    private func horizonTitle(_ horizon: TelemetryHistoryHorizon) -> String {
+        switch horizon {
+        case .sevenDays:
+            return v3(\OverhaulV3Strings.telemetrySevenDayHorizon)
+        default:
+            return horizon.rawValue
+        }
+    }
+
     var body: some View {
         PanelSection(.system, title: l10n.s.systemSection, collapsible: collapsible,
                      supportsEditing: true,
@@ -74,7 +87,7 @@ struct SystemSection: View {
                                     hoveredTelemetryNormalizedX = nil
                                     telemetryHorizonRaw = horizon.rawValue
                                 } label: {
-                                    Text(horizon.rawValue)
+                                    Text(horizonTitle(horizon))
                                         .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                                         .foregroundStyle(telemetryHorizon == horizon ? Color.accentColor : Color.secondary)
                                         .padding(.horizontal, 6)
@@ -469,7 +482,73 @@ struct SystemSection: View {
             } else if editing, gpuAvailable {
                 PanelHiddenItemRow(title: l10n.s.gpuLabel, systemImage: "memorychip", isVisible: $sysGPU)
             }
+            if !editing,
+               let power = monitor.powerSnapshot,
+               (power.isHardwareBacked || power.packageWatts > 0 || power.cpuWatts > 0 || power.gpuWatts > 0 || power.aneWatts > 0) {
+                powerWattsBlock(power)
+            }
         }
+    }
+
+    private func powerWattsBlock(_ power: AppleSiliconPowerSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
+            HStack(spacing: DesignSpace.xs + 2) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(PanelMetricColor.yellow(for: colorScheme))
+                Text(v3(\OverhaulV3Strings.wattsPackageLabel))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: DesignSpace.xs)
+                Text(String(format: "%.1f W", locale: .autoupdatingCurrent, power.packageWatts))
+                    .font(.system(size: 11, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+            }
+            HStack(spacing: DesignSpace.xs + 2) {
+                powerRailTile(
+                    label: l10n.s.cpuLabel,
+                    value: String(format: "%.1f W", locale: .autoupdatingCurrent, power.cpuWatts),
+                    tint: .accentColor
+                )
+                powerRailTile(
+                    label: l10n.s.gpuLabel,
+                    value: String(format: "%.1f W", locale: .autoupdatingCurrent, power.gpuWatts),
+                    tint: PanelMetricColor.cyan(for: colorScheme)
+                )
+                powerRailTile(
+                    label: "ANE",
+                    value: String(format: "%.1f W", locale: .autoupdatingCurrent, power.aneWatts),
+                    tint: PanelMetricColor.mint(for: colorScheme)
+                )
+                powerRailTile(
+                    label: "ANE %",
+                    value: String(format: "%.0f%%", locale: .autoupdatingCurrent, power.aneActivityPercent),
+                    tint: PanelMetricColor.yellow(for: colorScheme)
+                )
+            }
+        }
+        .padding(DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .fill(Color.primary.opacity(0.045))
+        )
+    }
+
+    private func powerRailTile(label: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: DesignSpace.xxs) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Uptime
@@ -529,6 +608,11 @@ struct SystemSection: View {
                 Text("RAM \(String(format: "%.0f%%", locale: MetricFormat.locale, sample.memory))")
                     .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(PanelMetricColor.mint(for: colorScheme))
+                if sample.watts > 0 {
+                    Text(String(format: "%.1fW", locale: .autoupdatingCurrent, sample.watts))
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(PanelMetricColor.yellow(for: colorScheme))
+                }
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
@@ -619,9 +703,22 @@ struct SystemSection: View {
         return formatter
     }()
 
+    private static let scrubSevenDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "E HH:mm"
+        return formatter
+    }()
+
     private static func scrubTimestampString(_ timestamp: TimeInterval, horizon: TelemetryHorizon) -> String {
         let date = Date(timeIntervalSince1970: timestamp)
-        return (horizon == .twentyFourHours ? scrubMinuteFormatter : scrubSecondFormatter).string(from: date)
+        switch horizon {
+        case .oneMinute, .oneHour:
+            return scrubSecondFormatter.string(from: date)
+        case .twentyFourHours:
+            return scrubMinuteFormatter.string(from: date)
+        case .sevenDays:
+            return scrubSevenDayFormatter.string(from: date)
+        }
     }
 
     private static let memoryFormatter: ByteCountFormatter = {

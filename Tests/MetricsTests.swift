@@ -256,6 +256,7 @@ struct MetricsTests {
             ("wave2-v3-fluid-island", { Wave2V3FluidIslandAndOnboardingContract.run(suite) }),
             ("wave3-v3-audio-dsp", { Wave3V3AudioDSPAndRoutingContract.run(suite) }),
             ("wave4-v3-display-hidpi", { Wave4V3DisplayHiDPIAndSolarContract.run(suite) }),
+            ("wave5-v3-menubar-ioreport", { Wave5V3MenuBarAndIOReportContract.run(suite) }),
         ]
         var selected = Set<String>()
         var listOnly = false

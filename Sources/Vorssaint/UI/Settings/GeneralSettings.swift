@@ -9,6 +9,7 @@ struct GeneralSettings: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var appearance = AppAppearanceController.shared
     @ObservedObject private var hotkeys = HotkeyManager.shared
+    @ObservedObject private var menuBarManager = MenuBarIconManagerService.shared
     // Seeded from the stored choice so the switch does not flash off while
     // the status read is still on its way.
     @State private var loginRegistration: LaunchAtLoginSupport.Registration =
@@ -22,12 +23,17 @@ struct GeneralSettings: View {
     private var appearanceStrings: AppearanceStrings { FeatureStrings.appearance(l10n.language) }
     private var feedbackStrings: FeedbackStrings { FeatureStrings.feedback(l10n.language) }
 
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text(l10n.s.tabGeneral).font(.title2.bold())
                 basicsCard
                 appearanceCard
+                menuBarManagerCard
                 if AppFeature.keepAwake.isAvailable {
                     shortcutCard
                 }
@@ -119,6 +125,57 @@ struct GeneralSettings: View {
                 .padding(.leading, settingsRowTextInset)
             }
 #endif
+        }
+    }
+
+    private var menuBarManagerCard: some View {
+        SettingsCard(title: l10n.s.menuBarSection) {
+            SettingsRow(symbol: "menubar.rectangle",
+                        title: v3(\OverhaulV3Strings.menuBarManagerToggle),
+                        caption: v3(\OverhaulV3Strings.menuBarOverflowTitle)) {
+                Toggle(v3(\OverhaulV3Strings.menuBarManagerToggle), isOn: $menuBarManager.isEnabled)
+                    .labelsHidden()
+                    .toggleStyle(VorssaintCompactSwitchStyle())
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: DesignSpace.sm) {
+                VorssaintDetentSlider(
+                    value: $menuBarManager.autoHideSeconds,
+                    in: MenuBarIconManagerService.autoHideRange,
+                    step: 1,
+                    detent: 6,
+                    tone: .brand,
+                    icon: "timer",
+                    title: l10n.s.durationLabel,
+                    formattedValue: String(format: "%.0f s", locale: .autoupdatingCurrent, menuBarManager.autoHideSeconds)
+                )
+                .disabled(!menuBarManager.isEnabled)
+
+                HStack(spacing: DesignSpace.sm) {
+                    VorssaintActionChip(
+                        title: menuBarManager.isExpanded ? l10n.s.shelfCollapse : l10n.s.monitorMenuBarPreview,
+                        symbol: menuBarManager.isExpanded ? "chevron.right" : "chevron.left",
+                        tone: .brand,
+                        prominent: menuBarManager.isExpanded
+                    ) {
+                        menuBarManager.toggleExpanded()
+                    }
+                    .disabled(!menuBarManager.isEnabled)
+
+                    VorssaintActionChip(
+                        title: v3(\OverhaulV3Strings.menuBarOverflowTitle),
+                        symbol: "menubar.rectangle",
+                        tone: .brand,
+                        prominent: menuBarManager.overflowBarVisible
+                    ) {
+                        menuBarManager.toggleOverflowBar()
+                    }
+                    .disabled(!menuBarManager.isEnabled)
+
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.leading, settingsRowTextInset)
         }
     }
 

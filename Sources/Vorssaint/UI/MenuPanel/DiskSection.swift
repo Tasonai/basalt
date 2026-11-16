@@ -315,6 +315,10 @@ struct DiskSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
+    }
+
     @ViewBuilder
     private func smartBlock(disk: DiskDeviceReading, editing: Bool) -> some View {
         if !diskSMART {
@@ -322,13 +326,20 @@ struct DiskSection: View {
                                systemImage: "checkmark.shield",
                                isVisible: $diskSMART)
         } else {
+            let nvmeSnapshot: NVMeSMARTHealthSnapshot? = disk.isInternal ? monitor.smartSnapshot : nil
+            let hasNVMeMetrics = nvmeSnapshot.map {
+                $0.statusVerified || $0.wearUsedPercent != nil || $0.temperatureCelsius != nil || $0.powerOnHours != nil
+            } ?? false
             VStack(alignment: .leading, spacing: 8) {
                 blockHeader(l10n.s.monitorItemDiskSMART, editing: editing, visible: $diskSMART)
                 VStack(alignment: .leading, spacing: 5) {
                     diskTitleRow(disk, showsTags: !diskUsage)
                     if let smart = disk.smart {
                         smartRows(smart)
-                    } else {
+                    }
+                    if hasNVMeMetrics, let nvme = nvmeSnapshot {
+                        nvmeSmartCard(nvme)
+                    } else if disk.smart == nil {
                         Text(l10n.s.diskSMARTUnavailable)
                             .font(.system(size: 10.5))
                             .foregroundStyle(.tertiary)
@@ -336,6 +347,52 @@ struct DiskSection: View {
                 }
             }
         }
+    }
+
+    private func nvmeSmartCard(_ nvme: NVMeSMARTHealthSnapshot) -> some View {
+        let hasWarning = (nvme.criticalWarning ?? 0) > 0 || (nvme.mediaErrors ?? 0) > 0
+        let statusColor = hasWarning
+            ? PanelMetricColor.red(for: colorScheme)
+            : PanelMetricColor.green(for: colorScheme)
+        return VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
+            HStack(spacing: DesignSpace.xs + 2) {
+                Image(systemName: hasWarning ? "exclamationmark.triangle.fill" : "checkmark.shield")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(statusColor)
+                Text(v3(\OverhaulV3Strings.smartHealthTitle))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: DesignSpace.xs)
+                if let errors = nvme.mediaErrors, errors > 0 {
+                    Text("\(errors)")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(statusColor)
+                }
+            }
+            if let wear = nvme.wearUsedPercent {
+                smartRow(
+                    l10n.s.diskHealth,
+                    String(format: "%.0f%%", locale: .autoupdatingCurrent, Double(wear))
+                )
+            }
+            if let temp = nvme.temperatureCelsius {
+                let displayTemp = displayTemperatureUnit == .fahrenheit ? (temp * 9.0 / 5.0 + 32.0) : temp
+                let suffix = displayTemperatureUnit == .fahrenheit ? "°F" : "°C"
+                smartRow(
+                    l10n.s.diskTemperature,
+                    String(format: "%.1f%@", locale: .autoupdatingCurrent, displayTemp, suffix)
+                )
+            }
+            if let hours = nvme.powerOnHours {
+                smartRow(l10n.s.diskPowerOnHours, "\(hours) h")
+            }
+        }
+        .padding(DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .fill(Color.primary.opacity(0.045))
+        )
     }
 
     @ViewBuilder

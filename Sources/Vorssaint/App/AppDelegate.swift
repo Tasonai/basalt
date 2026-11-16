@@ -65,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var whatsNewIsReview = false
     private var updateWindowsKeepingAppRegular = Set<ObjectIdentifier>()
     private var settingsFloatsForWhatsNew = false
+    private var telemetrySleepObserver: NSObjectProtocol?
+    private var telemetryWakeObserver: NSObjectProtocol?
 
     // MARK: - Lifecycle
 
@@ -179,6 +181,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         }
         TrashWatcherService.shared.startWatchingTrash()
         MediaAutoOptimizerService.shared.syncWithPreferences()
+        MenuBarIconManagerService.shared.syncWithPreferences()
+        configureTelemetryPersistence()
         UpdateService.shared.startAutomaticChecks()
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
@@ -368,7 +372,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         }
         TrashWatcherService.shared.stopWatchingTrash()
         MediaAutoOptimizerService.shared.stop()
+        MenuBarIconManagerService.shared.stop()
+        if let telemetrySleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(telemetrySleepObserver)
+            self.telemetrySleepObserver = nil
+        }
+        if let telemetryWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(telemetryWakeObserver)
+            self.telemetryWakeObserver = nil
+        }
+        TelemetryHistoryRing.shared.flushSQLiteStore()
+        TelemetryHistoryRing.shared.closeSQLiteStore()
         KeepAwakeManager.shared.deactivate(reason: .quit)
+    }
+
+    private func configureTelemetryPersistence() {
+        // Persists 7d telemetry history to ~/Library/Application Support/Vorssaint/telemetry.sqlite.
+        let storeURL = SystemMonitor.defaultTelemetryStoreURL
+        SystemMonitor.shared.attachTelemetryStore(at: storeURL)
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        telemetrySleepObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            TelemetryHistoryRing.shared.flushSQLiteStore()
+            TelemetryHistoryRing.shared.closeSQLiteStore()
+        }
+        telemetryWakeObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            SystemMonitor.shared.attachTelemetryStore(at: storeURL)
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

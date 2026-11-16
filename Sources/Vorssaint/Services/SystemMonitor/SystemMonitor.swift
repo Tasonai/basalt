@@ -140,6 +140,8 @@ final class SystemMonitor: ObservableObject {
 
     @Published private(set) var snapshot = SystemSnapshot()
     @Published private(set) var latestCoreLoads: [Double] = []
+    @Published private(set) var powerSnapshot: AppleSiliconPowerSnapshot?
+    @Published private(set) var smartSnapshot: NVMeSMARTHealthSnapshot?
     private(set) var efficiencyCoreCount: Int = {
         let eCount = CPUCoreTopology.groups
             .filter { $0.name.lowercased().contains("eff") }
@@ -222,6 +224,13 @@ final class SystemMonitor: ObservableObject {
     private var lastPublishedPlan: SamplingPlan?
     private var lastPublishedForeground: Bool?
     private var lastNetworkBytesPerSec: Double = 0
+    private var lastNetRxBytesPerSec: Double = 0
+    private var lastNetTxBytesPerSec: Double = 0
+    private var lastPowerSnapshot: AppleSiliconPowerSnapshot?
+    private var lastPowerSnapshotAt: TimeInterval = -.infinity
+    private var lastSmartSnapshot: NVMeSMARTHealthSnapshot?
+    private var lastSmartSnapshotAt: TimeInterval = -.infinity
+    private let smartSampleStrideSeconds: TimeInterval = 30
 
     // History
     private let historyCapacity = 120
@@ -267,6 +276,25 @@ final class SystemMonitor: ObservableObject {
     }
 
     // MARK: - Lifecycle
+
+    static var defaultTelemetryStoreURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+        return base
+            .appendingPathComponent("Vorssaint", isDirectory: true)
+            .appendingPathComponent("telemetry.sqlite")
+    }
+
+    func attachTelemetryStore(at url: URL = SystemMonitor.defaultTelemetryStoreURL) {
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        TelemetryHistoryRing.shared.attachSQLiteStore(at: url)
+    }
+
+    func flushAndCloseTelemetryStore() {
+        TelemetryHistoryRing.shared.flushSQLiteStore()
+        TelemetryHistoryRing.shared.closeSQLiteStore()
+    }
 
     /// The same system notification used by the reference battery monitor.
     /// It removes the normal background sampling delay after unplugging,
@@ -834,7 +862,9 @@ final class SystemMonitor: ObservableObject {
                     next.netTotalUp = network.totalUp
                     if let down = network.downBytesPerSec { self.netDownHistory.push(down) }
                     if let up = network.upBytesPerSec { self.netUpHistory.push(up) }
-                    self.lastNetworkBytesPerSec = max(0, (network.downBytesPerSec ?? 0) + (network.upBytesPerSec ?? 0))
+                    self.lastNetRxBytesPerSec = max(0, network.downBytesPerSec ?? 0)
+                    self.lastNetTxBytesPerSec = max(0, network.upBytesPerSec ?? 0)
+                    self.lastNetworkBytesPerSec = self.lastNetRxBytesPerSec + self.lastNetTxBytesPerSec
                 }
             }
 
@@ -1004,6 +1034,32 @@ final class SystemMonitor: ObservableObject {
                 return (loads, resolvedECount)
             }()
 
+            var nextPowerSnapshot = self.lastPowerSnapshot
+            var nextSmartSnapshot = self.lastSmartSnapshot
+            var updatedAuxTelemetry = false
+
+            if plan.needPower || plan.needCPU || plan.needGPUUsage {
+                if self.lastPowerSnapshot == nil
+                    || now - self.lastPowerSnapshotAt >= TimeInterval(max(1, intervalSeconds)) {
+                    let sampledPower = AppleSiliconIOReportSampler.shared.sample()
+                    self.lastPowerSnapshot = sampledPower
+                    self.lastPowerSnapshotAt = now
+                    nextPowerSnapshot = sampledPower
+                    updatedAuxTelemetry = true
+                }
+            }
+
+            if plan.needDisk {
+                if self.lastSmartSnapshot == nil
+                    || now - self.lastSmartSnapshotAt >= self.smartSampleStrideSeconds {
+                    let sampledSmart = NVMeSMARTHealthReader.readPrimaryDisk()
+                    self.lastSmartSnapshot = sampledSmart
+                    self.lastSmartSnapshotAt = now
+                    nextSmartSnapshot = sampledSmart
+                    updatedAuxTelemetry = true
+                }
+            }
+
             if sampledAnything {
                 let cpuPct = min(100.0, max(0.0, (next.cpuUsage ?? self.lastCPUUsage ?? 0) * 100.0))
                 let gpuPct = min(100.0, max(0.0, (next.gpuUsage ?? self.lastGPUUsage ?? 0) * 100.0))
@@ -1019,13 +1075,15 @@ final class SystemMonitor: ObservableObject {
                     case .normal, .unknown: return 40
                     }
                 }()
-                TelemetryHistoryRing.shared.record(TelemetryPoint(
-                    timestamp: Date().timeIntervalSince1970,
-                    cpu: cpuPct,
-                    gpu: gpuPct,
-                    memory: memPct,
-                    networkBytesPerSec: self.lastNetworkBytesPerSec
-                ))
+                let watts = nextPowerSnapshot?.packageWatts ?? next.power?.systemWatts ?? 0
+                TelemetryHistoryRing.shared.record(
+                    cpuPercent: cpuPct,
+                    gpuPercent: gpuPct,
+                    memoryPercent: memPct,
+                    netRxBytesPerSec: self.lastNetRxBytesPerSec,
+                    netTxBytesPerSec: self.lastNetTxBytesPerSec,
+                    watts: watts
+                )
             }
 
             DispatchQueue.main.async {
@@ -1033,8 +1091,10 @@ final class SystemMonitor: ObservableObject {
                 // same mode): the values are identical to the ones on screen.
                 let planChanged = plan != self.lastPublishedPlan
                     || foregroundSampling != self.lastPublishedForeground
-                if sampledAnything || planChanged {
+                if sampledAnything || updatedAuxTelemetry || planChanged {
                     self.snapshot = next
+                    self.powerSnapshot = nextPowerSnapshot
+                    self.smartSnapshot = nextSmartSnapshot
                     if let (loads, eCount) = coreClusterSample {
                         self.efficiencyCoreCount = eCount
                         self.latestCoreLoads = loads
