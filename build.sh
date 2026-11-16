@@ -620,6 +620,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/ManagedDownloads/WhatsAppDownloadSupport.swift
         Sources/Vorssaint/Core/SecureInputSupport.swift
         Sources/Vorssaint/Core/OverhaulStrings.swift
+        Sources/Vorssaint/Core/OverhaulV2Strings.swift
         Sources/Vorssaint/Services/Audio/MixerParametricEQ.swift
         Sources/Vorssaint/Services/Cleaner/SpaceLensSupport.swift
         Sources/Vorssaint/Services/Clipboard/ClipboardProSupport.swift
@@ -633,6 +634,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/WindowLayout/WindowWorkspaceSupport.swift
         Sources/Vorssaint/UI/DesignSystem/SemanticCategoryPalette.swift
         Sources/Vorssaint/UI/DesignSystem/DesignTokens.swift
+        Sources/Vorssaint/UI/DesignSystem/VorssaintDesignKit.swift
         Sources/Vorssaint/UI/DesignSystem/VorssaintMetalShaders.swift
         Tests/*.swift
         build/generated-tests/*.swift

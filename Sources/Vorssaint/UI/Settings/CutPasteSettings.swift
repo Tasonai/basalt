@@ -30,51 +30,62 @@ struct CutPasteSettings: View {
     }
 
     var body: some View {
-        Form {
+        SettingsPageContainer(title: renameText.pageTitle) {
             if AppFeature.finderCutPaste.isAvailable {
-                Section {
-                    Toggle(l10n.s.cutPasteEnable, isOn: $enabled)
-                        .onChange(of: enabled) { _, _ in
-                            FinderCutPaste.shared.syncWithPreferences()
-                        }
-                    Text(l10n.s.cutPasteEnableCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if enabled {
-                        Toggle(l10n.s.cutPasteShowHUD, isOn: $showHUD)
-                            .onChange(of: showHUD) { _, _ in
+                SettingsCard(title: l10n.s.cutPasteName) {
+                    SettingsRow(symbol: "scissors", title: l10n.s.cutPasteEnable,
+                                caption: l10n.s.cutPasteEnableCaption) {
+                        Toggle(l10n.s.cutPasteEnable, isOn: $enabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: enabled) { _, _ in
                                 FinderCutPaste.shared.syncWithPreferences()
                             }
-                        Text(l10n.s.cutPasteShowHUDCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    }
+                    if enabled {
+                        Divider()
+                        SettingsRow(symbol: "macwindow", title: l10n.s.cutPasteShowHUD,
+                                    caption: l10n.s.cutPasteShowHUDCaption) {
+                            Toggle(l10n.s.cutPasteShowHUD, isOn: $showHUD)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .onChange(of: showHUD) { _, _ in
+                                    FinderCutPaste.shared.syncWithPreferences()
+                                }
+                        }
                     }
                     if enabled, service.isRunning {
                         Label(l10n.s.cutPasteActiveNow, systemImage: "checkmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(.green)
+                            .padding(.leading, settingsRowTextInset)
                     }
                 }
-                .settingsFormSectionAnchor(.finderCutPaste)
+                .settingsSectionAnchor(.finderCutPaste, cornerRadius: 16)
 
-                Section(l10n.s.cutPasteHowTitle) {
+                SettingsCard(title: l10n.s.cutPasteHowTitle) {
                     howRow(keys: ["⌘", "X"], text: l10n.s.cutPasteStep1)
                     howRow(keys: ["⌘", "V"], text: l10n.s.cutPasteStep2)
+                    Divider()
                     Text(l10n.s.cutPasteTextNote)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
             if AppFeature.finderRename.isAvailable {
-                Section {
-                    Toggle(renameText.enableLabel, isOn: $renameEnabled)
-                        .onChange(of: renameEnabled) { _, _ in
-                            FinderRenameService.shared.syncWithPreferences()
-                        }
-                    Text(renameText.caption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                SettingsCard(title: renameText.hubTitle) {
+                    SettingsRow(symbol: "pencil", title: renameText.enableLabel,
+                                caption: renameText.caption) {
+                        Toggle(renameText.enableLabel, isOn: $renameEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: renameEnabled) { _, _ in
+                                FinderRenameService.shared.syncWithPreferences()
+                            }
+                    }
+                    Divider()
                     HStack(spacing: 8) {
                         Text(renameText.shortcutLabel)
                         Spacer()
@@ -104,14 +115,17 @@ struct CutPasteSettings: View {
                         }
                         .disabled(!renameEnabled || renameShortcut == .finderRenameDefault)
                     }
+                    .padding(.leading, settingsRowTextInset)
                     if let renameError {
                         Text(renameError)
                             .font(.caption)
                             .foregroundStyle(.orange)
+                            .padding(.leading, settingsRowTextInset)
                     } else if recordingRename {
                         Text(ShortcutRecordingCaption.text(l10n.s, canClear: false))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .padding(.leading, settingsRowTextInset)
                     }
                     if let pendingRenameTakeOver {
                         SystemShortcutTakeOverOffer(
@@ -127,25 +141,24 @@ struct CutPasteSettings: View {
                                 renameError = String(format: l10n.s.shortcutConflictFormat, "macOS")
                             }
                         )
+                        .padding(.leading, settingsRowTextInset)
                     }
-                } header: {
-                    Text(renameText.hubTitle)
                 }
-                .settingsFormSectionAnchor(.finderRename)
+                .settingsSectionAnchor(.finderRename, cornerRadius: 16)
             }
 
             if needsAccessibility, !permissions.accessibility {
-                Section(l10n.s.permissionRequired) {
+                SettingsCard(title: l10n.s.permissionRequired) {
                     PermissionRow(kind: .accessibility)
                     if AppFeature.finderCutPaste.isAvailable, enabled {
                         Text(l10n.s.cutPasteAutomationNote)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
         }
-        .formStyle(.grouped)
         .onChange(of: l10n.language) { _, _ in renameError = nil }
     }
 

@@ -23,25 +23,29 @@ struct ShelfSettings: View {
     @State private var islandShowsFiles = NotchSupport.showsFiles()
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(l10n.s.shelfEnable, isOn: $enabled)
-                    .onChange(of: enabled) { _, _ in
-                        ShelfService.shared.syncWithPreferences()
-                    }
-                Text(l10n.s.shelfEnableCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        SettingsPageContainer(title: l10n.s.shelfTitle) {
+            SettingsCard {
+                SettingsRow(symbol: "tray.full", title: l10n.s.shelfEnable,
+                            caption: l10n.s.shelfEnableCaption) {
+                    Toggle(l10n.s.shelfEnable, isOn: $enabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: enabled) { _, _ in
+                            ShelfService.shared.syncWithPreferences()
+                        }
+                }
                 // Adding the Finder selection asks to control Finder, so the
                 // promise only holds while that option is off.
                 if !(shortcutEnabled && shortcutAddsFinderSelection) {
                     Label(l10n.s.shelfNoPermission, systemImage: "checkmark.shield")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, settingsRowTextInset)
                 }
             }
 
-            Section(l10n.s.shelfHowTitle) {
+            SettingsCard(title: l10n.s.shelfHowTitle) {
                 bullet("1", l10n.s.shelfStep1)
                 bullet("2", l10n.s.shelfStep2)
                 bullet("3", l10n.s.shelfStep3)
@@ -50,124 +54,145 @@ struct ShelfSettings: View {
             if enabled {
                 // Mirrors the island page's Files choice, which only matters while the island shows Files.
                 if islandShowsFiles {
-                    Section {
-                        Picker(FeatureStrings.notchEditor(l10n.language).destinations, selection: $opensInIsland) {
+                    SettingsCard {
+                        SettingsChoiceRow(symbol: "macbook",
+                                          title: FeatureStrings.notchEditor(l10n.language).destinations,
+                                          selection: $opensInIsland) {
                             Text(FeatureStrings.notch(l10n.language).title).tag(true)
                             Text(FeatureStrings.notchEditor(l10n.language).separate).tag(false)
                         }
-                        .pickerStyle(.segmented)
                     }
                 }
 
-                Section {
-                    Toggle(l10n.s.shelfShortcutToggle, isOn: $shortcutEnabled)
-                        .onChange(of: shortcutEnabled) { _, _ in
-                            ShelfService.shared.syncHotkey()
-                        }
+                SettingsCard {
+                    SettingsRow(symbol: "keyboard", title: l10n.s.shelfShortcutToggle) {
+                        Toggle(l10n.s.shelfShortcutToggle, isOn: $shortcutEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: shortcutEnabled) { _, _ in
+                                ShelfService.shared.syncHotkey()
+                            }
+                    }
                     ShortcutPreferenceRow(role: .shelf, isEnabled: shortcutEnabled) {
                         ShelfService.shared.syncHotkey()
                     }
+                    .padding(.leading, settingsRowTextInset)
                     if shortcutEnabled, shelf.hotkeyRegistrationFailed {
                         Text(l10n.s.shortcutUnavailable)
                             .font(.caption)
                             .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.leading, settingsRowTextInset)
                     }
                     if shortcutEnabled {
-                        VStack(alignment: .leading, spacing: 3) {
+                        SettingsRow(symbol: "doc.on.doc", title: l10n.s.shelfShortcutFinderSelection,
+                                    caption: l10n.s.shelfShortcutFinderSelectionCaption) {
                             Toggle(l10n.s.shelfShortcutFinderSelection, isOn: $shortcutAddsFinderSelection)
-                            Text(l10n.s.shelfShortcutFinderSelectionCaption)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                        }
+                        .padding(.leading, settingsRowTextInset)
+                        if shortcutAddsFinderSelection {
+                            Text(l10n.s.cutPasteAutomationNote)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            if shortcutAddsFinderSelection {
-                                Text(l10n.s.cutPasteAutomationNote)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, settingsRowTextInset * 2)
                         }
                     }
-                    VStack(alignment: .leading, spacing: 3) {
+                    Divider()
+                    SettingsRow(symbol: "hand.draw", title: l10n.s.shelfShakeToggle,
+                                caption: l10n.s.shelfShakeCaption) {
                         Toggle(l10n.s.shelfShakeToggle, isOn: $shake)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
                             .onChange(of: shake) { _, _ in
                                 ShelfService.shared.syncDragMonitor()
                             }
-                        Text(l10n.s.shelfShakeCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
-                    VStack(alignment: .leading, spacing: 3) {
+                    SettingsRow(symbol: "tray.and.arrow.down", title: l10n.s.shelfDropZoneToggle,
+                                caption: dockPlacement == ShelfDockPlacement.topCenter.rawValue && !islandOn
+                                    ? l10n.s.shelfDropZoneCaptionTopCenter : l10n.s.shelfDropZoneCaption) {
                         Toggle(l10n.s.shelfDropZoneToggle, isOn: $dropZone)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
                             .onChange(of: dropZone) { _, _ in
                                 ShelfService.shared.syncDragMonitor()
                             }
-                        Text(dockPlacement == ShelfDockPlacement.topCenter.rawValue && !islandOn
-                             ? l10n.s.shelfDropZoneCaptionTopCenter : l10n.s.shelfDropZoneCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
                     if dropZone {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Picker(l10n.s.shelfDockPlacement, selection: $dockPlacement) {
-                                Text(l10n.s.shelfDockMenuBar).tag(ShelfDockPlacement.menuBar.rawValue)
-                                Text(l10n.s.shelfDockTopCenter).tag(ShelfDockPlacement.topCenter.rawValue)
-                            }
-                            .disabled(islandOn)
-                            .onChange(of: dockPlacement) { _, _ in
-                                ShelfService.shared.syncDockedShelf()
-                            }
-                            if islandOn {
-                                Text(l10n.s.shelfDockIslandNote)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                        SettingsMenuRow(symbol: "menubar.rectangle", title: l10n.s.shelfDockPlacement,
+                                        selection: $dockPlacement) {
+                            Text(l10n.s.shelfDockMenuBar).tag(ShelfDockPlacement.menuBar.rawValue)
+                            Text(l10n.s.shelfDockTopCenter).tag(ShelfDockPlacement.topCenter.rawValue)
+                        }
+                        .disabled(islandOn)
+                        .onChange(of: dockPlacement) { _, _ in
+                            ShelfService.shared.syncDockedShelf()
+                        }
+                        .padding(.leading, settingsRowTextInset)
+                        if islandOn {
+                            Text(l10n.s.shelfDockIslandNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, settingsRowTextInset)
                         }
                     }
-                    VStack(alignment: .leading, spacing: 3) {
+                    SettingsRow(symbol: "arrow.right.to.line", title: l10n.s.shelfEdgeToggle,
+                                caption: l10n.s.shelfEdgeCaption) {
                         Toggle(l10n.s.shelfEdgeToggle, isOn: $edgeDrag)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
                             .onChange(of: edgeDrag) { _, _ in
                                 ShelfService.shared.syncDragMonitor()
                             }
-                        Text(l10n.s.shelfEdgeCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
-                    Button {
-                        ShelfService.shared.summon()
-                    } label: {
-                        Label(l10n.s.shelfOpenNow, systemImage: "tray.and.arrow.down")
+                    Divider()
+                    HStack {
+                        VorssaintActionChip(title: l10n.s.shelfOpenNow, symbol: "tray.and.arrow.down",
+                                            tone: .clipboardFiles, prominent: true) {
+                            ShelfService.shared.summon()
+                        }
+                        Spacer()
                     }
                 }
 
-                Section(l10n.s.shelfBehaviorTitle) {
-                    VStack(alignment: .leading, spacing: 3) {
+                SettingsCard(title: l10n.s.shelfBehaviorTitle) {
+                    SettingsRow(symbol: "xmark.rectangle", title: l10n.s.shelfCloseAfterDrop,
+                                caption: l10n.s.shelfCloseAfterDropCaption) {
                         Toggle(l10n.s.shelfCloseAfterDrop, isOn: $closeAfterDrop)
-                        Text(l10n.s.shelfCloseAfterDropCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
                     }
-                    VStack(alignment: .leading, spacing: 3) {
+                    SettingsRow(symbol: "trash", title: l10n.s.shelfRemoveAfterDrop,
+                                caption: l10n.s.shelfRemoveAfterDropCaption) {
                         Toggle(l10n.s.shelfRemoveAfterDrop, isOn: $removeAfterDrop)
-                        Text(l10n.s.shelfRemoveAfterDropCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
                     }
-                    VStack(alignment: .leading, spacing: 3) {
+                    SettingsRow(symbol: "sparkles", title: l10n.s.shelfClearOnClose,
+                                caption: l10n.s.shelfClearOnCloseCaption) {
                         Toggle(l10n.s.shelfClearOnClose, isOn: $clearOnClose)
-                        Text(l10n.s.shelfClearOnCloseCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
                     }
-                    VStack(alignment: .leading, spacing: 3) {
-                        Toggle(l10n.language == .ru ? "Перехватывать системные скриншоты" : "Catch system screenshots", isOn: $catchSystemScreenshots)
+                    SettingsRow(symbol: "camera.viewfinder",
+                                title: l10n.language == .ru ? "Перехватывать системные скриншоты" : "Catch system screenshots",
+                                caption: l10n.language == .ru
+                                    ? "Снимки экрана через ⌘⇧3 и ⌘⇧4 сразу появляются на полке."
+                                    : "Screenshots taken via ⌘⇧3 and ⌘⇧4 automatically appear on the shelf.") {
+                        Toggle(l10n.language == .ru ? "Перехватывать системные скриншоты" : "Catch system screenshots",
+                               isOn: $catchSystemScreenshots)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
                             .onChange(of: catchSystemScreenshots) { _, _ in
                                 ShelfService.shared.syncDragMonitor()
                             }
-                        Text(l10n.language == .ru ? "Снимки экрана через ⌘⇧3 и ⌘⇧4 сразу появляются на полке." : "Screenshots taken via ⌘⇧3 and ⌘⇧4 automatically appear on the shelf.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
                 }
 
-                Section(l10n.s.shelfExclusionsTitle) {
+                SettingsCard(title: l10n.s.shelfExclusionsTitle) {
                     if sortedExclusions.isEmpty {
                         Text(l10n.s.shelfExclusionsEmpty)
                             .font(.callout)
@@ -186,18 +211,19 @@ struct ShelfSettings: View {
                             }
                         }
                     }
-                    Button {
-                        showingAppPicker = true
-                    } label: {
-                        Label(l10n.s.autoQuitAddApp, systemImage: "plus")
+                    HStack {
+                        VorssaintActionChip(title: l10n.s.autoQuitAddApp, symbol: "plus", tone: .clipboardFiles) {
+                            showingAppPicker = true
+                        }
+                        Spacer()
                     }
                     Text(l10n.s.shelfExclusionsCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
-        .formStyle(.grouped)
         // The island can be switched on or its modules changed elsewhere while this page is open.
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: RunLoop.main)) { _ in

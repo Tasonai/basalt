@@ -30,37 +30,44 @@ struct SuperKeySettings: View {
     ]
 
     var body: some View {
-        Form {
-            Section(text.pageTitle) {
-                Toggle(text.enableToggle, isOn: $enabled)
-                    .onChange(of: enabled) { _, value in
-                        SuperKeyService.shared.syncWithPreferences()
-                        guard value, !permissions.accessibility else { return }
-                        permissions.requestAccessibility()
-                        permissions.openAccessibilitySettings()
-                    }
-                Picker(text.sourceKey, selection: sourceBinding) {
+        SettingsPageContainer(title: text.pageTitle, subtitle: text.hubDescription) {
+            SettingsCard {
+                SettingsRow(symbol: "command", title: text.enableToggle, caption: text.enableCaption) {
+                    Toggle(text.enableToggle, isOn: $enabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: enabled) { _, value in
+                            SuperKeyService.shared.syncWithPreferences()
+                            guard value, !permissions.accessibility else { return }
+                            permissions.requestAccessibility()
+                            permissions.openAccessibilitySettings()
+                        }
+                }
+                Divider()
+                SettingsMenuRow(symbol: "keyboard", title: text.sourceKey, selection: sourceBinding) {
                     ForEach(SuperKeySource.allCases) { source in
                         Text(text.sourceLabel(source)).tag(source)
                     }
                 }
-                Text(text.enableCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Label(text.modifierKeysNote, systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, settingsRowTextInset)
+                Divider()
                 diagram
                 if enabled, let failure = superKey.mappingFailure {
                     Label(text.mappingFailure(failure),
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else if enabled, superKey.isPausedForApplication {
                     Label(FeatureStrings.mouseExceptions(l10n.language).pausedSuperKey,
                           systemImage: "pause.circle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else if enabled, superKey.isRunning {
                     Label(text.activeNow, systemImage: "checkmark.circle.fill")
                         .font(.caption)
@@ -68,7 +75,7 @@ struct SuperKeySettings: View {
                 }
             }
 
-            Section(text.soloSection) {
+            SettingsCard(title: text.soloSection) {
                 Picker(text.soloSection, selection: soloBinding) {
                     Text(text.soloNothing).tag(SuperKeySoloAction.none)
                     Text(text.soloCapsLock).tag(SuperKeySoloAction.capsLock)
@@ -80,20 +87,22 @@ struct SuperKeySettings: View {
                 Text(text.soloCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .disabled(!enabled)
 
             if enabled {
-                MouseExceptionsList(scope: .superKey)
+                SettingsCard {
+                    MouseExceptionsList(scope: .superKey)
+                }
             }
 
             if enabled, !permissions.accessibility {
-                Section(l10n.s.permissionRequired) {
+                SettingsCard(title: l10n.s.permissionRequired) {
                     PermissionRow(kind: .accessibility)
                 }
             }
         }
-        .formStyle(.grouped)
     }
 
     /// The whole feature in one line: the key you hold, and the keys it stands

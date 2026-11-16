@@ -41,13 +41,19 @@ struct ScreenRecordingCaptureSettings: View {
     }
 
     var body: some View {
-        Group {
-            Section {
-                Button {
-                    ScreenRecorderService.shared.toggle()
-                } label: {
-                    Label(service.isRecording ? strings.stopButton : strings.startButton,
-                          systemImage: service.isRecording ? "stop.circle" : "record.circle")
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsCard(title: strings.pageTitle) {
+                HStack {
+                    VorssaintActionChip(
+                        title: service.isRecording ? strings.stopButton : strings.startButton,
+                        symbol: service.isRecording ? "stop.circle" : "record.circle",
+                        tone: .tools,
+                        prominent: !service.isRecording,
+                        destructive: service.isRecording
+                    ) {
+                        ScreenRecorderService.shared.toggle()
+                    }
+                    Spacer()
                 }
                 Text(service.isRecording
                      ? RecorderSupport.elapsedLabel(seconds: service.elapsedSeconds)
@@ -55,19 +61,21 @@ struct ScreenRecordingCaptureSettings: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+                if !permissions.screenRecording || !permissions.accessibility {
+                    Divider()
+                }
                 if !permissions.screenRecording {
                     PermissionRow(kind: .screenRecording)
                 }
                 if !permissions.accessibility {
                     PermissionRow(kind: .accessibility)
                 }
-            } header: {
-                Text(strings.pageTitle)
             }
-            .settingsFormSectionAnchor(.screenRecorder)
+            .settingsSectionAnchor(.screenRecorder, cornerRadius: 16)
 
-            Section {
-                Picker(strings.countdownLabel, selection: $countdown) {
+            SettingsCard {
+                SettingsChoiceRow(symbol: "timer", title: strings.countdownLabel, selection: $countdown) {
                     ForEach(ScreenshotSupport.allowedDelays, id: \.self) { seconds in
                         if seconds == 0 {
                             Text(strings.countdownOff).tag(0)
@@ -76,112 +84,122 @@ struct ScreenRecordingCaptureSettings: View {
                         }
                     }
                 }
-                .pickerStyle(.segmented)
-                VStack(alignment: .leading, spacing: 4) {
+                Divider()
+                SettingsRow(symbol: "speaker.wave.2", title: strings.systemAudioToggle,
+                            caption: strings.systemAudioCaption) {
                     Toggle(strings.systemAudioToggle, isOn: $systemAudio)
-                    Text(strings.systemAudioCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                SettingsRow(symbol: "mic", title: strings.microphoneToggle,
+                            caption: strings.microphoneCaption) {
                     Toggle(strings.microphoneToggle, isOn: $microphone)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                         .onChange(of: microphone) { _, enabled in
                             if enabled, permissions.microphone == .undetermined {
                                 permissions.requestMicrophone()
                             }
                         }
-                    Text(strings.microphoneCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if microphone, permissions.microphone != .granted {
-                        PermissionRow(kind: .microphone)
-                    }
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                if microphone, permissions.microphone != .granted {
+                    PermissionRow(kind: .microphone)
+                        .padding(.leading, settingsRowTextInset)
+                }
+                Divider()
+                SettingsRow(symbol: "film", title: strings.openEditorToggle,
+                            caption: strings.openEditorCaption) {
                     Toggle(strings.openEditorToggle, isOn: $opensEditor)
-                    Text(strings.openEditorCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                SettingsRow(symbol: "video", title: strings.automaticZoomToggle,
+                            caption: strings.automaticZoomCaption) {
                     Toggle(strings.automaticZoomToggle, isOn: $automaticZoom)
-                    Text(strings.automaticZoomCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
             }
 
-            Section {
+            SettingsCard {
                 folderRow
+                Divider()
                 DisclosureHeaderRow(isExpanded: $showsMoreOptions) {
                     Text(strings.moreOptions)
+                        .font(.subheadline.weight(.medium))
                     Spacer()
                 }
                 if showsMoreOptions {
-                    Group {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Picker(strings.qualityLabel, selection: $qualityRaw) {
-                                Text(strings.qualitySmall).tag(RecorderSupport.Quality.small.rawValue)
-                                Text(strings.qualityBalanced).tag(RecorderSupport.Quality.balanced.rawValue)
-                                Text(strings.qualityHigh).tag(RecorderSupport.Quality.high.rawValue)
-                            }
-                            Text(strings.qualityCaption)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 12) {
+                        SettingsMenuRow(symbol: "slider.horizontal.3", title: strings.qualityLabel,
+                                        selection: $qualityRaw) {
+                            Text(strings.qualitySmall).tag(RecorderSupport.Quality.small.rawValue)
+                            Text(strings.qualityBalanced).tag(RecorderSupport.Quality.balanced.rawValue)
+                            Text(strings.qualityHigh).tag(RecorderSupport.Quality.high.rawValue)
                         }
-                        Picker(strings.frameRateLabel, selection: $frameRate) {
+                        Text(strings.qualityCaption)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.leading, settingsRowTextInset)
+                        SettingsChoiceRow(symbol: "gauge", title: strings.frameRateLabel, selection: $frameRate) {
                             ForEach(RecorderSupport.frameRates, id: \.self) { rate in
                                 Text(String(format: strings.frameRateFormat, rate)).tag(rate)
                             }
                         }
-                        .pickerStyle(.segmented)
-                        Picker(strings.gifSizeLabel, selection: $gifSizeRaw) {
+                        SettingsChoiceRow(symbol: "photo", title: strings.gifSizeLabel, selection: $gifSizeRaw) {
                             Text(strings.gifSizeSmall).tag(RecorderSupport.GIFSize.small.rawValue)
                             Text(strings.gifSizeMedium).tag(RecorderSupport.GIFSize.medium.rawValue)
                             Text(strings.gifSizeLarge).tag(RecorderSupport.GIFSize.large.rawValue)
                         }
-                        .pickerStyle(.segmented)
-                        Picker(strings.gifFrameRateLabel, selection: $gifFrameRate) {
+                        SettingsChoiceRow(symbol: "timer", title: strings.gifFrameRateLabel,
+                                          selection: $gifFrameRate) {
                             ForEach(RecorderSupport.gifFrameRates, id: \.self) { rate in
                                 Text(String(format: strings.frameRateFormat, rate)).tag(rate)
                             }
                         }
-                        .pickerStyle(.segmented)
                     }
                     .disclosureIndent()
                 }
             }
 
-            Section {
-                Toggle(screenshotStrings.shareEnabledToggle, isOn: $sharingEnabled)
-                if sharingEnabled {
-                    Text(shareStrings.caption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            SettingsCard(title: screenshotStrings.shareSectionTitle) {
+                SettingsRow(symbol: "square.and.arrow.up", title: screenshotStrings.shareEnabledToggle,
+                            caption: sharingEnabled ? shareStrings.caption : nil) {
+                    Toggle(screenshotStrings.shareEnabledToggle, isOn: $sharingEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
+                Divider()
                 Button {
                     showingSharePrivacy = true
                 } label: {
-                    Label(screenshotStrings.sharePrivacyButton, systemImage: "hand.raised")
+                    SettingsRow(symbol: "hand.raised", title: screenshotStrings.sharePrivacyButton) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 if !sharing.records.isEmpty {
                     Button {
                         showingSharedLinks = true
                     } label: {
-                        HStack {
-                            Label(screenshotStrings.sharedLinksTitle, systemImage: "link")
-                            Spacer()
-                            Text("\(sharing.records.count)")
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
+                        SettingsRow(symbol: "link", title: screenshotStrings.sharedLinksTitle) {
+                            HStack(spacing: 6) {
+                                Text("\(sharing.records.count)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
-            } header: {
-                Text(screenshotStrings.shareSectionTitle)
             }
         }
         .onAppear { sharing.refresh() }
@@ -194,25 +212,25 @@ struct ScreenRecordingCaptureSettings: View {
     }
 
     private var folderRow: some View {
-        HStack {
-            Text(strings.folderLabel)
-            Spacer()
-            Text(currentFolderName)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            if !saveFolder.isEmpty {
-                Button {
-                    saveFolder = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
+        SettingsRow(symbol: "folder", title: strings.folderLabel) {
+            HStack(spacing: 8) {
+                Text(currentFolderName)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if !saveFolder.isEmpty {
+                    Button {
+                        saveFolder = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.borderless)
+                    .screenshotSafeHelp(l10n.s.shortcutReset)
                 }
-                .buttonStyle(.borderless)
-                .screenshotSafeHelp(l10n.s.shortcutReset)
-            }
-            Button(strings.folderChoose) {
-                chooseFolder()
+                VorssaintActionChip(title: strings.folderChoose, tone: .tools) {
+                    chooseFolder()
+                }
             }
         }
     }

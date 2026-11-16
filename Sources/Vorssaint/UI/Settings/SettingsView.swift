@@ -630,7 +630,7 @@ struct UpdatesView: View {
     @AppStorage(DefaultsKey.releaseNotesOnUpdate) private var showWhatsNewAfter = true
 
     var body: some View {
-        Section(l10n.s.updatesSection) {
+        SettingsCard(title: l10n.s.updatesSection) {
             Toggle(l10n.s.autoCheckToggle, isOn: $autoCheck)
                 .onChange(of: autoCheck) { _, value in
                     UpdateService.shared.autoCheckEnabled = value
@@ -732,14 +732,16 @@ struct AboutSettings: View {
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
-        Form {
-            Section {
-                aboutContent
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                SettingsCard { aboutContent }
+                UpdatesView()
             }
-
-            UpdatesView()
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
+            .padding(22)
         }
-        .formStyle(.grouped)
+        .toggleStyle(TrailingSwitchToggleStyle())
     }
 
     private var aboutContent: some View {

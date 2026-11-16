@@ -230,6 +230,8 @@ private struct WhatsNewFeaturePage: View {
     let title: String
     let onOpenSettings: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var features = FeatureRuntime.shared
 
@@ -237,37 +239,49 @@ private struct WhatsNewFeaturePage: View {
     private var hub: FeatureHubStrings { FeatureStrings.hub(l10n.language) }
 
     var body: some View {
-        Form {
-            Section {
-                HStack(spacing: 12) {
-                    Image(systemName: row.icon)
-                        .font(.system(size: 24))
-                        .foregroundStyle(.tint)
-                        .frame(width: 34)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.title2.bold())
-                        if let feature = row.feature {
-                            Text(feature.hubDescription(hub))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SettingsCard {
+                    HStack(spacing: 12) {
+                        let tint = SemanticCategoryPalette.color(
+                            forSymbol: row.icon,
+                            scheme: colorScheme,
+                            highContrast: colorSchemeContrast == .increased
+                        )
+                        Image(systemName: row.icon)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(tint)
+                            .frame(width: 36, height: 36)
+                            .background(tint.opacity(colorScheme == .dark ? 0.16 : 0.12),
+                                        in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(title)
+                                .font(.title2.bold())
+                            if let feature = row.feature {
+                                Text(feature.hubDescription(hub))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        Spacer(minLength: 12)
+                        action
+                    }
+                }
+                ForEach(WhatsNewSupport.grouped(row.changes)) { group in
+                    SettingsCard(title: WhatsNewDigestView.title(of: group.kind, text)) {
+                        ForEach(group.changes, id: \.self) { change in
+                            if change != group.changes.first {
+                                Divider()
+                            }
+                            changeRow(change)
                         }
                     }
-                    Spacer(minLength: 12)
-                    action
-                }
-                .padding(.vertical, 4)
-            }
-            ForEach(WhatsNewSupport.grouped(row.changes)) { group in
-                Section(WhatsNewDigestView.title(of: group.kind, text)) {
-                    ForEach(group.changes, id: \.self) { change in
-                        changeRow(change)
-                    }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
         }
-        .formStyle(.grouped)
     }
 
     private func changeRow(_ change: ReleaseChange) -> some View {

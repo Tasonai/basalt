@@ -20,41 +20,45 @@ struct KeyboardDebounceSettings: View {
     @State private var selectedWindow = Defaults.defaultKeyboardDebounceWindowMs
 
     var body: some View {
-        Form {
-            Section(l10n.s.keyDebounceName) {
-                Toggle(l10n.s.keyDebounceEnable, isOn: $enabled)
-                    .onChange(of: enabled) { _, value in
-                        KeyboardDebounceService.shared.syncWithPreferences()
-                        guard value, !permissions.accessibility else { return }
-                        permissions.requestAccessibility()
-                        permissions.openAccessibilitySettings()
-                    }
-                Text(l10n.s.keyDebounceCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        SettingsPageContainer(title: l10n.s.keyDebounceName, subtitle: l10n.s.keyDebounceCaption) {
+            SettingsCard {
+                SettingsRow(symbol: "keyboard", title: l10n.s.keyDebounceEnable) {
+                    Toggle(l10n.s.keyDebounceEnable, isOn: $enabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: enabled) { _, value in
+                            KeyboardDebounceService.shared.syncWithPreferences()
+                            guard value, !permissions.accessibility else { return }
+                            permissions.requestAccessibility()
+                            permissions.openAccessibilitySettings()
+                        }
+                }
                 if enabled, debounce.isRunning {
                     Label(l10n.s.keyDebounceActiveNow, systemImage: "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.green)
+                        .padding(.leading, settingsRowTextInset)
                 }
-                Stepper(value: globalWindowBinding,
-                        in: Defaults.allowedKeyboardDebounceWindowRange,
-                        step: Defaults.keyboardDebounceWindowStep) {
-                    HStack {
-                        Text(l10n.s.keyDebounceGlobalWindow)
-                        Spacer()
+                Divider()
+                SettingsRow(symbol: "timer", title: l10n.s.keyDebounceGlobalWindow) {
+                    HStack(spacing: 8) {
                         Text("\(globalWindow) ms")
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
+                        Stepper("", value: globalWindowBinding,
+                                in: Defaults.allowedKeyboardDebounceWindowRange,
+                                step: Defaults.keyboardDebounceWindowStep)
+                            .labelsHidden()
                     }
                 }
                 .disabled(!enabled)
             }
 
-            Section(l10n.s.keyDebouncePerKeySection) {
+            SettingsCard(title: l10n.s.keyDebouncePerKeySection) {
                 Text(l10n.s.keyDebouncePerKeyCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     Picker(l10n.s.keyDebounceKeyLabel, selection: $selectedKeyCode) {
                         Text(l10n.s.keyDebounceKeyLabel).tag(Int64?.none)
@@ -62,6 +66,8 @@ struct KeyboardDebounceSettings: View {
                             Text(key.label).tag(Optional(key.code))
                         }
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
                     .frame(minWidth: 160)
                     Stepper(value: $selectedWindow,
                             in: Defaults.allowedKeyboardDebounceWindowRange,
@@ -82,11 +88,16 @@ struct KeyboardDebounceSettings: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 } else {
+                    Divider()
                     ForEach(keyWindows) { row in
+                        if row.id != keyWindows.first?.id {
+                            Divider()
+                        }
                         HStack(spacing: 8) {
                             Text(KeyboardDebounceKeyCatalog.label(for: row.keyCode))
                                 .font(.system(size: 12, weight: .semibold))
                                 .frame(width: 70, alignment: .leading)
+                            Spacer()
                             Stepper(value: binding(for: row.keyCode),
                                     in: Defaults.allowedKeyboardDebounceWindowRange,
                                     step: Defaults.keyboardDebounceWindowStep) {
@@ -108,12 +119,11 @@ struct KeyboardDebounceSettings: View {
             .disabled(!enabled)
 
             if enabled, !permissions.accessibility {
-                Section(l10n.s.permissionRequired) {
+                SettingsCard(title: l10n.s.permissionRequired) {
                     PermissionRow(kind: .accessibility)
                 }
             }
         }
-        .formStyle(.grouped)
         .onAppear {
             globalWindow = Defaults.sanitizedKeyboardDebounceWindow(globalWindow)
             selectedWindow = Defaults.sanitizedKeyboardDebounceWindow(selectedWindow)

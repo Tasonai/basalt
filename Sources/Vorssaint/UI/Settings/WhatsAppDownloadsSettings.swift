@@ -45,7 +45,7 @@ struct WhatsAppDownloadsSettings: View {
     }
 
     var body: some View {
-        Form {
+        SettingsPageContainer(title: text.title, subtitle: text.hubDescription) {
             introductionSection
             automationSection
             typesSection
@@ -54,7 +54,6 @@ struct WhatsAppDownloadsSettings: View {
             activitySection
             privacySection
         }
-        .formStyle(.grouped)
         .onAppear {
             manager.setReviewVisible(true)
             retentionDays = WhatsAppDownloadSupport.sanitizedRetentionDays(retentionDays)
@@ -97,10 +96,14 @@ struct WhatsAppDownloadsSettings: View {
     }
 
     private var introductionSection: some View {
-        Section {
-            Toggle(text.title, isOn: $enabled)
-            Text(organizerEnabled ? organizerText.privacyNote : text.intro)
-                .font(.callout)
+        SettingsCard {
+            SettingsRow(symbol: "arrow.down.doc", title: text.title,
+                        caption: organizerEnabled ? organizerText.privacyNote : text.intro) {
+                Toggle(text.title, isOn: $enabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            Divider()
             HStack(spacing: 8) {
                 Image(systemName: "folder")
                     .foregroundStyle(.secondary)
@@ -147,38 +150,50 @@ struct WhatsAppDownloadsSettings: View {
     }
 
     private var automationSection: some View {
-        Section {
-            Toggle(text.automatic, isOn: automaticBinding)
-            Text(text.automaticCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Picker(text.retention, selection: $retentionDays) {
-                ForEach(WhatsAppDownloadSupport.allowedRetentionDays, id: \.self) { days in
-                    Text(String(format: text.daysFormat, days)).tag(days)
+        SettingsCard {
+            SettingsRow(symbol: "clock.arrow.2.circlepath", title: text.automatic,
+                        caption: text.automaticCaption) {
+                Toggle(text.automatic, isOn: automaticBinding)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            Divider()
+            SettingsRow(symbol: "calendar", title: text.retention, caption: text.retentionCaption) {
+                Picker(text.retention, selection: $retentionDays) {
+                    ForEach(WhatsAppDownloadSupport.allowedRetentionDays, id: \.self) { days in
+                        Text(String(format: text.daysFormat, days)).tag(days)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+                .onChange(of: retentionDays) { _, value in
+                    retentionDays = WhatsAppDownloadSupport.sanitizedRetentionDays(value)
+                    refreshResultsIfVisible()
                 }
             }
-            .onChange(of: retentionDays) { _, value in
-                retentionDays = WhatsAppDownloadSupport.sanitizedRetentionDays(value)
-                refreshResultsIfVisible()
+            Divider()
+            SettingsRow(symbol: "bell.badge", title: l10n.s.cleanerScheduleNotifyToggle) {
+                Toggle(l10n.s.cleanerScheduleNotifyToggle, isOn: $notify)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: notify) { _, enabled in
+                        if enabled { Notifier.requestPermission() }
+                    }
             }
-            Text(text.retentionCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Toggle(l10n.s.cleanerScheduleNotifyToggle, isOn: $notify)
-                .onChange(of: notify) { _, enabled in
-                    if enabled { Notifier.requestPermission() }
-                }
             if notify, permissions.notifications == .denied {
                 HStack {
                     Text(l10n.s.cleanerNotifDenied)
                         .font(.caption)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Button(l10n.s.cleanerNotifOpenSettings) {
                         permissions.openNotificationSettings()
                     }
                     .controlSize(.small)
                 }
+                .padding(.leading, settingsRowTextInset)
             }
         }
     }
@@ -199,9 +214,10 @@ struct WhatsAppDownloadsSettings: View {
     }
 
     private var typesSection: some View {
-        Section(text.fileTypes) {
+        SettingsCard(title: text.fileTypes) {
             Toggle(text.allTypes, isOn: allCategoriesBinding)
                 .toggleStyle(.checkbox)
+            Divider()
             categoryPair(.image, .video)
             categoryPair(.audio, .document)
             categoryPair(.archive, .other)
@@ -209,7 +225,7 @@ struct WhatsAppDownloadsSettings: View {
     }
 
     private var organizerSection: some View {
-        Section {
+        SettingsCard {
             HStack(spacing: 8) {
                 Text(organizerText.title)
                     .font(.headline)
@@ -223,23 +239,33 @@ struct WhatsAppDownloadsSettings: View {
             Text(organizerText.description)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Toggle(organizerText.enabled, isOn: $organizerEnabled)
-                .onChange(of: organizerEnabled) { _, enabled in
-                    if enabled {
-                        manager.scan()
-                        if notify { Notifier.requestPermission() }
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            SettingsRow(symbol: "folder.badge.gearshape", title: organizerText.enabled) {
+                Toggle(organizerText.enabled, isOn: $organizerEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: organizerEnabled) { _, enabled in
+                        if enabled {
+                            manager.scan()
+                            if notify { Notifier.requestPermission() }
+                        }
+                        organizer.syncWithPreferences()
                     }
-                    organizer.syncWithPreferences()
-                }
-                .disabled(organizer.isBusy)
+                    .disabled(organizer.isBusy)
+            }
 
             if organizerEnabled {
                 Text(organizerText.enabledCaption)
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, settingsRowTextInset)
+                Divider()
                 organizerDestinationRow
-
-                Picker(organizerText.organization, selection: $organizerLayout) {
+                Divider()
+                SettingsMenuRow(symbol: "folder", title: organizerText.organization,
+                                selection: $organizerLayout) {
                     Text(organizerText.flat).tag(WhatsAppOrganizerLayout.flat.rawValue)
                     Text(organizerText.byType).tag(WhatsAppOrganizerLayout.category.rawValue)
                     Text(organizerText.byMonth).tag(WhatsAppOrganizerLayout.month.rawValue)
@@ -247,7 +273,8 @@ struct WhatsAppDownloadsSettings: View {
                 .onChange(of: organizerLayout) { _, _ in organizer.syncWithPreferences() }
                 .disabled(organizer.isBusy)
 
-                Picker(organizerText.delay, selection: $organizerDelay) {
+                SettingsMenuRow(symbol: "timer", title: organizerText.delay,
+                                selection: $organizerDelay) {
                     ForEach(WhatsAppDownloadSupport.allowedOrganizerDelayMinutes, id: \.self) {
                         Text(String(format: organizerText.minutesFormat, $0)).tag($0)
                     }
@@ -258,7 +285,8 @@ struct WhatsAppDownloadsSettings: View {
                 }
                 .disabled(organizer.isBusy)
 
-                Picker(organizerText.duplicateAction, selection: $duplicateAction) {
+                SettingsMenuRow(symbol: "doc.on.doc", title: organizerText.duplicateAction,
+                                selection: $duplicateAction) {
                     Text(organizerText.trashDuplicate)
                         .tag(WhatsAppDuplicateAction.trashNew.rawValue)
                     Text(organizerText.keepBoth)
@@ -271,7 +299,10 @@ struct WhatsAppDownloadsSettings: View {
                 Text(organizerText.duplicateCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, settingsRowTextInset)
 
+                Divider()
                 Group {
                     DisclosureHeaderRow(isExpanded: $showingOrganizerFileTypes) {
                         Text(text.fileTypes)
@@ -290,6 +321,7 @@ struct WhatsAppDownloadsSettings: View {
                 }
                 .disabled(organizer.isBusy)
 
+                Divider()
                 HStack {
                     Button(organizerText.organizeNow) { organizer.runNow() }
                         .buttonStyle(.borderedProminent)
@@ -303,6 +335,7 @@ struct WhatsAppDownloadsSettings: View {
                 Text(organizerText.privacyNote)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -465,12 +498,12 @@ struct WhatsAppDownloadsSettings: View {
         WhatsAppDownloadSupport.decodedCategories(categoriesRaw)
     }
 
-    @ViewBuilder
     private var manualSection: some View {
-        Section {
+        SettingsCard(title: l10n.s.urlCleanerManualTitle) {
             Text(text.manualIntro)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button {
                     manager.scan()
@@ -494,22 +527,25 @@ struct WhatsAppDownloadsSettings: View {
             case .scanning:
                 EmptyView()
             case .results:
+                Divider()
                 resultsView
             case .cleaning:
+                Divider()
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text(l10n.s.cleanerCleaning)
                         .foregroundStyle(.secondary)
                 }
             case let .done(moved, bytes, failed):
+                Divider()
                 cleanupResult(moved: moved, bytes: bytes, failed: failed)
             case .failed:
+                Divider()
                 Text(text.scanFailed)
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        } header: {
-            Text(l10n.s.urlCleanerManualTitle)
         }
     }
 
@@ -620,27 +656,30 @@ struct WhatsAppDownloadsSettings: View {
     }
 
     private var activitySection: some View {
-        Section(text.activity) {
+        SettingsCard(title: text.activity) {
             if lastCleanup > 0 {
                 Text(String(format: text.lastRunFormat,
                             Self.activityDate.string(from: Date(timeIntervalSince1970: lastCleanup)),
                             lastCount, byteString(Int64(lastBytes)), lastFailed))
                     .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(text.neverRun)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if automatic, let next = scheduler.nextFire {
                 Text(String(format: text.nextRunFormat, Self.activityDate.string(from: next)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
     private var privacySection: some View {
-        Section {
+        SettingsCard {
             Label(organizerEnabled ? organizerText.privacyNote : text.localNote,
                   systemImage: "hand.raised.fill")
                 .font(.caption)
@@ -648,6 +687,7 @@ struct WhatsAppDownloadsSettings: View {
             Text(text.trashNote)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

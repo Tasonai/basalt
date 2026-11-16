@@ -18,16 +18,12 @@ struct AppUpdatesSettings: View {
     private var text: AppUpdateStrings { FeatureStrings.appUpdates(l10n.language) }
 
     var body: some View {
-        Form {
-            Section(text.pageTitle) {
-                Text(text.caption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        SettingsPageContainer(title: text.pageTitle, subtitle: text.caption) {
+            SettingsCard {
                 AppUpdatesListView()
-                    .padding(.vertical, 2)
             }
 
-            Section(text.frequencyLabel) {
+            SettingsCard(title: text.frequencyLabel) {
                 Picker(text.frequencyLabel, selection: frequencyBinding) {
                     Text(text.frequencyOff).tag(AppUpdatesSupport.CheckFrequency.off)
                     Text(text.frequencyDaily).tag(AppUpdatesSupport.CheckFrequency.daily)
@@ -39,44 +35,63 @@ struct AppUpdatesSettings: View {
                     Text(String(format: text.nextCheckFormat, nextCheckText(next)))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Toggle(text.notifyToggle, isOn: $notify)
-                    .disabled(AppUpdatesSupport.CheckFrequency.sanitized(frequencyRaw) == .off)
-                    .onChange(of: notify) { _, value in
-                        guard value else { return }
-                        Notifier.requestPermission()
-                    }
+                Divider()
+                SettingsRow(symbol: "bell.badge", title: text.notifyToggle) {
+                    Toggle(text.notifyToggle, isOn: $notify)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .disabled(AppUpdatesSupport.CheckFrequency.sanitized(frequencyRaw) == .off)
+                        .onChange(of: notify) { _, value in
+                            guard value else { return }
+                            Notifier.requestPermission()
+                        }
+                }
             }
 
-            Section(text.sourcesTitle) {
-                Toggle(text.includeHomebrewToggle, isOn: $includeHomebrewApps)
-                    .disabled(includeHomebrewApps && enabledSourceCount == 1)
-                    .onChange(of: includeHomebrewApps) { _, _ in
-                        updates.sourceSelectionDidChange()
-                    }
-                Toggle(text.includeStoreToggle, isOn: $includeAppStore)
-                    .disabled(includeAppStore && enabledSourceCount == 1)
-                    .onChange(of: includeAppStore) { _, _ in
-                        updates.sourceSelectionDidChange()
-                    }
-                Text(text.includeStoreCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Toggle(text.includeOnlineToggle, isOn: $includeOnlineCatalog)
-                    .disabled(includeOnlineCatalog && enabledSourceCount == 1)
-                    .onChange(of: includeOnlineCatalog) { _, _ in
-                        updates.sourceSelectionDidChange()
-                    }
-                Text(text.includeOnlineCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            SettingsCard(title: text.sourcesTitle) {
+                SettingsRow(symbol: "shippingbox", title: text.includeHomebrewToggle) {
+                    Toggle(text.includeHomebrewToggle, isOn: $includeHomebrewApps)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .disabled(includeHomebrewApps && enabledSourceCount == 1)
+                        .onChange(of: includeHomebrewApps) { _, _ in
+                            updates.sourceSelectionDidChange()
+                        }
+                }
+                Divider()
+                SettingsRow(symbol: "bag", title: text.includeStoreToggle,
+                            caption: text.includeStoreCaption) {
+                    Toggle(text.includeStoreToggle, isOn: $includeAppStore)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .disabled(includeAppStore && enabledSourceCount == 1)
+                        .onChange(of: includeAppStore) { _, _ in
+                            updates.sourceSelectionDidChange()
+                        }
+                }
+                Divider()
+                SettingsRow(symbol: "globe", title: text.includeOnlineToggle,
+                            caption: text.includeOnlineCaption) {
+                    Toggle(text.includeOnlineToggle, isOn: $includeOnlineCatalog)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .disabled(includeOnlineCatalog && enabledSourceCount == 1)
+                        .onChange(of: includeOnlineCatalog) { _, _ in
+                            updates.sourceSelectionDidChange()
+                        }
+                }
             }
 
-            Section {
-                Toggle(text.showInPanel, isOn: $showInPanel)
+            SettingsCard {
+                SettingsRow(symbol: "menubar.rectangle", title: text.showInPanel) {
+                    Toggle(text.showInPanel, isOn: $showInPanel)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
             }
         }
-        .formStyle(.grouped)
         .onAppear { updates.checkIfNeeded() }
     }
 

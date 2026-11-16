@@ -5,6 +5,8 @@ import AppKit
 import SwiftUI
 
 struct URLCleanerSettings: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var cleaner = URLCleanerService.shared
     @AppStorage(DefaultsKey.urlCleanerEnabled) private var enabled = false
@@ -29,19 +31,37 @@ struct URLCleanerSettings: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(l10n.s.urlCleanerEnable, isOn: $enabled)
+        SettingsPageContainer(title: l10n.s.urlCleanerName, subtitle: l10n.s.urlCleanerEnableCaption) {
+            SettingsCard {
+                HStack(spacing: 12) {
+                    let tint = SemanticCategoryPalette.color(
+                        forSymbol: "link",
+                        scheme: colorScheme,
+                        highContrast: colorSchemeContrast == .increased
+                    )
+                    Image(systemName: "link")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(tint)
+                        .frame(width: 26, height: 26)
+                        .background(tint.opacity(colorScheme == .dark ? 0.16 : 0.12),
+                                    in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    Toggle(isOn: $enabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(l10n.s.urlCleanerEnable)
+                                .font(.system(size: 13, weight: .regular))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(l10n.s.urlCleanerLocalNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     .onChange(of: enabled) { _, _ in
                         URLCleanerService.shared.syncWithPreferences()
                     }
-                Text(l10n.s.urlCleanerEnableCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(l10n.s.urlCleanerLocalNote)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                }
                 if enabled, cleaner.isRunning {
+                    Divider()
                     Label(l10n.s.urlCleanerActiveNow, systemImage: "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.green)
@@ -52,15 +72,23 @@ struct URLCleanerSettings: View {
                         Text(removedSummary(cleaner.lastRemoved))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
 
-            Section(l10n.s.urlCleanerRulesTitle) {
-                ForEach(URLCleaning.ruleGroups(rules: rules)) { group in
+            SettingsCard(title: l10n.s.urlCleanerRulesTitle) {
+                let ruleGroups = URLCleaning.ruleGroups(rules: rules)
+                ForEach(ruleGroups) { group in
+                    if group.id != ruleGroups.first?.id {
+                        Divider()
+                    }
                     DisclosureGroup {
-                        parameterGrid(for: group)
-                        addParameterRow(site: group.site)
+                        VStack(alignment: .leading, spacing: 8) {
+                            parameterGrid(for: group)
+                            addParameterRow(site: group.site)
+                        }
+                        .padding(.top, 6)
                     } label: {
                         HStack {
                             Text(title(for: group.site))
@@ -71,6 +99,7 @@ struct URLCleanerSettings: View {
                         }
                     }
                 }
+                Divider()
                 DisclosureHeaderRow(isExpanded: $showingAddSite) {
                     Text(l10n.s.urlCleanerRulesAddSite)
                     Spacer()
@@ -79,18 +108,21 @@ struct URLCleanerSettings: View {
                     addSiteRow
                         .disclosureIndent()
                 }
+                Divider()
                 Text(l10n.s.urlCleanerRulesCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 // Why the list is as long as it is. Without this the length
                 // reads as "we delete a lot from your links", when a real link
                 // only ever carries a handful of these.
                 Text(l10n.s.urlCleanerRulesCoverageCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section(l10n.s.urlCleanerManualTitle) {
+            SettingsCard(title: l10n.s.urlCleanerManualTitle) {
                 HStack(spacing: 8) {
                     TextField("", text: $input, prompt: Text(l10n.s.urlCleanerInputPlaceholder))
                         .textFieldStyle(.roundedBorder)
@@ -115,6 +147,7 @@ struct URLCleanerSettings: View {
                         .disabled(result == nil)
                 }
                 if let output = result?.url {
+                    Divider()
                     Text(output)
                         .font(.system(.caption, design: .monospaced))
                         .lineLimit(3)
@@ -123,14 +156,15 @@ struct URLCleanerSettings: View {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text(input.isEmpty ? l10n.s.urlCleanerOutputPlaceholder : message)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
-        .formStyle(.grouped)
     }
 
     /// Two dozen names for one site is a lot of clicking to say "not this

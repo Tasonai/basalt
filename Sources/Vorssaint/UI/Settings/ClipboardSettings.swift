@@ -40,50 +40,60 @@ struct ClipboardSettings: View {
     }
 
     var body: some View {
-        Form {
+        SettingsPageContainer(title: text.title) {
             if AppFeature.clipboardHistory.isAvailable {
-                Section {
-                    Toggle(text.enable, isOn: $enabled)
-                        .onChange(of: enabled) { _, _ in
-                            ClipboardHistoryService.shared.syncWithPreferences()
-                        }
-                    Text(text.caption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                SettingsCard {
+                    SettingsRow(symbol: "doc.on.clipboard", title: text.enable, caption: text.caption) {
+                        Toggle(text.enable, isOn: $enabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: enabled) { _, _ in
+                                ClipboardHistoryService.shared.syncWithPreferences()
+                            }
+                    }
                     Text(text.localNote)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, settingsRowTextInset)
                     if enabled, history.isRunning {
                         Label(text.active, systemImage: "checkmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(.green)
+                            .padding(.leading, settingsRowTextInset)
                     }
                 }
-                .settingsFormSectionAnchor(.clipboardHistory)
+                .settingsSectionAnchor(.clipboardHistory, cornerRadius: 16)
 
-                clipboardShortcutSection
-                clipboardMenuBarPreviewSection
+                clipboardShortcutCard
+                clipboardMenuBarPreviewCard
 
-                Section {
-                    Toggle(text.includeImagesFiles, isOn: $includeImagesFiles)
-                        .disabled(!enabled)
-                    Text(text.includeImagesFilesCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Toggle(text.skipSensitive, isOn: $skipSensitive)
-                        .disabled(!enabled)
-                    Text(text.skipSensitiveCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                SettingsCard {
+                    SettingsRow(symbol: "photo.on.rectangle", title: text.includeImagesFiles,
+                                caption: text.includeImagesFilesCaption) {
+                        Toggle(text.includeImagesFiles, isOn: $includeImagesFiles)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .disabled(!enabled)
+                    }
+                    SettingsRow(symbol: "shield.lefthalf.filled", title: text.skipSensitive,
+                                caption: text.skipSensitiveCaption) {
+                        Toggle(text.skipSensitive, isOn: $skipSensitive)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .disabled(!enabled)
+                    }
+                    Divider()
                     ClipboardIgnoredAppsList()
                         .disabled(!enabled)
-                    Picker(text.limit, selection: $limit) {
+                    Divider()
+                    SettingsMenuRow(symbol: "tray.full", title: text.limit, selection: $limit) {
                         ForEach(Defaults.allowedClipboardHistoryLimits, id: \.self) { value in
                             Text(value == 0 ? text.limitUnlimited : "\(value)").tag(value)
                         }
                     }
                     .disabled(!enabled)
-                    Picker(retentionText.title, selection: $retentionDays) {
+                    SettingsMenuRow(symbol: "clock", title: retentionText.title, selection: $retentionDays) {
                         ForEach(Defaults.allowedClipboardHistoryRetentionDays, id: \.self) { value in
                             Text(retentionText.label(days: value)).tag(value)
                         }
@@ -92,66 +102,78 @@ struct ClipboardSettings: View {
                     Text(retentionText.caption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, settingsRowTextInset)
                 }
 
-                // Its own section because it is the one setting here that keeps
+                // Its own card because it is the one setting here that keeps
                 // working with capture off: the panel entry stays, saying so,
                 // and still opens the saved items. Sitting among the disabled
                 // rows it read as one that had been missed.
-                Section {
-                    Toggle(text.showInPanel, isOn: $showInPanel)
+                SettingsCard {
+                    SettingsRow(symbol: "sidebar.left", title: text.showInPanel) {
+                        Toggle(text.showInPanel, isOn: $showInPanel)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
                 }
 
-                clipboardAutoClearSection
+                clipboardAutoClearCard
             }
 
             if AppFeature.finderCutPaste.isAvailable {
-                Section {
-                    Toggle(text.pasteImageAsFile, isOn: $pasteImageAsFile)
-                        .onChange(of: pasteImageAsFile) { _, _ in
-                            FinderCutPaste.shared.syncWithPreferences()
-                        }
-                    Text(text.pasteImageAsFileCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                SettingsCard {
+                    SettingsRow(symbol: "doc.badge.plus", title: text.pasteImageAsFile,
+                                caption: text.pasteImageAsFileCaption) {
+                        Toggle(text.pasteImageAsFile, isOn: $pasteImageAsFile)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: pasteImageAsFile) { _, _ in
+                                FinderCutPaste.shared.syncWithPreferences()
+                            }
+                    }
                     if pasteImageAsFile, !permissions.accessibility {
+                        Divider()
                         PermissionRow(kind: .accessibility)
                     }
                 }
             }
 
             if AppFeature.pastePlain.isAvailable {
-                Section {
-                    Toggle(l10n.s.pastePlainName, isOn: $pastePlainEnabled)
-                        .onChange(of: pastePlainEnabled) { _, _ in
-                            PastePlainService.shared.syncWithPreferences()
-                        }
-                    Text(l10n.s.pastePlainCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                SettingsCard(title: l10n.s.pastePlainName) {
+                    SettingsRow(symbol: "doc.plaintext", title: l10n.s.pastePlainName,
+                                caption: l10n.s.pastePlainCaption) {
+                        Toggle(l10n.s.pastePlainName, isOn: $pastePlainEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: pastePlainEnabled) { _, _ in
+                                PastePlainService.shared.syncWithPreferences()
+                            }
+                    }
                     ShortcutPreferenceRow(role: .pastePlain,
                                           isEnabled: pastePlainEnabled) {
                         PastePlainService.shared.syncWithPreferences()
                     }
+                    .padding(.leading, settingsRowTextInset)
                     if pastePlainEnabled, pastePlain.shortcutRegistrationFailed {
                         Text(l10n.s.shortcutUnavailable)
                             .font(.caption)
                             .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.leading, settingsRowTextInset)
                     }
                     if pastePlainEnabled, !permissions.accessibility {
+                        Divider()
                         PermissionRow(kind: .accessibility)
                     }
-                } header: {
-                    Text(l10n.s.pastePlainName)
                 }
-                .settingsFormSectionAnchor(.pastePlain)
+                .settingsSectionAnchor(.pastePlain, cornerRadius: 16)
             }
 
             if AppFeature.clipboardHistory.isAvailable {
-                clipboardStatsSection
+                clipboardStatsCard
             }
         }
-        .formStyle(.grouped)
         .onAppear {
             limit = Defaults.sanitizedClipboardHistoryLimit(limit)
             retentionDays = Defaults.sanitizedClipboardHistoryRetentionDays(retentionDays)
@@ -182,63 +204,73 @@ struct ClipboardSettings: View {
         }
     }
 
-    @ViewBuilder
-    private var clipboardShortcutSection: some View {
-        Section(text.shortcut) {
-            Toggle(text.shortcut, isOn: $shortcutEnabled)
-                .onChange(of: shortcutEnabled) { _, _ in
-                    ClipboardHistoryService.shared.syncHotkey()
-                }
-                .disabled(!enabled)
+    private var clipboardShortcutCard: some View {
+        SettingsCard(title: text.shortcut) {
+            SettingsRow(symbol: "keyboard", title: text.shortcut, caption: text.shortcutCaption) {
+                Toggle(text.shortcut, isOn: $shortcutEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: shortcutEnabled) { _, _ in
+                        ClipboardHistoryService.shared.syncHotkey()
+                    }
+                    .disabled(!enabled)
+            }
             ShortcutPreferenceRow(role: .clipboard,
                                   isEnabled: enabled && shortcutEnabled,
                                   additionalConflict: WindowLayoutService.shared.shortcutConflictTitle) {
                 ClipboardHistoryService.shared.syncHotkey()
             }
+            .padding(.leading, settingsRowTextInset)
             if enabled, shortcutEnabled, history.shortcutRegistrationFailed {
                 Text(l10n.s.shortcutUnavailable)
                     .font(.caption)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, settingsRowTextInset)
             }
-            Text(text.shortcutCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Divider()
             // Not disabled with capture off: the window still opens on the
             // saved items, like the button below.
-            Picker(text.historyLayout, selection: $historyLayout) {
+            SettingsChoiceRow(symbol: "square.grid.2x2", title: text.historyLayout, selection: $historyLayout) {
                 Text(text.historyLayoutList).tag(ClipboardHistoryLayout.list)
                 Text(text.historyLayoutCards).tag(ClipboardHistoryLayout.cards)
             }
-            .pickerStyle(.segmented)
-            Toggle(text.showSourceAppIconsInList, isOn: $showSourceAppIcons)
-            Button {
-                ClipboardHistoryService.shared.showHistoryWindow()
-            } label: {
-                Label(text.shortcut, systemImage: "doc.on.clipboard")
+            SettingsRow(symbol: "app.badge", title: text.showSourceAppIconsInList) {
+                Toggle(text.showSourceAppIconsInList, isOn: $showSourceAppIcons)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
             }
-            .disabled(history.entries.isEmpty)
+            Divider()
+            HStack {
+                VorssaintActionChip(title: text.shortcut, symbol: "doc.on.clipboard", tone: .clipboardFiles) {
+                    ClipboardHistoryService.shared.showHistoryWindow()
+                }
+                .disabled(history.entries.isEmpty)
+                Spacer()
+            }
         }
     }
 
-    @ViewBuilder
-    private var clipboardMenuBarPreviewSection: some View {
-        Section {
-            Toggle(text.menuBarPreview, isOn: $menuBarPreview)
-                .disabled(!enabled)
-            HStack {
-                Text(text.menuBarPreviewLength)
-                Spacer()
-                TextField("", value: $menuBarPreviewLength, formatter: Self.menuBarPreviewLengthFormatter)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 50)
-                    .multilineTextAlignment(.trailing)
-                Text(text.menuBarPreviewLengthSuffix)
-                    .foregroundStyle(.secondary)
+    private var clipboardMenuBarPreviewCard: some View {
+        SettingsCard {
+            SettingsRow(symbol: "menubar.rectangle", title: text.menuBarPreview,
+                        caption: text.menuBarPreviewCaption) {
+                Toggle(text.menuBarPreview, isOn: $menuBarPreview)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(!enabled)
+            }
+            SettingsRow(symbol: "textformat", title: text.menuBarPreviewLength) {
+                HStack(spacing: 6) {
+                    TextField("", value: $menuBarPreviewLength, formatter: Self.menuBarPreviewLengthFormatter)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 50)
+                        .multilineTextAlignment(.trailing)
+                    Text(text.menuBarPreviewLengthSuffix)
+                        .foregroundStyle(.secondary)
+                }
             }
             .disabled(!enabled || !menuBarPreview)
-            Text(text.menuBarPreviewCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -251,40 +283,57 @@ struct ClipboardSettings: View {
         return formatter
     }()
 
-    // Never disabled by the capture toggle, unlike the sections above it:
+    // Never disabled by the capture toggle, unlike the cards above it:
     // emptying the pasteboard is a security setting in its own right, and
     // someone who keeps no history is exactly who reaches for it.
-    @ViewBuilder
-    private var clipboardAutoClearSection: some View {
-        Section {
-            HStack {
-                Toggle(text.autoClearEnable, isOn: $autoClearOnDelay)
-                    .onChange(of: autoClearOnDelay) { _, _ in
+    private var clipboardAutoClearCard: some View {
+        SettingsCard {
+            SettingsRow(symbol: "timer", title: text.autoClearEnable) {
+                HStack(spacing: 8) {
+                    TextField("", value: $autoClearDelay, formatter: Self.delayFieldFormatter)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 60)
+                        .multilineTextAlignment(.trailing)
+                        .disabled(!autoClearOnDelay)
+                    Text(text.autoClearSecondsSuffix)
+                        .foregroundStyle(.secondary)
+                    Toggle(text.autoClearEnable, isOn: $autoClearOnDelay)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: autoClearOnDelay) { _, _ in
+                            ClipboardAutoClearService.shared.syncWithPreferences()
+                        }
+                }
+            }
+            SettingsRow(symbol: "moon.zzz", title: text.autoClearOnSleep) {
+                Toggle(text.autoClearOnSleep, isOn: $autoClearOnSleep)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: autoClearOnSleep) { _, _ in
                         ClipboardAutoClearService.shared.syncWithPreferences()
                     }
-                TextField("", value: $autoClearDelay, formatter: Self.delayFieldFormatter)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 60)
-                    .disabled(!autoClearOnDelay)
-                Text(text.autoClearSecondsSuffix)
-                    .foregroundStyle(.secondary)
             }
-            .fixedSize(horizontal: false, vertical: true)
-            Toggle(text.autoClearOnSleep, isOn: $autoClearOnSleep)
-                .onChange(of: autoClearOnSleep) { _, _ in
-                    ClipboardAutoClearService.shared.syncWithPreferences()
-                }
-            Toggle(text.autoClearOnDisplaySleep, isOn: $autoClearOnDisplaySleep)
-                .onChange(of: autoClearOnDisplaySleep) { _, _ in
-                    ClipboardAutoClearService.shared.syncWithPreferences()
-                }
-            Toggle(text.autoClearOnScreenLock, isOn: $autoClearOnScreenLock)
-                .onChange(of: autoClearOnScreenLock) { _, _ in
-                    ClipboardAutoClearService.shared.syncWithPreferences()
-                }
+            SettingsRow(symbol: "display", title: text.autoClearOnDisplaySleep) {
+                Toggle(text.autoClearOnDisplaySleep, isOn: $autoClearOnDisplaySleep)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: autoClearOnDisplaySleep) { _, _ in
+                        ClipboardAutoClearService.shared.syncWithPreferences()
+                    }
+            }
+            SettingsRow(symbol: "lock", title: text.autoClearOnScreenLock) {
+                Toggle(text.autoClearOnScreenLock, isOn: $autoClearOnScreenLock)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: autoClearOnScreenLock) { _, _ in
+                        ClipboardAutoClearService.shared.syncWithPreferences()
+                    }
+            }
             Text(text.autoClearCaption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, settingsRowTextInset)
         }
     }
 
@@ -297,24 +346,26 @@ struct ClipboardSettings: View {
         return formatter
     }()
 
-    private var clipboardStatsSection: some View {
-            Section {
-                HStack {
-                    Text("\(history.pinnedEntries.count)")
-                    Text(text.pinned)
-                        .foregroundStyle(.secondary)
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                    Text("\(history.recentEntries.count)")
-                    Text(text.recent)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button(text.clearRecent) {
-                        clearingIDs = history.recentEntriesSnapshot
-                    }
-                    .disabled(history.recentEntries.isEmpty)
-                    .modifier(ClipboardClearRecentConfirmation(entryIDs: $clearingIDs))
+    private var clipboardStatsCard: some View {
+        SettingsCard {
+            HStack(spacing: 6) {
+                Text("\(history.pinnedEntries.count)")
+                    .monospacedDigit()
+                Text(text.pinned)
+                    .foregroundStyle(.secondary)
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text("\(history.recentEntries.count)")
+                    .monospacedDigit()
+                Text(text.recent)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                VorssaintActionChip(title: text.clearRecent, symbol: "trash", destructive: true) {
+                    clearingIDs = history.recentEntriesSnapshot
                 }
+                .disabled(history.recentEntries.isEmpty)
+                .modifier(ClipboardClearRecentConfirmation(entryIDs: $clearingIDs))
             }
+        }
     }
 }

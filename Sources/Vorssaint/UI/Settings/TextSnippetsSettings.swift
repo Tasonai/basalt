@@ -26,28 +26,34 @@ struct TextSnippetsSettings: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(text.enable, isOn: $enabled)
-                    .onChange(of: enabled) { _, _ in
-                        TextSnippetService.shared.syncWithPreferences()
-                    }
-                Text(text.enableCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        SettingsPageContainer(title: text.pageTitle, subtitle: text.hubDescription) {
+            SettingsCard {
+                SettingsRow(symbol: "text.append", title: text.enable, caption: text.enableCaption) {
+                    Toggle(text.enable, isOn: $enabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: enabled) { _, _ in
+                            TextSnippetService.shared.syncWithPreferences()
+                        }
+                }
                 if enabled, !permissions.accessibility {
+                    Divider()
                     PermissionRow(kind: .accessibility)
                 }
                 if enabled {
-                    Toggle(text.soundToggle, isOn: $soundEnabled)
-                        .onChange(of: soundEnabled) { _, _ in
-                            TextSnippetService.shared.syncExpansionSound()
-                        }
-                    Text(text.soundCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Divider()
+                    SettingsRow(symbol: "speaker.wave.2", title: text.soundToggle,
+                                caption: text.soundCaption) {
+                        Toggle(text.soundToggle, isOn: $soundEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: soundEnabled) { _, _ in
+                                TextSnippetService.shared.syncExpansionSound()
+                            }
+                    }
                     if soundEnabled {
-                        Picker(text.soundPickerLabel, selection: $soundName) {
+                        SettingsMenuRow(symbol: "music.note", title: text.soundPickerLabel,
+                                        selection: $soundName) {
                             ForEach(AlertSoundStrings.sortedNames(TextSnippetSupport.alertSoundNames,
                                                                   language: l10n.language), id: \.self) { name in
                                 Text(AlertSoundStrings.displayName(for: name, language: l10n.language)).tag(name)
@@ -62,6 +68,7 @@ struct TextSnippetsSettings: View {
                                 Text(text.soundUnavailable).tag(soundName)
                             }
                         }
+                        .padding(.leading, settingsRowTextInset)
                         .onChange(of: soundName) { _, _ in
                             TextSnippetService.shared.syncExpansionSound()
                             TextSnippetService.shared.previewExpansionSound()
@@ -70,27 +77,30 @@ struct TextSnippetsSettings: View {
                 }
             }
 
-            Section {
-                Toggle(text.libraryToggle, isOn: $libraryEnabled)
-                    .onChange(of: libraryEnabled) { _, _ in
-                        SnippetLibraryService.shared.syncWithPreferences()
-                    }
-                Text(text.libraryCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            SettingsCard(title: text.libraryTitle) {
+                SettingsRow(symbol: "books.vertical", title: text.libraryToggle,
+                            caption: text.libraryCaption) {
+                    Toggle(text.libraryToggle, isOn: $libraryEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: libraryEnabled) { _, _ in
+                            SnippetLibraryService.shared.syncWithPreferences()
+                        }
+                }
                 if libraryEnabled {
+                    Divider()
                     ShortcutPreferenceRow(role: .snippetLibrary,
                                           isEnabled: libraryEnabled) {
                         SnippetLibraryService.shared.syncWithPreferences()
                     }
+                    .padding(.leading, settingsRowTextInset)
                     if library.shortcutRegistrationFailed {
                         Text(l10n.s.shortcutUnavailable)
                             .font(.caption)
                             .foregroundStyle(.orange)
+                            .padding(.leading, settingsRowTextInset)
                     }
                 }
-            } header: {
-                Text(text.libraryTitle)
             }
 
             // The library beeps under secure input whether or not trigger
@@ -98,23 +108,30 @@ struct TextSnippetsSettings: View {
             // answers to both, so it sits under both rather than inside the
             // section for one of them.
             if enabled || libraryEnabled, secureInput.holder != .off {
-                Section { SecureInputRow() }
+                SettingsCard { SecureInputRow() }
             }
 
-            Section {
+            SettingsCard {
                 if snippets.isEmpty {
                     Text(text.emptyList)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    let sortedSnippets = TextSnippetSupport.sortedForDisplay(snippets)
+                    ForEach(sortedSnippets) { snippet in
+                        if snippet.id != sortedSnippets.first?.id {
+                            Divider()
+                        }
+                        SnippetRow(snippet: snippet,
+                                   modeLabel: snippet.expansion == .immediate
+                                       ? text.expansionImmediate
+                                       : text.expansionDelimiter,
+                                   toggle: { setEnabled($0, id: snippet.id) },
+                                   edit: { editing = snippet })
+                    }
                 }
-                ForEach(TextSnippetSupport.sortedForDisplay(snippets)) { snippet in
-                    SnippetRow(snippet: snippet,
-                               modeLabel: snippet.expansion == .immediate
-                                   ? text.expansionImmediate
-                                   : text.expansionDelimiter,
-                               toggle: { setEnabled($0, id: snippet.id) },
-                               edit: { editing = snippet })
-                }
+                Divider()
                 Button {
                     creating = true
                 } label: {
@@ -122,7 +139,6 @@ struct TextSnippetsSettings: View {
                 }
             }
         }
-        .formStyle(.grouped)
         .observesSecureInput(isActive: enabled || libraryEnabled)
         .sheet(isPresented: $creating) {
             SnippetEditor(text: text,

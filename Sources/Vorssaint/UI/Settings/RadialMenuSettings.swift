@@ -62,18 +62,21 @@ struct RadialMenuSettings: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(text.enableLabel, isOn: $enabled)
-                Text(text.hubDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        SettingsPageContainer(title: text.pageTitle, subtitle: text.hubDescription) {
+            SettingsCard {
+                SettingsRow(symbol: "circle.grid.cross", title: text.enableLabel, caption: text.enableCaption) {
+                    Toggle(text.enableLabel, isOn: $enabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
                 if service.registrationFailed {
                     Text(l10n.s.shortcutInvalid)
                         .font(.caption)
                         .foregroundStyle(.orange)
+                        .padding(.leading, settingsRowTextInset)
                 }
-                Picker(text.activationModeLabel, selection: $activationModeRaw) {
+                Divider()
+                SettingsMenuRow(symbol: "hand.tap", title: text.activationModeLabel, selection: $activationModeRaw) {
                     Text(text.activationModePressOrHold)
                         .tag(RadialMenuActivationMode.pressOrHold.rawValue)
                     Text(text.activationModePress)
@@ -85,42 +88,44 @@ struct RadialMenuSettings: View {
                 Text(text.activationModeCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker(text.positionLabel, selection: $atPointer) {
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, settingsRowTextInset)
+                Divider()
+                SettingsChoiceRow(symbol: "scope", title: text.positionLabel, selection: $atPointer) {
                     Text(text.positionPointer).tag(true)
                     Text(text.positionCenter).tag(false)
                 }
-                .pickerStyle(.segmented)
+                Divider()
                 Button(text.tryButton) {
                     RadialMenuService.shared.presentPreview(for: selectedProfile)
                 }
-            } header: {
-                Text(text.pageTitle)
             }
 
             if RadialMenuSupport.needsAccessibility(profiles), !permissions.accessibility {
-                Section {
+                SettingsCard(title: l10n.s.permissionRequired) {
                     PermissionRow(kind: .accessibility)
                     Text(RadialMenuSupport.usesWindowLayout(currentProfileItems)
                          ? FeatureStrings.windowLayout(l10n.language).missingPermission
                          : text.permissionCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            Section {
+            SettingsCard(title: text.profilesHeader) {
                 profileManagementRow
                 if enabled, !RadialMenuSupport.hasTrigger(selectedProfile) {
                     Text(text.profileNoTrigger)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                Divider()
                 profileConfigurationRows
-            } header: {
-                Text(text.profilesHeader)
             }
 
-            Section {
+            SettingsCard(title: text.actionsHeader) {
                 RadialMenuVisualCanvas(
                     items: level,
                     profileColor: selectedProfile.color.color(for: colorScheme),
@@ -134,11 +139,11 @@ struct RadialMenuSettings: View {
                     onAdd: { editing = RadialMenuItem(kind: .app) },
                     onReset: canResetProfile ? { resetToPresetDefaults() } : nil
                 )
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
 
                 Text(text.canvasHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if level.count < RadialMenuSupport.maxItemsPerWheel {
                     Button {
@@ -148,45 +153,48 @@ struct RadialMenuSettings: View {
                     }
                 }
 
+                Divider()
+
                 DisclosureGroup(showList ? text.hideListButton : text.showListButton,
                                 isExpanded: $showList.animation(.easeOut(duration: 0.16))) {
-                    if let openSubmenu {
-                        Button {
-                            openSubmenuID = nil
-                            dragging = nil
-                        } label: {
-                            Label("\(text.backButton)  \(openSubmenu.displayName(text))",
-                                  systemImage: "chevron.backward")
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let openSubmenu {
+                            Button {
+                                openSubmenuID = nil
+                                dragging = nil
+                            } label: {
+                                Label("\(text.backButton)  \(openSubmenu.displayName(text))",
+                                      systemImage: "chevron.backward")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
+                        if level.isEmpty {
+                            Text(text.emptyCaption)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(level) { item in
+                            RadialItemRow(item: item,
+                                          text: text,
+                                          dragging: $dragging,
+                                          edit: {
+                                              editing = item
+                                          },
+                                          remove: { remove(id: item.id) },
+                                          openChildren: item.kind == .submenu ? { openSubmenuID = item.id } : nil,
+                                          moveHandler: { moved, target in move(moved, before: target) })
+                        }
                     }
-                    if level.isEmpty {
-                        Text(text.emptyCaption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(level) { item in
-                        RadialItemRow(item: item,
-                                      text: text,
-                                      dragging: $dragging,
-                                      edit: {
-                                          editing = item
-                                      },
-                                      remove: { remove(id: item.id) },
-                                      openChildren: item.kind == .submenu ? { openSubmenuID = item.id } : nil,
-                                      moveHandler: { moved, target in move(moved, before: target) })
-                    }
+                    .padding(.top, 6)
                 }
-            } header: {
-                Text(text.actionsHeader)
-            } footer: {
+
                 Text(level.count >= RadialMenuSupport.maxItemsPerWheel ? text.limitCaption : text.hubDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .formStyle(.grouped)
         .onAppear {
             if selectedProfileID == nil || !profiles.contains(where: { $0.id == selectedProfileID }) {
                 selectedProfileID = profiles.first?.id
@@ -218,6 +226,8 @@ struct RadialMenuSettings: View {
 
     private var profileManagementRow: some View {
         HStack(spacing: 8) {
+            Text(text.profilePickerLabel)
+            Spacer()
             Picker(text.profilePickerLabel, selection: Binding(
                 get: { selectedProfile.id },
                 set: { newID in
@@ -231,6 +241,9 @@ struct RadialMenuSettings: View {
                         .tag(profile.id)
                 }
             }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
             .disabled(!enabled)
 
             Menu {
@@ -286,19 +299,22 @@ struct RadialMenuSettings: View {
         let profile = selectedProfile
         let pIndex = selectedProfileIndex
 
-        TextField(text.profileNameLabel, text: Binding(
-            get: { profile.name },
-            set: { newName in
-                guard profiles.indices.contains(pIndex) else { return }
-                profiles[pIndex].name = newName
-                persist()
-            }
-        ), prompt: Text(text.presetGeneral))
+        SettingsRow(symbol: "tag", title: text.profileNameLabel) {
+            TextField(text.profileNameLabel, text: Binding(
+                get: { profile.name },
+                set: { newName in
+                    guard profiles.indices.contains(pIndex) else { return }
+                    profiles[pIndex].name = newName
+                    persist()
+                }
+            ), prompt: Text(text.presetGeneral))
+            .labelsHidden()
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 220)
+        }
         .disabled(!enabled)
 
-        HStack {
-            Text(text.profileColorLabel)
-            Spacer()
+        SettingsRow(symbol: "paintpalette", title: text.profileColorLabel) {
             RadialMenuColorPicker(
                 selection: Binding(
                     get: { profile.color },
@@ -331,7 +347,9 @@ struct RadialMenuSettings: View {
             }
         )
 
-        Picker(text.profileMouseTriggerLabel, selection: Binding(
+        Divider()
+
+        SettingsMenuRow(symbol: "computermouse", title: text.profileMouseTriggerLabel, selection: Binding(
             get: { profile.mouseButton },
             set: { newTrigger in
                 guard profiles.indices.contains(pIndex) else { return }
@@ -355,6 +373,8 @@ struct RadialMenuSettings: View {
         Text(text.mouseTriggerRequirement)
             .font(.caption)
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, settingsRowTextInset)
 
         if RadialMenuMouseTrigger.sanitized(profile.mouseButton) != .off {
             if let button = RadialMenuMouseTrigger.sanitized(profile.mouseButton).buttonNumber,
@@ -363,20 +383,29 @@ struct RadialMenuSettings: View {
                 Text(text.mouseTriggerWarning)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, settingsRowTextInset)
             }
             buttonTestRow(for: profile.mouseButton)
+                .padding(.leading, settingsRowTextInset)
         }
 
-        Toggle(text.trackpadTapLabel, isOn: Binding(
-            get: { profile.trackpadTap },
-            set: { on in
-                guard profiles.indices.contains(pIndex) else { return }
-                // One wheel owns the tap: claiming it here releases the others.
-                for index in profiles.indices { profiles[index].trackpadTap = on && index == pIndex }
-                persist()
-                if on, !permissions.accessibility { permissions.requestAccessibility() }
-            }
-        ))
+        Divider()
+
+        SettingsRow(symbol: "hand.tap", title: text.trackpadTapLabel) {
+            Toggle(text.trackpadTapLabel, isOn: Binding(
+                get: { profile.trackpadTap },
+                set: { on in
+                    guard profiles.indices.contains(pIndex) else { return }
+                    // One wheel owns the tap: claiming it here releases the others.
+                    for index in profiles.indices { profiles[index].trackpadTap = on && index == pIndex }
+                    persist()
+                    if on, !permissions.accessibility { permissions.requestAccessibility() }
+                }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+        }
         .disabled(!enabled)
 
         if profile.trackpadTap, MiddleClickSupport.radialMenuTapFingers(
@@ -386,6 +415,8 @@ struct RadialMenuSettings: View {
             Text(text.trackpadTapConflict)
                 .font(.caption)
                 .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, settingsRowTextInset)
         }
     }
 

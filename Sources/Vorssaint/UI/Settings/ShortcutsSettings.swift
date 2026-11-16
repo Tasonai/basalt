@@ -37,16 +37,14 @@ struct ShortcutsSettings: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                Text(l10n.s.shortcutsPageCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
+        SettingsPageContainer(title: l10n.s.shortcutsPageTitle, subtitle: l10n.s.shortcutsPageCaption) {
             ForEach(visibleGroups, id: \.self) { group in
-                Section(groupTitle(group)) {
-                    ForEach(featuresWithShortcuts(in: group), id: \.self) { feature in
+                SettingsCard(title: groupTitle(group)) {
+                    let groupFeatures = featuresWithShortcuts(in: group)
+                    ForEach(groupFeatures, id: \.self) { feature in
+                        if feature != groupFeatures.first {
+                            Divider()
+                        }
                         if feature == .screenshot {
                             captureGroupRows
                         } else {
@@ -57,20 +55,17 @@ struct ShortcutsSettings: View {
             }
 
             if AppFeature.commandBar.isAvailable {
-                Section {
-                    Button {
-                        showsAppShortcuts = true
-                    } label: {
-                        Label(FeatureStrings.commandBar(l10n.language).appCenterTitle,
-                              systemImage: "app.badge")
+                SettingsCard {
+                    SettingsRow(symbol: "app.badge",
+                                title: FeatureStrings.commandBar(l10n.language).appCenterTitle,
+                                caption: FeatureStrings.commandBar(l10n.language).appCenterCaption) {
+                        Button(FeatureStrings.superKey(l10n.language).manageButton) {
+                            showsAppShortcuts = true
+                        }
                     }
-                    Text(FeatureStrings.commandBar(l10n.language).appCenterCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
         }
-        .formStyle(.grouped)
         .onAppear { revealKeyboardBrightnessShortcuts() }
         .onChange(of: router.requestID) { _, _ in revealKeyboardBrightnessShortcuts() }
         .sheet(isPresented: $showsAppShortcuts) {
@@ -288,15 +283,17 @@ private struct KeyboardBrightnessShortcutToggle: View {
     @Binding var isEnabled: Bool
 
     var body: some View {
-        Toggle(FeatureStrings.brightness(l10n.language).keyboardBrightnessShortcuts,
-               isOn: $isEnabled)
-            .onChange(of: isEnabled) { _, _ in
-                brightness.syncWithPreferences()
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(FeatureStrings.brightness(l10n.language).keyboardBrightnessShortcuts,
+                   isOn: $isEnabled)
+                .onChange(of: isEnabled) { _, _ in
+                    brightness.syncWithPreferences()
+                }
+            if isEnabled, brightness.keyboardBrightnessShortcutRegistrationFailed {
+                Text(l10n.s.shortcutUnavailable)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
-        if isEnabled, brightness.keyboardBrightnessShortcutRegistrationFailed {
-            Text(l10n.s.shortcutUnavailable)
-                .font(.caption)
-                .foregroundStyle(.orange)
         }
     }
 }

@@ -31,14 +31,18 @@ struct QuitProtectionSettings: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                Text(strings.intro)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Label(strings.accessibilityCaption, systemImage: "hand.raised.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        SettingsPageContainer(title: strings.name, subtitle: strings.description) {
+            SettingsCard {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(strings.intro)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Label(strings.accessibilityCaption, systemImage: "hand.raised.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             shortcutSection(shortcut: .quit,
@@ -59,12 +63,11 @@ struct QuitProtectionSettings: View {
                             showFeedback: $closeShowFeedback)
 
             if (quitEnabled || closeEnabled) && !permissions.accessibility {
-                Section(strings.accessibilityCaption) {
+                SettingsCard(title: l10n.s.permissionRequired) {
                     PermissionRow(kind: .accessibility)
                 }
             }
         }
-        .formStyle(.grouped)
         .sheet(item: $pickerShortcut) { shortcut in
             AppPickerView(onCancel: { pickerShortcut = nil }, onSelect: { url in
                 pickerShortcut = nil
@@ -91,14 +94,17 @@ struct QuitProtectionSettings: View {
         let currentScope = QuitProtectionSupport.scopeFor(scope.wrappedValue)
         let currentModifier = QuitProtectionSupport.extraModifierFor(extraModifier.wrappedValue)
 
-        Section(shortcut.symbol) {
-            Toggle(strings.enabled, isOn: enabled)
-                .onChange(of: enabled.wrappedValue) { _, _ in service.syncWithPreferences() }
-            Text(strings.enabledCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        SettingsCard(title: shortcut.symbol) {
+            SettingsRow(symbol: "shield.lefthalf.filled", title: strings.enabled, caption: strings.enabledCaption) {
+                Toggle(strings.enabled, isOn: enabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: enabled.wrappedValue) { _, _ in service.syncWithPreferences() }
+            }
 
-            Picker(strings.mode, selection: mode) {
+            Divider()
+
+            SettingsMenuRow(symbol: "hand.tap", title: strings.mode, selection: mode) {
                 Text(strings.hold).tag(QuitProtectionMode.hold.rawValue)
                 Text(strings.doublePress).tag(QuitProtectionMode.doublePress.rawValue)
                 Text(strings.extraModifier).tag(QuitProtectionMode.extraModifier.rawValue)
@@ -106,39 +112,39 @@ struct QuitProtectionSettings: View {
             .onChange(of: mode.wrappedValue) { _, _ in service.syncWithPreferences() }
 
             if currentMode == .hold {
-                Slider(value: holdDuration,
-                       in: QuitProtectionSupport.holdDurationRange,
-                       step: 50) {
-                    Text(strings.holdDuration)
-                } minimumValueLabel: {
-                    Text("250 ms").font(.caption2)
-                } maximumValueLabel: {
-                    Text("2 s").font(.caption2)
+                SettingsRow(symbol: "timer", title: strings.holdDuration) {
+                    HStack(spacing: 8) {
+                        Slider(value: holdDuration,
+                               in: QuitProtectionSupport.holdDurationRange,
+                               step: 50)
+                            .frame(width: 150)
+                            .onChange(of: holdDuration.wrappedValue) { _, _ in service.syncWithPreferences() }
+                        Text("\(Int(holdDuration.wrappedValue.rounded())) ms")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 56, alignment: .trailing)
+                    }
                 }
-                .onChange(of: holdDuration.wrappedValue) { _, _ in service.syncWithPreferences() }
-                Text("\(Int(holdDuration.wrappedValue.rounded())) ms")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             if currentMode == .doublePress {
-                Slider(value: doubleInterval,
-                       in: QuitProtectionSupport.doublePressIntervalRange,
-                       step: 50) {
-                    Text(strings.doublePressInterval)
-                } minimumValueLabel: {
-                    Text("200 ms").font(.caption2)
-                } maximumValueLabel: {
-                    Text("1.5 s").font(.caption2)
+                SettingsRow(symbol: "timer", title: strings.doublePressInterval) {
+                    HStack(spacing: 8) {
+                        Slider(value: doubleInterval,
+                               in: QuitProtectionSupport.doublePressIntervalRange,
+                               step: 50)
+                            .frame(width: 150)
+                            .onChange(of: doubleInterval.wrappedValue) { _, _ in service.syncWithPreferences() }
+                        Text("\(Int(doubleInterval.wrappedValue.rounded())) ms")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 56, alignment: .trailing)
+                    }
                 }
-                .onChange(of: doubleInterval.wrappedValue) { _, _ in service.syncWithPreferences() }
-                Text("\(Int(doubleInterval.wrappedValue.rounded())) ms")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             if currentMode == .extraModifier {
-                Picker(strings.modifier, selection: extraModifier) {
+                SettingsMenuRow(symbol: "command", title: strings.modifier, selection: extraModifier) {
                     Text("\(strings.shiftKey) (⇧)").tag(QuitProtectionExtraModifier.shift.rawValue)
                     Text("\(strings.optionKey) (⌥)").tag(QuitProtectionExtraModifier.option.rawValue)
                     Text("\(strings.controlKey) (⌃)").tag(QuitProtectionExtraModifier.control.rawValue)
@@ -147,9 +153,12 @@ struct QuitProtectionSettings: View {
                 Text("\(modifierSymbol(currentModifier))\(shortcut.symbol)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .padding(.leading, settingsRowTextInset)
             }
 
-            Picker(strings.appScope, selection: scope) {
+            Divider()
+
+            SettingsMenuRow(symbol: "macwindow", title: strings.appScope, selection: scope) {
                 Text(strings.allApps).tag(QuitProtectionScope.all.rawValue)
                 Text(strings.selectedOnly).tag(QuitProtectionScope.selectedOnly.rawValue)
                 Text(strings.allExceptSelected).tag(QuitProtectionScope.allExceptSelected.rawValue)
@@ -158,8 +167,14 @@ struct QuitProtectionSettings: View {
 
             exceptionsSection(for: shortcut, scope: currentScope, enabled: enabled.wrappedValue)
 
-            Toggle(strings.feedback, isOn: showFeedback)
-                .onChange(of: showFeedback.wrappedValue) { _, _ in service.syncWithPreferences() }
+            Divider()
+
+            SettingsRow(symbol: "sparkles", title: strings.feedback) {
+                Toggle(strings.feedback, isOn: showFeedback)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .onChange(of: showFeedback.wrappedValue) { _, _ in service.syncWithPreferences() }
+            }
         }
     }
 
@@ -197,6 +212,7 @@ struct QuitProtectionSettings: View {
                 }
                 .disabled(!enabled)
             }
+            .padding(.leading, settingsRowTextInset)
             .disabled(!enabled)
         }
     }

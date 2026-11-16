@@ -41,26 +41,22 @@ struct CommandBarSettings: View {
     }
 
     var body: some View {
-        Form {
-            Section {
+        SettingsPageContainer(title: text.pageTitle, subtitle: text.settingsCaption) {
+            SettingsCard {
                 // One choice, open it or recenter it, so one row. Neither
                 // carries an icon: a ⌘ glyph in front of "Open the bar now"
                 // reads as the shortcut that opens it, which it is not.
                 HStack(spacing: 10) {
-                    Button(text.openButton) {
+                    VorssaintActionChip(title: text.openButton, tone: .mouseKeyboard, prominent: true) {
                         CommandBarService.shared.show()
                     }
-                    Button(text.resetPositionButton) {
+                    VorssaintActionChip(title: text.resetPositionButton, tone: .mouseKeyboard) {
                         CommandBarService.shared.resetPanelPosition()
                     }
                     .disabled(!service.hasCustomPosition)
                 }
-                // One row for the whole explanation. As separate rows the form
-                // drew a divider between every sentence, cutting one paragraph
-                // about one feature into four cards that looked like settings.
                 VStack(alignment: .leading, spacing: 6) {
                     Text(text.positionCaption)
-                    Text(text.settingsCaption)
                     Label(text.privacyNote, systemImage: "lock.laptopcomputer")
                     HStack(spacing: 6) {
                         Text(text.tryTheseLabel)
@@ -77,89 +73,114 @@ struct CommandBarSettings: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                Divider()
                 // No callback: the bar reads this on every open, and opening
                 // Settings has already hidden it, so the two can never be on
                 // screen with a stale value between them.
-                Toggle(text.compactModeToggle, isOn: $compactMode)
-                Text(text.compactModeCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                SettingsRow(symbol: "rectangle.compress.vertical", title: text.compactModeToggle,
+                            caption: text.compactModeCaption) {
+                    Toggle(text.compactModeToggle, isOn: $compactMode)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
                 if CommandBarPreferences.isEnabled(.emoji, disabledRaw: disabledSources) {
-                    Picker(text.emojiSkinToneLabel, selection: $emojiSkinTone) {
+                    SettingsChoiceRow(symbol: "face.smiling", title: text.emojiSkinToneLabel,
+                                      selection: $emojiSkinTone) {
                         ForEach(CommandBarEmoji.SkinTone.allCases) { tone in
                             Text(tone.swatch).tag(tone.rawValue)
                         }
                     }
-                    .pickerStyle(.segmented)
                     Text(text.emojiSkinToneCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, settingsRowTextInset)
                 }
+                Divider()
                 // Not the shared "Global shortcut" label the other feature
                 // pages use: this page already has an "open the bar" button at
                 // the top, so the toggle has to say which of the two it arms.
-                Toggle(text.shortcutToggle, isOn: $shortcutEnabled)
-                    .onChange(of: shortcutEnabled) { _, _ in
-                        CommandBarService.shared.syncWithPreferences()
-                    }
+                SettingsRow(symbol: "command", title: text.shortcutToggle) {
+                    Toggle(text.shortcutToggle, isOn: $shortcutEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: shortcutEnabled) { _, _ in
+                            CommandBarService.shared.syncWithPreferences()
+                        }
+                }
                 ShortcutPreferenceRow(role: .commandBar, isEnabled: shortcutEnabled) {
                     CommandBarService.shared.syncWithPreferences()
                 }
+                .padding(.leading, settingsRowTextInset)
                 if shortcutEnabled, service.shortcutRegistrationFailed {
                     Text(l10n.s.shortcutUnavailable)
                         .font(.caption)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, settingsRowTextInset)
                 }
                 if secureInput.holder != .off {
                     SecureInputRow()
+                        .padding(.leading, settingsRowTextInset)
                 }
+                Divider()
                 DisclosureHeaderRow(isExpanded: $showsLayoutOptions) {
                     Text(FeatureStrings.recorder(l10n.language).moreOptions)
+                        .font(.subheadline.weight(.medium))
                     Spacer()
                 }
                 if showsLayoutOptions {
-                    // Like compact mode this needs no callback: the bar reads
-                    // the toggle on every open, so there is no live state to
-                    // sync.
-                    Toggle(text.asciiLayoutToggle, isOn: $asciiLayoutEnabled)
-                    Text(text.asciiLayoutCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        // Like compact mode this needs no callback: the bar reads
+                        // the toggle on every open, so there is no live state to
+                        // sync.
+                        Toggle(text.asciiLayoutToggle, isOn: $asciiLayoutEnabled)
+                        Text(text.asciiLayoutCaption)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .disclosureIndent()
                 }
-            } header: {
-                Text(text.pageTitle)
             }
 
-            Section {
+            SettingsCard {
                 Button {
                     showsAppShortcuts = true
                 } label: {
-                    Label(text.appCenterTitle, systemImage: "app.badge")
+                    SettingsRow(symbol: "app.badge", title: text.appCenterTitle,
+                                caption: text.appCenterCaption) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
                 }
-                Text(text.appCenterCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
             }
 
-            Section {
+            SettingsCard(title: text.sourcesTitle) {
                 ForEach(CommandBarSource.allCases) { source in
-                    Toggle(isOn: binding(for: source)) {
-                        Label(title(for: source), systemImage: source.symbolName)
+                    SettingsRow(symbol: source.symbolName, title: title(for: source)) {
+                        Toggle(title(for: source), isOn: binding(for: source))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .disabled(source.isAlwaysOn)
                     }
-                    .disabled(source.isAlwaysOn)
                 }
-            } header: {
-                Text(text.sourcesTitle)
-            } footer: {
+                Divider()
                 Text(text.sourcesCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section {
+            SettingsCard(title: text.filesTitle) {
                 Text(text.filesCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 if fileScopes.isEmpty {
                     Text(text.filesEmpty)
                         .font(.caption)
@@ -176,25 +197,29 @@ struct CommandBarSettings: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
-                        Button(text.removeButton) { removeFileScope(scope) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
+                        VorssaintActionChip(title: text.removeButton, destructive: true) {
+                            removeFileScope(scope)
+                        }
                     }
                 }
-                Button {
-                    addFileScope()
-                } label: {
-                    Label(text.filesAddFolder, systemImage: "plus")
+                HStack {
+                    VorssaintActionChip(title: text.filesAddFolder, symbol: "plus", tone: .clipboardFiles) {
+                        addFileScope()
+                    }
+                    Spacer()
                 }
+                Divider()
                 DisclosureHeaderRow(isExpanded: $showsFileOptions) {
                     Text(FeatureStrings.recorder(l10n.language).moreOptions)
+                        .font(.subheadline.weight(.medium))
                     Spacer()
                 }
                 if showsFileOptions {
-                    Group {
+                    VStack(alignment: .leading, spacing: 10) {
                         Text(text.filesIgnoreCaption)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         ForEach(fileIgnores, id: \.self) { pattern in
                             HStack(spacing: 8) {
                                 Image(systemName: "eye.slash")
@@ -205,28 +230,26 @@ struct CommandBarSettings: View {
                                     .font(.system(size: 12))
                                     .lineLimit(1)
                                 Spacer()
-                                Button(text.removeButton) { removeFileIgnore(pattern) }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.mini)
+                                VorssaintActionChip(title: text.removeButton, destructive: true) {
+                                    removeFileIgnore(pattern)
+                                }
                             }
                         }
                         HStack(spacing: 8) {
                             TextField(text.filesIgnorePlaceholder, text: $ignoreDraft)
                                 .textFieldStyle(.roundedBorder)
                                 .onSubmit { addFileIgnore() }
-                            Button(text.filesIgnoreAdd) { addFileIgnore() }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(ignoreDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                            VorssaintActionChip(title: text.filesIgnoreAdd, tone: .clipboardFiles) {
+                                addFileIgnore()
+                            }
+                            .disabled(ignoreDraft.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
                     }
                     .disclosureIndent()
                 }
-            } header: {
-                Text(text.filesTitle)
             }
 
-            Section {
+            SettingsCard(title: text.linksTitle) {
                 if links.isEmpty {
                     Text(text.linksEmpty)
                         .font(.caption)
@@ -246,24 +269,23 @@ struct CommandBarSettings: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
-                        Button(editLabel) { editing = link }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
-                        Button(text.removeButton) { removeLink(link) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
+                        VorssaintActionChip(title: editLabel, tone: .mouseKeyboard) {
+                            editing = link
+                        }
+                        VorssaintActionChip(title: text.removeButton, destructive: true) {
+                            removeLink(link)
+                        }
                     }
                 }
-                Button {
-                    editing = CommandBarLink()
-                } label: {
-                    Label(text.linkAddButton, systemImage: "plus")
+                HStack {
+                    VorssaintActionChip(title: text.linkAddButton, symbol: "plus", tone: .mouseKeyboard) {
+                        editing = CommandBarLink()
+                    }
+                    Spacer()
                 }
-            } header: {
-                Text(text.linksTitle)
             }
 
-            Section {
+            SettingsCard(title: text.rowShortcutsTitle) {
                 if boundRows.isEmpty {
                     Text(text.rowShortcutsEmpty)
                         .font(.caption)
@@ -286,16 +308,14 @@ struct CommandBarSettings: View {
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
-                        Button(text.removeButton) { removeRowShortcut(entry.key) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
+                        VorssaintActionChip(title: text.removeButton, destructive: true) {
+                            removeRowShortcut(entry.key)
+                        }
                     }
                 }
-            } header: {
-                Text(text.rowShortcutsTitle)
             }
 
-            Section {
+            SettingsCard(title: text.namedTitle) {
                 if named.isEmpty {
                     Text(text.namedEmpty)
                         .font(.caption)
@@ -311,16 +331,14 @@ struct CommandBarSettings: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer()
-                        Button(text.removeButton) { removeAlias(entry.key) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
+                        VorssaintActionChip(title: text.removeButton, destructive: true) {
+                            removeAlias(entry.key)
+                        }
                     }
                 }
-            } header: {
-                Text(text.namedTitle)
             }
 
-            Section {
+            SettingsCard(title: text.pinnedTitle) {
                 if pinned.isEmpty {
                     Text(text.pinnedEmpty)
                         .font(.caption)
@@ -332,16 +350,14 @@ struct CommandBarSettings: View {
                             .font(.system(size: 12))
                             .lineLimit(1)
                         Spacer()
-                        Button(text.removeButton) { removePin(entry.key) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
+                        VorssaintActionChip(title: text.removeButton, destructive: true) {
+                            removePin(entry.key)
+                        }
                     }
                 }
-            } header: {
-                Text(text.pinnedTitle)
             }
 
-            Section {
+            SettingsCard(title: text.hiddenTitle) {
                 if hidden.isEmpty {
                     Text(text.hiddenEmpty)
                         .font(.caption)
@@ -353,19 +369,20 @@ struct CommandBarSettings: View {
                             .font(.system(size: 12))
                             .lineLimit(1)
                         Spacer()
-                        Button(text.removeButton) { unhide(entry.key) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.mini)
+                        VorssaintActionChip(title: text.removeButton, destructive: true) {
+                            unhide(entry.key)
+                        }
                     }
                 }
-                Button(text.forgetAllButton) {
-                    CommandBarService.shared.forgetLearnedRanking()
+                Divider()
+                HStack {
+                    VorssaintActionChip(title: text.forgetAllButton, destructive: true) {
+                        CommandBarService.shared.forgetLearnedRanking()
+                    }
+                    Spacer()
                 }
-            } header: {
-                Text(text.hiddenTitle)
             }
         }
-        .formStyle(.grouped)
         .observesSecureInput()
         .sheet(isPresented: $showsAppShortcuts) {
             CommandBarAppShortcutsView()

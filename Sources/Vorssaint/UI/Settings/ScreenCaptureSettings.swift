@@ -26,28 +26,27 @@ struct ScreenCaptureSettings: View {
     }
 
     var body: some View {
-        Form {
+        SettingsPageContainer(title: strings.screenCaptureTitle) {
             if !availableTools.isEmpty {
-                Section {
+                SettingsCard {
                     if availableTools.count > 1 {
                         ScreenCaptureToolPicker(tools: availableTools,
                                                 strings: l10n.s,
                                                 language: l10n.language,
                                                 selection: toolSelection)
+                        Divider()
                     }
                     ToolShortcutRows(tool: currentTool, keys: currentTool.dedicatedShortcut)
                         .id(currentTool)
                     if AppFeature.screenshot.isAvailable || AppFeature.screenRecorder.isAvailable {
+                        Divider()
                         RecentCapturesShortcutRows()
                     }
-                } header: {
-                    Text(strings.screenCaptureTitle)
                 }
             }
 
             selectedSettings
         }
-        .formStyle(.grouped)
         .onAppear { reconcileSelection(withDestination: true) }
         .onChange(of: features.revision) { _, _ in
             reconcileSelection(withDestination: false)
@@ -110,17 +109,20 @@ private struct RecentCapturesShortcutRows: View {
 
     var body: some View {
         let role = GlobalShortcutRole.recentCaptures
-        Toggle(role.title(l10n.s), isOn: $enabled)
-            .onChange(of: enabled) { _, _ in
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(role.title(l10n.s), isOn: $enabled)
+                .onChange(of: enabled) { _, _ in
+                    service.syncWithPreferences()
+                }
+            ShortcutPreferenceRow(role: role, isEnabled: enabled) {
                 service.syncWithPreferences()
             }
-        ShortcutPreferenceRow(role: role, isEnabled: enabled) {
-            service.syncWithPreferences()
-        }
-        if enabled, service.shortcutRegistrationFailed {
-            Text(l10n.s.shortcutUnavailable)
-                .font(.caption)
-                .foregroundStyle(.orange)
+            if enabled, service.shortcutRegistrationFailed {
+                Text(l10n.s.shortcutUnavailable)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -156,20 +158,23 @@ private struct ToolShortcutRows: View {
     }
 
     var body: some View {
-        Toggle(keys.role.title(l10n.s), isOn: $enabled)
-            .onChange(of: enabled) { _, _ in
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(keys.role.title(l10n.s), isOn: $enabled)
+                .onChange(of: enabled) { _, _ in
+                    service.syncWithPreferences()
+                }
+            ShortcutPreferenceRow(role: keys.role, isEnabled: enabled) {
                 service.syncWithPreferences()
             }
-        ShortcutPreferenceRow(role: keys.role, isEnabled: enabled) {
-            service.syncWithPreferences()
-        }
-        Toggle(FeatureStrings.screenshot(l10n.language).showCaptureMenuOnShortcut,
-               isOn: $showsCaptureMenu)
-            .disabled(!enabled)
-        if enabled, service.toolShortcutRegistrationFailures.contains(tool) {
-            Text(l10n.s.shortcutUnavailable)
-                .font(.caption)
-                .foregroundStyle(.orange)
+            Toggle(FeatureStrings.screenshot(l10n.language).showCaptureMenuOnShortcut,
+                   isOn: $showsCaptureMenu)
+                .disabled(!enabled)
+            if enabled, service.toolShortcutRegistrationFailures.contains(tool) {
+                Text(l10n.s.shortcutUnavailable)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -181,30 +186,37 @@ private struct ScreenTextCaptureSettings: View {
     @AppStorage(DefaultsKey.screenOCRDetectQRCodes) private var detectsQRCodes = true
 
     var body: some View {
-        Section {
-            Button {
-                ScreenTextService.shared.capture()
-            } label: {
-                Label(l10n.s.ocrName, systemImage: "text.viewfinder")
+        SettingsCard(title: l10n.s.ocrName) {
+            HStack {
+                VorssaintActionChip(title: l10n.s.ocrName, symbol: "text.viewfinder",
+                                    tone: .tools, prominent: true) {
+                    ScreenTextService.shared.capture()
+                }
+                Spacer()
             }
             Text(l10n.s.ocrCaption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Toggle(l10n.s.ocrRemoveLineBreaksToggle, isOn: $removesLineBreaks)
-            Text(l10n.s.ocrRemoveLineBreaksCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Toggle(l10n.s.ocrQRToggle, isOn: $detectsQRCodes)
-            Text(l10n.s.ocrQRCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            SettingsRow(symbol: "text.alignleft", title: l10n.s.ocrRemoveLineBreaksToggle,
+                        caption: l10n.s.ocrRemoveLineBreaksCaption) {
+                Toggle(l10n.s.ocrRemoveLineBreaksToggle, isOn: $removesLineBreaks)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            SettingsRow(symbol: "qrcode", title: l10n.s.ocrQRToggle,
+                        caption: l10n.s.ocrQRCaption) {
+                Toggle(l10n.s.ocrQRToggle, isOn: $detectsQRCodes)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
             if !permissions.screenRecording {
+                Divider()
                 PermissionRow(kind: .screenRecording)
             }
-        } header: {
-            Text(l10n.s.ocrName)
         }
-        .settingsFormSectionAnchor(.screenOCR)
+        .settingsSectionAnchor(.screenOCR, cornerRadius: 16)
     }
 }
 
@@ -214,27 +226,29 @@ private struct ColorCaptureSettings: View {
     @AppStorage(DefaultsKey.colorPickerBareHex) private var usesBareHex = false
 
     var body: some View {
-        Section {
-            Button {
-                ColorSamplerService.shared.pick()
-            } label: {
-                Label(l10n.s.colorPickerPickNow, systemImage: "eyedropper")
+        SettingsCard(title: l10n.s.colorPickerName) {
+            SettingsRow(symbol: "eyedropper", title: l10n.s.colorPickerName,
+                        caption: l10n.s.colorPickerCaption) {
+                VorssaintActionChip(title: l10n.s.colorPickerPickNow, symbol: "eyedropper",
+                                    tone: .tools, prominent: true) {
+                    ColorSamplerService.shared.pick()
+                }
             }
-            Text(l10n.s.colorPickerCaption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Picker(l10n.s.colorPickerFormatLabel, selection: $format) {
+            Divider()
+            SettingsChoiceRow(symbol: "paintpalette", title: l10n.s.colorPickerFormatLabel,
+                              selection: $format) {
                 ForEach(ColorCopyFormat.allCases) { format in
                     Text(format.label).tag(format.rawValue)
                 }
             }
-            .pickerStyle(.segmented)
             if format == ColorCopyFormat.hex.rawValue {
-                Toggle(l10n.s.colorPickerBareHexToggle, isOn: $usesBareHex)
+                SettingsRow(symbol: "number", title: l10n.s.colorPickerBareHexToggle) {
+                    Toggle(l10n.s.colorPickerBareHexToggle, isOn: $usesBareHex)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
             }
-        } header: {
-            Text(l10n.s.colorPickerName)
         }
-        .settingsFormSectionAnchor(.colorPicker)
+        .settingsSectionAnchor(.colorPicker, cornerRadius: 16)
     }
 }

@@ -24,8 +24,8 @@ struct AdvancedSettings: View {
     }
 
     var body: some View {
-        Form {
-            Section(backup.title) {
+        SettingsPageContainer(title: l10n.s.tabAdvanced) {
+            SettingsCard(title: backup.title) {
                 Text(backup.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -60,15 +60,17 @@ struct AdvancedSettings: View {
                     Text(backup.exportFailed)
                         .font(.caption)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if importFailed {
                     Text(backup.invalidFile)
                         .font(.caption)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            Section(l10n.s.advancedResetSection) {
+            SettingsCard(title: l10n.s.advancedResetSection) {
                 Text(l10n.s.advancedResetDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -88,10 +90,11 @@ struct AdvancedSettings: View {
                     Text(l10n.s.advancedClearFailed)
                         .font(.caption)
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            Section(l10n.s.advancedUninstallSection) {
+            SettingsCard(title: l10n.s.advancedUninstallSection) {
                 Text(l10n.s.advancedUninstallDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -104,7 +107,6 @@ struct AdvancedSettings: View {
                 .disabled(working)
             }
         }
-        .formStyle(.grouped)
         .alert(l10n.s.advancedClearConfirmTitle, isPresented: $showClearConfirm) {
             Button(l10n.s.uninstallerCancel, role: .cancel) {}
             Button(l10n.s.advancedClearButton, role: .destructive) {

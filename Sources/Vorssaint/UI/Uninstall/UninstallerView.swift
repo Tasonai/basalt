@@ -64,16 +64,16 @@ struct UninstallerView: View {
     // MARK: Empty / drop
 
     private var commandBarToggle: some View {
-        Form {
-            Section {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 4) {
                 Toggle(l10n.s.uninstallerCommandBarToggle, isOn: $commandBarEnabled)
+                    .toggleStyle(TrailingSwitchToggleStyle())
                 Text(l10n.s.uninstallerCommandBarCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .formStyle(.grouped)
-        .fixedSize(horizontal: false, vertical: true)
         .frame(width: 360)
     }
 

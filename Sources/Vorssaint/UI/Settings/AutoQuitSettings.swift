@@ -16,28 +16,33 @@ struct AutoQuitSettings: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(l10n.s.autoQuitEnable, isOn: $enabled)
-                    .onChange(of: enabled) { _, _ in
-                        AutoQuitService.shared.syncWithPreferences()
-                    }
-                Text(l10n.s.autoQuitEnableCaption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        SettingsPageContainer(title: l10n.s.autoQuitName, subtitle: l10n.s.autoQuitEnableCaption) {
+            SettingsCard {
+                SettingsRow(symbol: "xmark.rectangle", title: l10n.s.autoQuitEnable,
+                            caption: l10n.s.autoQuitEnableCaption) {
+                    Toggle(l10n.s.autoQuitEnable, isOn: $enabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: enabled) { _, _ in
+                            AutoQuitService.shared.syncWithPreferences()
+                        }
+                }
                 if enabled, service.isRunning {
                     Label(l10n.s.autoQuitActiveNow, systemImage: "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.green)
+                        .padding(.leading, settingsRowTextInset)
                 }
             }
 
-            Section(l10n.s.autoQuitHowTitle) {
+            SettingsCard(title: l10n.s.autoQuitHowTitle) {
                 bullet("rectangle.badge.xmark", l10n.s.autoQuitStep1)
                 bullet("bolt.fill", l10n.s.autoQuitStep2)
+                Divider()
                 Text(l10n.s.autoQuitPredictableNote)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Label(l10n.s.autoQuitOngoingWorkNote, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -47,13 +52,16 @@ struct AutoQuitSettings: View {
             // The exception list has one reader, the window check, and that only
             // runs while the feature does. With the switch off every edit here
             // is a no-op, so the list follows it.
-            Section(l10n.s.autoQuitExceptionsTitle) {
+            SettingsCard(title: l10n.s.autoQuitExceptionsTitle) {
                 if sortedExceptions.isEmpty {
                     Text(l10n.s.autoQuitExceptionsEmpty)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(sortedExceptions, id: \.self) { bundleID in
+                        if bundleID != sortedExceptions.first {
+                            Divider()
+                        }
                         HStack(spacing: 9) {
                             Image(nsImage: InstalledApps.icon(for: bundleID))
                                 .resizable().frame(width: 20, height: 20)
@@ -72,6 +80,7 @@ struct AutoQuitSettings: View {
                     .disabled(!enabled)
                 }
 
+                Divider()
                 Button {
                     showingAppPicker = true
                 } label: {
@@ -82,21 +91,28 @@ struct AutoQuitSettings: View {
                 Text(l10n.s.autoQuitExceptionsCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section(dockAppsText.listTitle) {
-                ForEach(sortedDockApps, id: \.self) { bundleID in
-                    HStack(spacing: 9) {
-                        Image(nsImage: InstalledApps.icon(for: bundleID))
-                            .resizable().frame(width: 20, height: 20)
-                        Text(InstalledApps.name(for: bundleID))
-                        Spacer()
-                        ListRemoveButton(label: dockAppsText.removeButton) {
-                            service.removeDockApp(bundleID)
+            SettingsCard(title: dockAppsText.listTitle) {
+                if !sortedDockApps.isEmpty {
+                    ForEach(sortedDockApps, id: \.self) { bundleID in
+                        if bundleID != sortedDockApps.first {
+                            Divider()
+                        }
+                        HStack(spacing: 9) {
+                            Image(nsImage: InstalledApps.icon(for: bundleID))
+                                .resizable().frame(width: 20, height: 20)
+                            Text(InstalledApps.name(for: bundleID))
+                            Spacer()
+                            ListRemoveButton(label: dockAppsText.removeButton) {
+                                service.removeDockApp(bundleID)
+                            }
                         }
                     }
+                    .disabled(!enabled)
+                    Divider()
                 }
-                .disabled(!enabled)
 
                 Button {
                     showingDockAppPicker = true
@@ -108,15 +124,15 @@ struct AutoQuitSettings: View {
                 Text(dockAppsText.caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if enabled, !permissions.accessibility {
-                Section(l10n.s.permissionRequired) {
+                SettingsCard(title: l10n.s.permissionRequired) {
                     PermissionRow(kind: .accessibility)
                 }
             }
         }
-        .formStyle(.grouped)
         .sheet(isPresented: $showingAppPicker) {
             appPickerSheet
         }
