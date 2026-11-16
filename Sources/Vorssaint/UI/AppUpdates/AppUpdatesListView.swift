@@ -134,13 +134,18 @@ struct AppUpdatesListView: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
             if updates.hasCheckedThisSession, !updates.isChecking {
-                Label(coveragePartial ? text.partialUpToDate
-                      : (updates.rules.isEmpty ? text.upToDate : text.noVisibleUpdates),
-                      systemImage: coveragePartial || !updates.rules.isEmpty
-                          ? "info.circle" : "checkmark.circle.fill")
-                    .font(.system(size: compact ? 11 : 12, weight: .medium))
-                    .foregroundStyle(coveragePartial || !updates.rules.isEmpty
-                                     ? Color.secondary : Color.green)
+                HStack(spacing: compact ? 8 : 12) {
+                    if !coveragePartial && updates.rules.isEmpty {
+                        MascotCameoBadge(mood: .happy, tone: .monitor, size: compact ? 28 : 38)
+                    }
+                    Label(coveragePartial ? text.partialUpToDate
+                          : (updates.rules.isEmpty ? text.upToDate : text.noVisibleUpdates),
+                          systemImage: coveragePartial || !updates.rules.isEmpty
+                              ? "info.circle" : "checkmark.circle.fill")
+                        .font(.system(size: compact ? 11 : 12, weight: .medium))
+                        .foregroundStyle(coveragePartial || !updates.rules.isEmpty
+                                         ? Color.secondary : Color.green)
+                }
             }
             Text(text.coverageNote)
                 .font(.system(size: compact ? 9.5 : 11))

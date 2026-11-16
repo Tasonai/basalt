@@ -9,6 +9,8 @@ struct PanelHomebrewView: View {
 
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var homebrew = HomebrewManager.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.notchPresentation) private var inNotch
     @State private var query = ""
     @State private var searchKind: HomebrewPackageKind = .cask
@@ -108,14 +110,12 @@ struct PanelHomebrewView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            Button {
+            VorssaintActionChip(title: l10n.s.homebrewInstallHomebrew,
+                                symbol: "terminal",
+                                tone: .clipboardFiles,
+                                prominent: true) {
                 homebrew.openHomebrewInstaller()
-            } label: {
-                Label(l10n.s.homebrewInstallHomebrew, systemImage: "terminal")
-                    .font(.system(size: 11, weight: .medium))
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
             Text(homebrew.didOpenInstaller ? l10n.s.homebrewInstallHomebrewOpened : l10n.s.homebrewInstallHomebrewCaption)
                 .font(.system(size: 9.5))
                 .foregroundStyle(.secondary)
@@ -128,26 +128,33 @@ struct PanelHomebrewView: View {
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Button {
+            VorssaintActionChip(title: l10n.s.homebrewRefresh,
+                                symbol: "arrow.clockwise",
+                                tone: .clipboardFiles) {
                 homebrew.refreshInstalled()
-            } label: {
-                Label(l10n.s.homebrewRefresh, systemImage: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
         }
         .frame(maxWidth: .infinity)
         .panelCard()
     }
 
+    private var clipboardToneColor: Color {
+        SemanticCategoryTone.clipboardFiles.color(
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
+    }
+
     private var modePicker: some View {
-        Picker("", selection: $mode) {
-            Text(l10n.s.homebrewSearchButton).tag(PanelHomebrewMode.search)
-            Text("\(l10n.s.homebrewInstalled) \(homebrew.installed.count)").tag(PanelHomebrewMode.installed)
-        }
-        .labelsHidden()
-        .pickerStyle(.segmented)
+        VorssaintSegmentedTabs(
+            selection: $mode,
+            options: [
+                .init(.search, title: l10n.s.homebrewSearchButton, symbol: "magnifyingglass"),
+                .init(.installed, title: "\(l10n.s.homebrewInstalled) \(homebrew.installed.count)", symbol: "shippingbox"),
+            ],
+            tone: .clipboardFiles
+        )
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     @ViewBuilder
@@ -161,22 +168,17 @@ struct PanelHomebrewView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 7) {
-                    Button {
+                    VorssaintActionChip(title: l10n.s.homebrewShellSetupButton,
+                                        symbol: "wrench.and.screwdriver",
+                                        tone: .clipboardFiles,
+                                        prominent: true) {
                         homebrew.openShellConfiguration()
-                    } label: {
-                        Label(l10n.s.homebrewShellSetupButton, systemImage: "wrench.and.screwdriver")
-                            .font(.system(size: 10.5, weight: .medium))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    Button {
+                    VorssaintActionChip(title: l10n.s.homebrewRefresh,
+                                        symbol: "arrow.clockwise",
+                                        tone: .clipboardFiles) {
                         homebrew.refreshShellConfigurationStatus()
-                    } label: {
-                        Label(l10n.s.homebrewRefresh, systemImage: "arrow.clockwise")
-                            .font(.system(size: 10.5, weight: .medium))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
             }
             .panelCard()
@@ -190,66 +192,83 @@ struct PanelHomebrewView: View {
                                          placeholder: l10n.s.homebrewSearchPlaceholder,
                                          onSubmit: search)
                     .frame(height: 24)
+                let searchDisabled = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || homebrew.isBusy
                 Button {
+                    VorssaintHaptics.generic()
                     search()
                 } label: {
                     Image(systemName: "magnifyingglass")
-                        .frame(width: 20, height: 18)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous)
+                                .fill(clipboardToneColor)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous))
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || homebrew.isBusy)
+                .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: DesignRadius.pill))
+                .opacity(searchDisabled ? 0.45 : 1)
+                .disabled(searchDisabled)
+                .help(l10n.s.homebrewSearchButton)
+                .accessibilityLabel(l10n.s.homebrewSearchButton)
             }
-            Picker("", selection: $searchKind) {
-                Text(l10n.s.homebrewCasks).tag(HomebrewPackageKind.cask)
-                Text(l10n.s.homebrewFormulas).tag(HomebrewPackageKind.formula)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
+            VorssaintSegmentedTabs(
+                selection: $searchKind,
+                options: [
+                    .init(.cask, title: l10n.s.homebrewCasks, symbol: "app"),
+                    .init(.formula, title: l10n.s.homebrewFormulas, symbol: "terminal"),
+                ],
+                tone: .clipboardFiles
+            )
         }
         .panelCard()
     }
 
     private var installedControls: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Picker("", selection: $filter) {
-                Text("\(l10n.s.homebrewAll) \(homebrew.installed.count)").tag(PanelHomebrewFilter.all)
-                Text("\(l10n.s.homebrewCasks) \(installedCaskCount)").tag(PanelHomebrewFilter.cask)
-                Text("\(l10n.s.homebrewFormulas) \(installedFormulaCount)").tag(PanelHomebrewFilter.formula)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
+            VorssaintSegmentedTabs(
+                selection: $filter,
+                options: [
+                    .init(.all, title: "\(l10n.s.homebrewAll) \(homebrew.installed.count)"),
+                    .init(.cask, title: "\(l10n.s.homebrewCasks) \(installedCaskCount)"),
+                    .init(.formula, title: "\(l10n.s.homebrewFormulas) \(installedFormulaCount)"),
+                ],
+                tone: .clipboardFiles
+            )
 
-            HStack(spacing: 7) {
-                Button {
-                    homebrew.refreshInstalled()
-                } label: {
-                    Label(l10n.s.homebrewCheckPackages, systemImage: "arrow.clockwise")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 7) {
+                    installedActionChips
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help(l10n.s.homebrewCheckPackages)
-                .disabled(homebrew.isBusy)
-                Button {
-                    presentConfirmation(HomebrewPendingAction(action: .updateHomebrew))
-                } label: {
-                    Label(l10n.s.homebrewUpdateHomebrew, systemImage: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+                VStack(alignment: .leading, spacing: 6) {
+                    installedActionChips
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help(l10n.s.homebrewUpdateHomebrew)
-                .disabled(homebrew.isBusy)
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             outdatedSummary
         }
         .panelCard()
+    }
+
+    @ViewBuilder
+    private var installedActionChips: some View {
+        VorssaintActionChip(title: l10n.s.homebrewCheckPackages,
+                            symbol: "arrow.clockwise",
+                            tone: .clipboardFiles) {
+            homebrew.refreshInstalled()
+        }
+        .help(l10n.s.homebrewCheckPackages)
+        .disabled(homebrew.isBusy)
+
+        VorssaintActionChip(title: l10n.s.homebrewUpdateHomebrew,
+                            symbol: "arrow.triangle.2.circlepath",
+                            tone: .clipboardFiles) {
+            presentConfirmation(HomebrewPendingAction(action: .updateHomebrew))
+        }
+        .help(l10n.s.homebrewUpdateHomebrew)
+        .disabled(homebrew.isBusy)
     }
 
     @ViewBuilder
@@ -269,16 +288,12 @@ struct PanelHomebrewView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.orange)
                 Spacer(minLength: 0)
-                Button {
+                VorssaintActionChip(title: l10n.s.homebrewUpgradeAll,
+                                    symbol: "arrow.up.circle",
+                                    tone: .energyDisplay,
+                                    prominent: true) {
                     presentConfirmation(HomebrewPendingAction(action: .upgradeAll))
-                } label: {
-                    Label(l10n.s.homebrewUpgradeAll, systemImage: "arrow.up.circle")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
                 .help(l10n.s.homebrewUpgradeAll)
                 .disabled(homebrew.isBusy)
             }
@@ -390,14 +405,16 @@ struct PanelHomebrewView: View {
                     .foregroundStyle(.green)
             } else {
                 Button {
+                    VorssaintHaptics.generic()
                     presentConfirmation(HomebrewPendingAction(action: .install, package: package))
                 } label: {
                     Image(systemName: "arrow.down.circle.fill")
                         .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(clipboardToneColor)
                         .frame(width: 22, height: 20)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: 6))
                 .disabled(homebrew.isBusy)
                 .help(l10n.s.homebrewInstall)
                 .accessibilityLabel(l10n.s.homebrewInstall)
@@ -407,7 +424,11 @@ struct PanelHomebrewView: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(selected(package) ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.035))
+                .fill(selected(package) ? clipboardToneColor.opacity(0.15) : Color.primary.opacity(0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(selected(package) ? clipboardToneColor.opacity(0.32) : Color.clear, lineWidth: 0.75)
         )
         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .contextMenu {
@@ -418,6 +439,7 @@ struct PanelHomebrewView: View {
 
     private func updateButton(_ package: HomebrewPackage, update: HomebrewPackageUpdate) -> some View {
         Button {
+            VorssaintHaptics.generic()
             presentConfirmation(HomebrewPendingAction(action: .upgrade, package: package))
         } label: {
             Image(systemName: "arrow.up.circle.fill")
@@ -426,7 +448,7 @@ struct PanelHomebrewView: View {
                 .frame(width: 20, height: 18)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: 6))
         .disabled(homebrew.isBusy)
         .help("\(l10n.s.homebrewUpgrade): \(update.versionSummary)")
         .accessibilityLabel(l10n.s.homebrewUpgrade)
@@ -534,7 +556,6 @@ struct PanelHomebrewView: View {
                     Spacer(minLength: 0)
                     detailActions(for: package)
                 }
-                .controlSize(.small)
                 .disabled(homebrew.isBusy)
             }
             .panelCard()
@@ -570,39 +591,43 @@ struct PanelHomebrewView: View {
                 .foregroundStyle(.secondary)
         } else if package.isInstalled {
             if package.update != nil {
-                VStack(alignment: .trailing, spacing: 6) {
-                    Button {
-                        presentConfirmation(HomebrewPendingAction(action: .upgrade, package: package))
-                    } label: {
-                        Label(l10n.s.homebrewUpgrade, systemImage: "arrow.up.circle")
-                            .font(.system(size: 11, weight: .semibold))
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 7) {
+                        upgradeChip(for: package)
+                        uninstallChip(for: package)
                     }
-                    .buttonStyle(.borderedProminent)
-                    Button(role: .destructive) {
-                        presentConfirmation(HomebrewPendingAction(action: .uninstall, package: package))
-                    } label: {
-                        Label(l10n.s.homebrewUninstall, systemImage: "trash")
-                            .font(.system(size: 11, weight: .semibold))
+                    VStack(alignment: .trailing, spacing: 6) {
+                        upgradeChip(for: package)
+                        uninstallChip(for: package)
                     }
-                    .tint(.red)
                 }
             } else {
-                Button(role: .destructive) {
-                    presentConfirmation(HomebrewPendingAction(action: .uninstall, package: package))
-                } label: {
-                    Label(l10n.s.homebrewUninstall, systemImage: "trash")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .tint(.red)
+                uninstallChip(for: package)
             }
         } else {
-            Button {
+            VorssaintActionChip(title: l10n.s.homebrewInstall,
+                                symbol: "arrow.down.circle",
+                                tone: .clipboardFiles,
+                                prominent: true) {
                 presentConfirmation(HomebrewPendingAction(action: .install, package: package))
-            } label: {
-                Label(l10n.s.homebrewInstall, systemImage: "arrow.down.circle")
-                    .font(.system(size: 11, weight: .semibold))
             }
-            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private func upgradeChip(for package: HomebrewPackage) -> some View {
+        VorssaintActionChip(title: l10n.s.homebrewUpgrade,
+                            symbol: "arrow.up.circle",
+                            tone: .energyDisplay,
+                            prominent: true) {
+            presentConfirmation(HomebrewPendingAction(action: .upgrade, package: package))
+        }
+    }
+
+    private func uninstallChip(for package: HomebrewPackage) -> some View {
+        VorssaintActionChip(title: l10n.s.homebrewUninstall,
+                            symbol: "trash",
+                            destructive: true) {
+            presentConfirmation(HomebrewPendingAction(action: .uninstall, package: package))
         }
     }
 
@@ -612,7 +637,7 @@ struct PanelHomebrewView: View {
             ?? (package.update != nil
                 ? l10n.s.homebrewUpdateAvailableBadge
                 : (package.isInstalled ? l10n.s.homebrewInstalledBadge : l10n.s.homebrewNotInstalledBadge))
-        let color: Color = active != nil ? .accentColor : (package.update != nil ? .orange : (package.isInstalled ? .green : .secondary))
+        let color: Color = active != nil ? clipboardToneColor : (package.update != nil ? .orange : (package.isInstalled ? .green : .secondary))
         return Text(title)
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(color)
@@ -626,10 +651,10 @@ struct PanelHomebrewView: View {
     private func popularityBadge(_ popularity: HomebrewPopularity) -> some View {
         Text(popularity.compactCount)
             .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(clipboardToneColor)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
-            .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+            .background(Capsule().fill(clipboardToneColor.opacity(0.12)))
             .help(popularityDescription(popularity))
     }
 

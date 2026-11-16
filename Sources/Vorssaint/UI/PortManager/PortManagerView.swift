@@ -89,7 +89,7 @@ struct PortManagerView: View {
 
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "network.slash").font(.system(size: 25)).foregroundStyle(.tertiary)
+            MascotCameoBadge(mood: .idle, tone: .tools, size: 42)
             Text(strings.empty).font(.callout).foregroundStyle(.secondary)
             Text(strings.emptyHint).font(.caption).foregroundStyle(.tertiary)
         }

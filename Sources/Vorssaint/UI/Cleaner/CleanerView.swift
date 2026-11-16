@@ -330,7 +330,7 @@ struct CleanerView: View {
     private var idleState: some View {
         VStack(spacing: compact ? 12 : 18) {
             if !compact { Spacer() }
-            SparkleGlyph(size: compact ? 34 : 46)
+            MascotCameoBadge(mood: .idle, tone: .tools, size: compact ? 34 : 46)
             Text(l10n.s.cleanerIntroTitle)
                 .font(.system(size: compact ? 15 : 17, weight: .semibold))
             Text(l10n.s.cleanerIntroCaption)
@@ -1011,9 +1011,19 @@ struct CleanerView: View {
     private func doneState(freed: Int64, failed: Int) -> some View {
         VStack(spacing: 16) {
             Spacer(minLength: compact ? 20 : 0)
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: compact ? 40 : 54))
-                .foregroundStyle(.green)
+            MascotCameoBadge(
+                mood: failed == 0 ? .happy : .determined,
+                reaction: failed == 0 ? .celebrate : nil,
+                tone: .tools,
+                size: compact ? 38 : 50
+            )
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: failed == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: compact ? 14 : 18, weight: .semibold))
+                    .foregroundStyle(failed == 0 ? .green : .orange)
+                    .background(Circle().fill(.background))
+                    .offset(x: 2, y: 2)
+            }
             Text(l10n.s.uninstallerDoneTitle).font(.system(size: compact ? 17 : 20, weight: .bold))
             Text(String(format: l10n.s.uninstallerFreedFormat, Self.byteString(freed)))
                 .font(.system(size: 13)).monospacedDigit().foregroundStyle(.secondary)

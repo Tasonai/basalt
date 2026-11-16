@@ -137,8 +137,7 @@ struct PanelWindowLayoutView: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle(text.edgeSnapEnable, isOn: $edgeSnapEnabled)
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .windowsDock))
                 .font(.system(size: 10.5, weight: .medium))
                 .onChange(of: edgeSnapEnabled) { _, _ in
                     WindowLayoutService.shared.syncWithPreferences()
@@ -181,8 +180,7 @@ struct PanelWindowLayoutView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Toggle(text.shortcuts, isOn: $shortcutsEnabled)
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .windowsDock))
                 .font(.system(size: 10.5, weight: .medium))
                 .onChange(of: shortcutsEnabled) { _, _ in
                     WindowLayoutService.shared.syncWithPreferences()
@@ -195,8 +193,7 @@ struct PanelWindowLayoutView: View {
             }
             Divider()
             Toggle(text.gestureEnable, isOn: $gestureEnabled)
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .windowsDock))
                 .font(.system(size: 10.5, weight: .medium))
                 .onChange(of: gestureEnabled) { _, _ in
                     WindowLayoutService.shared.syncWithPreferences()

@@ -16,6 +16,8 @@ struct PanelClipboardView: View {
     @State private var copyCount = 0
     @State private var clearingIDs: [UUID: Date]?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.notchPresentation) private var inNotch
 
     var onClose: () -> Void
@@ -70,23 +72,25 @@ struct PanelClipboardView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                Toggle(text.enable, isOn: $enabled)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .onChange(of: enabled) { _, _ in
-                        ClipboardHistoryService.shared.syncWithPreferences()
+            Toggle(isOn: $enabled) {
+                HStack(spacing: 6) {
+                    Text(text.enable)
+                        .font(.system(size: 11.5, weight: .medium))
+                    if enabled, shortcutEnabled {
+                        Text(shortcut.displayString)
+                            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.primary.opacity(0.06), in: Capsule())
+                            .help(text.shortcut)
                     }
-                Spacer(minLength: 4)
-                if enabled, shortcutEnabled {
-                    Text(shortcut.displayString)
-                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.primary.opacity(0.06), in: Capsule())
-                        .help(text.shortcut)
                 }
+            }
+            .toggleStyle(VorssaintPillToggleStyle(tone: .clipboardFiles))
+            .accessibilityLabel(text.enable)
+            .onChange(of: enabled) { _, _ in
+                ClipboardHistoryService.shared.syncWithPreferences()
             }
             if !enabled {
                 Text(text.disabled)
@@ -99,29 +103,26 @@ struct PanelClipboardView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
                     .disabled(history.entries.isEmpty)
-                Button {
+                ClipboardCapsuleIconButton(
+                    systemImage: "trash",
+                    destructive: true,
+                    iconSize: 11,
+                    size: CGSize(width: 28, height: 24),
+                    helpText: text.clearRecent
+                ) {
                     let ids = history.recentEntriesSnapshot
                     if inNotch { confirmClearAboveIsland(ids) } else { clearingIDs = ids }
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 24, height: 22)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .help(text.clearRecent)
                 .disabled(history.recentEntries.isEmpty)
                 .modifier(ClipboardClearRecentConfirmation(entryIDs: $clearingIDs))
-                Button {
+                ClipboardCapsuleIconButton(
+                    systemImage: "arrow.up.forward.app",
+                    iconSize: 11,
+                    size: CGSize(width: 28, height: 24),
+                    helpText: text.shortcut
+                ) {
                     history.showHistoryWindow()
-                } label: {
-                    Image(systemName: "arrow.up.forward.app")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 24, height: 22)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .help(text.shortcut)
             }
         }
         .panelCard()
@@ -257,6 +258,11 @@ struct PanelClipboardView: View {
 
     private func entryRow(_ entry: ClipboardHistoryEntry) -> some View {
         let isHovered = hoveredEntryID == entry.id || copiedID == entry.id
+        let isCopied = copiedID == entry.id
+        let highContrast = colorSchemeContrast == .increased
+        let clipboardTint = SemanticCategoryTone.clipboardFiles.color(scheme: colorScheme, highContrast: highContrast)
+        let copiedTint = SemanticCategoryTone.tools.color(scheme: colorScheme, highContrast: highContrast)
+
         return VStack(alignment: .leading, spacing: 6) {
             Button {
                 copyEntry(entry)
@@ -267,11 +273,11 @@ struct PanelClipboardView: View {
             .buttonStyle(.plain)
             .help(text.copy)
 
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 if entry.isPinned {
                     Label(text.pinned, systemImage: "pin.fill")
                         .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(clipboardTint)
                 }
                 Text(entry.copiedAt, style: .time)
                     .font(.system(size: 9.5))
@@ -279,64 +285,70 @@ struct PanelClipboardView: View {
                 Spacer(minLength: 4)
                 if isHovered {
                     if canReorderEntries && (history.canMove(entry, .up) || history.canMove(entry, .down)) {
-                        Button {
+                        ClipboardCapsuleIconButton(
+                            systemImage: "arrow.up",
+                            iconSize: 9.5,
+                            size: CGSize(width: 22, height: 20),
+                            helpText: text.moveUp
+                        ) {
                             history.move(entry, .up)
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 10, weight: .bold))
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        .help(text.moveUp)
                         .disabled(!history.canMove(entry, .up))
-                        Button {
+                        ClipboardCapsuleIconButton(
+                            systemImage: "arrow.down",
+                            iconSize: 9.5,
+                            size: CGSize(width: 22, height: 20),
+                            helpText: text.moveDown
+                        ) {
                             history.move(entry, .down)
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(.system(size: 10, weight: .bold))
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        .help(text.moveDown)
                         .disabled(!history.canMove(entry, .down))
                     }
-                    Button {
+                    ClipboardCapsuleIconButton(
+                        systemImage: entry.isPinned ? "pin.slash" : "pin",
+                        active: entry.isPinned,
+                        iconSize: 9.5,
+                        size: CGSize(width: 24, height: 20),
+                        helpText: entry.isPinned ? text.unpin : text.pin
+                    ) {
                         history.togglePin(entry)
-                    } label: {
-                        Image(systemName: entry.isPinned ? "pin.slash" : "pin")
-                            .font(.system(size: 10, weight: .bold))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .help(entry.isPinned ? text.unpin : text.pin)
                     if entry.kind == .image, AppFeature.screenshot.isAvailable {
-                        Button { history.editImage(entry) } label: {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 10, weight: .bold))
+                        ClipboardCapsuleIconButton(
+                            systemImage: "pencil",
+                            iconSize: 9.5,
+                            size: CGSize(width: 24, height: 20),
+                            helpText: text.edit
+                        ) {
+                            history.editImage(entry)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        .help(text.edit)
-                        .accessibilityLabel(text.edit)
                     }
                     Button {
+                        VorssaintHaptics.generic()
                         copyEntry(entry)
                     } label: {
-                        Label(copiedID == entry.id ? text.copied : text.copy,
-                              systemImage: copiedID == entry.id ? "checkmark" : "doc.on.doc")
+                        Label(isCopied ? text.copied : text.copy,
+                              systemImage: isCopied ? "checkmark" : "doc.on.doc")
                             .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .frame(height: 20)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(isCopied ? copiedTint : clipboardTint)
+                            )
+                            .contentShape(Capsule())
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.mini)
-                    Button {
+                    .buttonStyle(VorssaintScalePressButtonStyle())
+                    ClipboardCapsuleIconButton(
+                        systemImage: "trash",
+                        destructive: true,
+                        iconSize: 9.5,
+                        size: CGSize(width: 24, height: 20),
+                        helpText: text.delete
+                    ) {
                         history.remove(entry)
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 10, weight: .bold))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .help(text.delete)
                 }
             }
             .frame(minHeight: 22)
@@ -345,5 +357,60 @@ struct PanelClipboardView: View {
         .onHover { hovering in
             hoveredEntryID = hovering ? entry.id : (hoveredEntryID == entry.id ? nil : hoveredEntryID)
         }
+    }
+}
+
+private struct ClipboardCapsuleIconButton: View {
+    let systemImage: String
+    var tone: SemanticCategoryTone = .clipboardFiles
+    var active: Bool = false
+    var destructive: Bool = false
+    var iconSize: CGFloat = 10.5
+    var size: CGSize = CGSize(width: 26, height: 22)
+    let helpText: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        let accent = destructive
+            ? Color.red
+            : tone.color(scheme: colorScheme, highContrast: colorSchemeContrast == .increased)
+        let foreground: Color = {
+            if destructive { return isHovered ? .red : .secondary }
+            if active { return accent }
+            return isHovered ? .primary : .secondary
+        }()
+        let fill: Color = {
+            if destructive && isHovered { return Color.red.opacity(colorScheme == .dark ? 0.18 : 0.11) }
+            if active { return accent.opacity(colorScheme == .dark ? 0.22 : 0.14) }
+            return Color.primary.opacity(isHovered ? 0.11 : 0.06)
+        }()
+        let border: Color = {
+            if destructive && isHovered { return Color.red.opacity(0.32) }
+            if active { return accent.opacity(0.42) }
+            return Color.primary.opacity(isHovered ? 0.16 : 0.09)
+        }()
+
+        Button {
+            VorssaintHaptics.generic()
+            action()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: iconSize, weight: .semibold))
+                .foregroundStyle(foreground)
+                .frame(width: size.width, height: size.height)
+                .background(Capsule(style: .continuous).fill(fill))
+                .overlay(Capsule(style: .continuous).strokeBorder(border, lineWidth: 0.75))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(VorssaintScalePressButtonStyle())
+        .opacity(isEnabled ? 1 : 0.4)
+        .onHover { isHovered = $0 }
+        .help(helpText)
+        .accessibilityLabel(helpText)
     }
 }

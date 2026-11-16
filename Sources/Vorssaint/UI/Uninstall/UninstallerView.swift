@@ -89,10 +89,8 @@ struct UninstallerView: View {
                 )
                 .frame(width: 360, height: 200)
                 .overlay(
-                    VStack(spacing: 12) {
-                        Image(systemName: "trash.square")
-                            .font(.system(size: 44, weight: .light))
-                            .foregroundStyle(dropTargeted ? Color.accentColor : .secondary)
+                    VStack(spacing: 10) {
+                        MascotCameoBadge(mood: dropTargeted ? .surprised : .idle, tone: .clipboardFiles, size: 42)
                         Text(l10n.s.uninstallerDropTitle)
                             .font(.system(size: 16, weight: .semibold))
                         Text(l10n.s.uninstallerDropSubtitle)
@@ -325,9 +323,14 @@ struct UninstallerView: View {
     private func doneState(freed: Int64, failed: [AppUninstaller.Leftover]) -> some View {
         VStack(spacing: 16) {
             Spacer()
-            Image(systemName: UninstallerSupport.doneSymbol(hasLeftovers: !failed.isEmpty))
-                .font(.system(size: 54))
-                .foregroundStyle(failed.isEmpty ? .green : .orange)
+            MascotCameoBadge(mood: .happy, reaction: .celebrate, tone: .tools, size: 50)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: UninstallerSupport.doneSymbol(hasLeftovers: !failed.isEmpty))
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(failed.isEmpty ? .green : .orange)
+                        .background(Circle().fill(.background))
+                        .offset(x: 2, y: 2)
+                }
             Text(l10n.s.uninstallerDoneTitle).font(.system(size: 20, weight: .bold))
             Text(String(format: l10n.s.uninstallerFreedFormat, Self.byteString(freed)))
                 .font(.system(size: 13)).foregroundStyle(.secondary)

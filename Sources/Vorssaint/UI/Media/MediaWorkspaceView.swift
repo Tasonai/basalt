@@ -318,8 +318,18 @@ struct MediaWorkspaceView: View {
                 chooseInput()
             } label: {
                 HStack(spacing: 9) {
-                    Image(systemName: selectedTool == .textExtractor ? "doc.text.viewfinder" : "doc.badge.plus")
-                        .font(.system(size: 16, weight: .semibold))
+                    if inputURLs.isEmpty {
+                        MascotCameoBadge(
+                            mood: isDropTargeted ? .surprised : .idle,
+                            tone: .tools,
+                            size: compact ? 28 : 34,
+                            interactiveCue: false
+                        )
+                        .allowsHitTesting(false)
+                    } else {
+                        Image(systemName: selectedTool == .textExtractor ? "doc.text.viewfinder" : "doc.badge.plus")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(inputTitle)
                             .font(.system(size: compact ? 11.5 : 12.5, weight: .semibold))

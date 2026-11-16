@@ -8,18 +8,42 @@ import SwiftUI
 struct NotchView: View {
     private struct MusicPresence: Equatable {
         var playback: Bool?
+        var artworkID: ObjectIdentifier?
+        var tint: NotchArtworkTint?
+    }
+
+    private struct ArtworkBloomKey: Equatable {
+        let expanded: Bool
+        let hasPlayback: Bool
+        let artworkID: ObjectIdentifier?
+        let tint: NotchArtworkTint?
     }
 
     @ObservedObject var service: NotchService
     @ObservedObject private var l10n = L10n.shared
-    @State private var music = MusicPresence(playback: NotchMusicService.shared.playback != nil ? true : nil)
+    @State private var music = MusicPresence(
+        playback: NotchMusicService.shared.playback != nil ? true : nil,
+        artworkID: NotchMusicService.shared.artwork.map(ObjectIdentifier.init),
+        tint: NotchMusicService.shared.artworkTint
+    )
+    @State private var ambientGlowColor: Color?
     @ObservedObject private var launcher = QuickLauncherService.shared
     @ObservedObject private var updates = UpdateService.shared
     @AppStorage(DefaultsKey.notchLiquidGlassEnabled) private var glass = false
+    @AppStorage(DefaultsKey.notchHapticFeedback) private var hapticFeedback = true
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private var text: NotchStrings { FeatureStrings.notch(l10n.language) }
+    private var artworkBloomKey: ArtworkBloomKey {
+        ArtworkBloomKey(
+            expanded: service.expanded,
+            hasPlayback: music.playback != nil,
+            artworkID: music.artworkID,
+            tint: music.tint
+        )
+    }
+    private var expandedAmbientGlowColor: Color? { ambientGlowColor ?? music.tint?.color }
 
     var body: some View {
         surface
@@ -65,6 +89,43 @@ struct NotchView: View {
                 if music.playback != next {
                     music.playback = next
                 }
+            }
+            .onReceive(NotchMusicService.shared.$artwork.map { $0.map(ObjectIdentifier.init) }.removeDuplicates()) { artworkID in
+                if music.artworkID != artworkID {
+                    music.artworkID = artworkID
+                }
+            }
+            .onReceive(NotchMusicService.shared.$artworkTint.removeDuplicates()) { tint in
+                if music.tint != tint {
+                    music.tint = tint
+                }
+            }
+            .task(id: artworkBloomKey) {
+                guard music.playback != nil else {
+                    ambientGlowColor = nil
+                    return
+                }
+                guard service.expanded else { return }
+                let musicService = NotchMusicService.shared
+                let resolved = await NotchAmbientArtworkGlow.resolveColor(
+                    artwork: musicService.artwork,
+                    artworkData: musicService.playback?.track.artworkData,
+                    fallback: music.tint?.color
+                )
+                guard !Task.isCancelled else { return }
+                ambientGlowColor = resolved
+            }
+            .onChange(of: service.dragPlaceholder) { wasActive, isActive in
+                guard isActive, !wasActive, hapticFeedback else { return }
+                VorssaintHaptics.alignment()
+            }
+            .onChange(of: service.selected) { oldPage, newPage in
+                guard service.expanded, oldPage != newPage, hapticFeedback else { return }
+                VorssaintHaptics.generic()
+            }
+            .onChange(of: service.showingSections) { wasShowing, isShowing in
+                guard service.expanded, wasShowing != isShowing, hapticFeedback else { return }
+                VorssaintHaptics.generic()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .environment(\.colorScheme, .dark)
@@ -308,6 +369,37 @@ struct NotchView: View {
             .padding(.top, geometry.headerTopInset)
             .padding(.bottom, NotchLayout.bottomInset)
             .frame(width: service.expandedSize.width, height: service.expandedSize.height, alignment: .top)
+            .background {
+                if let bloom = expandedAmbientGlowColor, music.playback != nil, !reduceTransparency {
+                    let islandShape = NotchShape.island(height: service.expandedSize.height, geometry: service.expandedGeometry)
+                    RadialGradient(
+                        colors: [bloom.opacity(0.11), bloom.opacity(0.03), .clear],
+                        center: .top,
+                        startRadius: 12,
+                        endRadius: max(180, service.expandedSize.width * 0.58)
+                    )
+                    .clipShape(islandShape)
+                    .allowsHitTesting(false)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: bloom)
+                }
+            }
+            .overlay {
+                if let bloom = expandedAmbientGlowColor, music.playback != nil, !reduceTransparency {
+                    let islandShape = NotchShape.island(height: service.expandedSize.height, geometry: service.expandedGeometry)
+                    islandShape
+                        .stroke(
+                            LinearGradient(
+                                colors: [bloom.opacity(0.28), bloom.opacity(0.08), .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1.2
+                        )
+                        .clipShape(islandShape)
+                        .allowsHitTesting(false)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: bloom)
+                }
+            }
             .contentShape(Rectangle())
             .contextMenu { islandMenu }
             // Opening the island makes its panel key, so Keyboard navigation would ring

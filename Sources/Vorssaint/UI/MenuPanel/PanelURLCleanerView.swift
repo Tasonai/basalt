@@ -46,7 +46,7 @@ struct PanelURLCleanerView: View {
     private var autoCleanToggle: some View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle(l10n.s.urlCleanerEnable, isOn: $autoClean)
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
                 .font(.system(size: 11.5, weight: .medium))
                 .onChange(of: autoClean) { _, _ in
                     URLCleanerService.shared.syncWithPreferences()

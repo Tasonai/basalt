@@ -247,6 +247,7 @@ struct MetricsTests {
             ("wave3-overhaul", { Wave3OverhaulContract.run(suite) }),
             ("wave4-overhaul", { Wave4OverhaulContract.run(suite) }),
             ("wave1-v2-design", { Wave1V2DesignUnificationContract.run(suite) }),
+            ("wave2-v2-bento", { Wave2V2BentoAndMascotContract.run(suite) }),
         ]
         var selected = Set<String>()
         var listOnly = false

@@ -212,6 +212,9 @@ struct MenuPanelView: View {
                 .reportHeight($updateBannerHeight)
             header
             sectionNavigation
+            if showsBentoQuickDeck {
+                BentoQuickModesDeck()
+            }
 
             OverlayScrollView(measuredHeight: $navigableContentHeight) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -280,18 +283,29 @@ struct MenuPanelView: View {
 
     private var metricScrollHeight: CGFloat {
         let measured = metricContentHeight == 0 ? estimatedMetricContentHeight : metricContentHeight
-        return min(measured, max(80, maxHeight - navigableChromeHeight))
+        return min(measured, max(80, maxHeight - metricChromeHeight))
     }
 
     private var metricPanelHeight: CGFloat {
-        min(maxHeight, max(220, metricScrollHeight + navigableChromeHeight))
+        min(maxHeight, max(220, metricScrollHeight + metricChromeHeight))
     }
 
-    private var navigableChromeHeight: CGFloat {
+    private var metricChromeHeight: CGFloat {
         let bannerHeight = updates.state.showsMenuPanelBanner
             ? (max(updateBannerHeight, 48) + 12)
             : 0
         return 180 + bannerHeight
+    }
+
+    private var showsBentoQuickDeck: Bool {
+        AppFeature.keepAwake.isAvailable
+            || AppFeature.quickToggles.isAvailable
+            || AppFeature.micMute.isAvailable
+    }
+
+    private var navigableChromeHeight: CGFloat {
+        let deckHeight = showsBentoQuickDeck ? (BentoQuickModesDeck.deckHeight + 12) : 0
+        return metricChromeHeight + deckHeight
     }
 
     private var estimatedNavigableContentHeight: CGFloat {
@@ -353,7 +367,7 @@ struct MenuPanelView: View {
             }
         case .utilities: UtilitiesSection(collapsible: collapsible, startCleaning: startCleaning)
         case .controls: QuickControlsSection(collapsible: collapsible)
-        case .toggles: QuickTogglesSection(collapsible: collapsible)
+        case .toggles: MenuPanelQuickTogglesSection(collapsible: collapsible)
         case .wallpaper: if showWallpaper { WallpaperSection(collapsible: collapsible) }
         }
     }
@@ -493,7 +507,10 @@ struct MenuPanelView: View {
     private func footerButton(_ title: String, systemImage: String,
                               horizontalPadding: CGFloat = 8,
                               action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            VorssaintHaptics.generic()
+            action()
+        } label: {
             Label(title, systemImage: systemImage)
                 .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
@@ -512,8 +529,604 @@ struct MenuPanelView: View {
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: 7))
         .foregroundStyle(.secondary)
+    }
+}
+
+// MARK: - Bento quick-control deck & 2-column quick toggles grid
+
+/// Compact 4-column Bento strip pinned below section navigation in the menu
+/// popover so core system modes remain one tactile tap away from any tab.
+private struct BentoQuickModesDeck: View {
+    static let deckHeight: CGFloat = 48
+
+    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var awake = KeepAwakeManager.shared
+    @ObservedObject private var toggles = QuickTogglesService.shared
+    @ObservedObject private var micMute = MicMuteService.shared
+    @ObservedObject private var features = FeatureRuntime.shared
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var v2Strings: OverhaulV2Strings {
+        OverhaulV2Strings.localized(l10n.language)
+    }
+
+    private var isDarkModeActive: Bool {
+        toggles.systemAppearanceIsDark ?? (colorScheme == .dark)
+    }
+
+    var body: some View {
+        let quickStrings = FeatureStrings.quickToggles(l10n.language)
+        let iconsHidden = !toggles.desktopIconsShown
+        let darkMode = isDarkModeActive
+        HStack(spacing: 6) {
+            if AppFeature.keepAwake.isAvailable {
+                BentoQuickModeTile(
+                    title: v2Strings.bentoKeepAwakeTile,
+                    systemImage: awake.isActive ? "cup.and.saucer.fill" : "cup.and.saucer",
+                    tone: .energyDisplay,
+                    isActive: awake.isActive,
+                    helpText: l10n.s.keepAwakeTitle
+                ) {
+                    awake.toggle()
+                }
+            }
+            if AppFeature.quickToggles.isAvailable {
+                BentoQuickModeTile(
+                    title: v2Strings.bentoHideIconsTile,
+                    systemImage: iconsHidden ? "eye.slash.fill" : "desktopcomputer",
+                    tone: .windowsDock,
+                    isActive: iconsHidden,
+                    isBusy: toggles.state(for: .desktopIcons) == .running,
+                    helpText: toggles.desktopIconsShown ? quickStrings.desktopIconsHide : quickStrings.desktopIconsShow
+                ) {
+                    toggles.toggleDesktopIcons()
+                }
+                BentoQuickModeTile(
+                    title: v2Strings.bentoDarkModeTile,
+                    systemImage: darkMode ? "moon.fill" : "sun.max.fill",
+                    tone: .dynamicIsland,
+                    isActive: darkMode,
+                    isBusy: toggles.state(for: .darkMode) == .running,
+                    helpText: darkMode ? quickStrings.darkModeToLight : quickStrings.darkModeToDark
+                ) {
+                    toggles.toggleDarkMode()
+                }
+            }
+            if AppFeature.micMute.isAvailable {
+                BentoQuickModeTile(
+                    title: v2Strings.bentoMicMuteTile,
+                    systemImage: micMute.isMuted ? "mic.slash.fill" : "mic.fill",
+                    tone: .sound,
+                    isActive: micMute.isMuted,
+                    helpText: micMute.isMuted ? l10n.s.micUnmuteName : l10n.s.micMuteName
+                ) {
+                    micMute.toggle()
+                }
+            }
+        }
+        .frame(height: Self.deckHeight)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(v2Strings.bentoQuickTitle)
+    }
+}
+
+private struct BentoQuickModeTile: View {
+    let title: String
+    let systemImage: String
+    let tone: SemanticCategoryTone
+    let isActive: Bool
+    var isBusy = false
+    let helpText: String
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let accent = tone.color(scheme: colorScheme, highContrast: colorSchemeContrast == .increased)
+        let activeFill = accent.opacity(colorScheme == .dark ? 0.22 : 0.14)
+        let inactiveFill = colorScheme == .dark
+            ? Color.white.opacity(isHovered ? 0.11 : 0.065)
+            : Color.white.opacity(isHovered ? 0.58 : 0.38)
+        let activeBorder = accent.opacity(colorScheme == .dark ? 0.56 : 0.44)
+
+        Button {
+            VorssaintHaptics.alignment()
+            action()
+        } label: {
+            VStack(spacing: 3) {
+                ZStack {
+                    if isBusy {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: systemImage)
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(isActive ? accent : Color.secondary)
+                    }
+                }
+                .frame(height: 16)
+                Text(title)
+                    .font(.system(size: 9.5, weight: isActive ? .semibold : .medium))
+                    .foregroundStyle(isActive ? .primary : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .allowsTightening(true)
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, minHeight: BentoQuickModesDeck.deckHeight, maxHeight: BentoQuickModesDeck.deckHeight)
+            .background(
+                RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                    .fill(isActive ? activeFill : inactiveFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                    .strokeBorder(isActive ? activeBorder : PanelSurface.border(for: colorScheme),
+                                  lineWidth: isActive ? 1.0 : 0.7)
+            )
+            .overlay(alignment: .topTrailing) {
+                if isActive {
+                    Circle()
+                        .fill(accent)
+                        .frame(width: 5, height: 5)
+                        .padding(5)
+                }
+            }
+            .shadow(color: isActive ? accent.opacity(colorScheme == .dark ? 0.24 : 0.12) : .clear,
+                    radius: 5, x: 0, y: 1)
+            .contentShape(RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous))
+        }
+        .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: DesignRadius.innerGroup))
+        .disabled(isBusy)
+        .onHover { isHovered = $0 }
+        .animation(DesignMotion.resolve(DesignMotion.snappy, reduceMotion: reduceMotion), value: isActive)
+        .help(helpText)
+        .accessibilityLabel(helpText)
+        .accessibilityValue(isActive ? "On" : "Off")
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+}
+
+/// Menu panel Quick Toggles section rendered as a tactile 2-column Bento tile
+/// grid in standard mode, while preserving the shared edit/reorder workflow.
+private struct MenuPanelQuickTogglesSection: View {
+    @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var toggles = QuickTogglesService.shared
+    @ObservedObject private var micMute = MicMuteService.shared
+    @ObservedObject private var brightness = BrightnessService.shared
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.notchPresentation) private var notchPresentation
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(DefaultsKey.panelToggleDarkMode) private var showDarkMode = true
+    @AppStorage(DefaultsKey.panelToggleKeyboardLight) private var showKeyboardLight = true
+    @AppStorage(DefaultsKey.panelToggleMicMute) private var showMicMute = true
+    @AppStorage(DefaultsKey.panelToggleEmptyTrash) private var showEmptyTrash = true
+    @AppStorage(DefaultsKey.panelToggleQuitAllApps) private var showQuitAllApps = true
+    @AppStorage(DefaultsKey.panelToggleEjectDisks) private var showEjectDisks = true
+    @AppStorage(DefaultsKey.panelToggleHiddenFiles) private var showHiddenFiles = true
+    @AppStorage(DefaultsKey.panelToggleDesktopIcons) private var showDesktopIcons = true
+    @AppStorage(DefaultsKey.panelToggleLockScreen) private var showLockScreen = true
+    @AppStorage(DefaultsKey.panelToggleDisplayOff) private var showDisplayOff = true
+    @AppStorage(DefaultsKey.panelToggleScreenSaver) private var showScreenSaver = true
+    @AppStorage(DefaultsKey.panelToggleOrder) private var toggleOrderRaw = ""
+    @State private var draggingItem: QuickToggleAction?
+    var collapsible = true
+
+    private let bentoColumns = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+    ]
+
+    var body: some View {
+        PanelSection(.toggles,
+                     title: FeatureStrings.quickToggles(l10n.language).pageTitle,
+                     collapsible: collapsible,
+                     supportsEditing: true,
+                     resetAction: QuickTogglesList.resetPanelDefaults) { editing in
+            Group {
+                if editing {
+                    QuickTogglesList(editing: true, draggingItem: $draggingItem) {
+                        appDelegate()?.closePopover()
+                    }
+                } else {
+                    LazyVGrid(columns: bentoColumns, spacing: 8) {
+                        ForEach(visibleItems) { item in
+                            bentoTile(for: item)
+                                .disabled(toggles.state(for: item) == .running)
+                        }
+                    }
+                }
+            }
+            .onAppear {
+                PanelInteractionState.shared.viewKeepsPopoverOpen = true
+                toggles.refreshPermissionStates()
+                brightness.refreshKeyboardLight()
+            }
+            .onDisappear { PanelInteractionState.shared.viewKeepsPopoverOpen = false }
+        }
+    }
+
+    private var orderedItems: [QuickToggleAction] {
+        _ = toggleOrderRaw
+        return PanelLayout.itemOrder(QuickToggleAction.self, key: DefaultsKey.panelToggleOrder)
+    }
+
+    private var visibleItems: [QuickToggleAction] {
+        orderedItems.filter {
+            $0.feature.isAvailable
+                && ($0 != .keyboardLight || brightness.keyboardLightEnabled != nil)
+                && isVisible($0)
+        }
+    }
+
+    private func isVisible(_ item: QuickToggleAction) -> Bool {
+        switch item {
+        case .darkMode: return showDarkMode
+        case .keyboardLight: return showKeyboardLight
+        case .micMute: return showMicMute
+        case .emptyTrash: return showEmptyTrash
+        case .quitAllApps: return showQuitAllApps
+        case .ejectDisks: return showEjectDisks
+        case .hiddenFiles: return showHiddenFiles
+        case .desktopIcons: return showDesktopIcons
+        case .lockScreen: return showLockScreen
+        case .displayOff: return showDisplayOff
+        case .screenSaver: return showScreenSaver
+        }
+    }
+
+    private struct TileDescriptor {
+        let title: String
+        let caption: String
+        let systemImage: String
+        let tone: SemanticCategoryTone
+        let isActive: Bool
+        var statusNote: String? = nil
+        var needsAttention: Bool = false
+        var shortcutHint: String? = nil
+        var permissionButtonTitle: String? = nil
+        var permissionAction: (() -> Void)? = nil
+        let action: () -> Void
+    }
+
+    @ViewBuilder
+    private func bentoTile(for item: QuickToggleAction) -> some View {
+        let descriptor = tileDescriptor(for: item)
+        let accent = descriptor.tone.color(scheme: colorScheme, highContrast: colorSchemeContrast == .increased)
+        let isRunning = toggles.state(for: item) == .running
+
+        BentoQuickToggleTileView(
+            title: descriptor.title,
+            caption: descriptor.caption,
+            systemImage: descriptor.systemImage,
+            accent: accent,
+            isActive: descriptor.isActive,
+            isRunning: isRunning,
+            statusNote: descriptor.statusNote,
+            needsAttention: descriptor.needsAttention,
+            shortcutHint: descriptor.shortcutHint,
+            permissionButtonTitle: descriptor.permissionButtonTitle,
+            permissionAction: descriptor.permissionAction,
+            notchPresentation: notchPresentation,
+            reduceMotion: reduceMotion,
+            action: descriptor.action
+        )
+    }
+
+    private func tileDescriptor(for item: QuickToggleAction) -> TileDescriptor {
+        let strings = FeatureStrings.quickToggles(l10n.language)
+        switch item {
+        case .darkMode:
+            let isDark = toggles.systemAppearanceIsDark ?? (colorScheme == .dark)
+            return TileDescriptor(
+                title: isDark ? strings.darkModeToLight : strings.darkModeToDark,
+                caption: stateCaption(for: item, idle: strings.darkModeCaption),
+                systemImage: isDark ? "sun.max.fill" : "moon.fill",
+                tone: .dynamicIsland,
+                isActive: isDark,
+                statusNote: statusNote(for: item),
+                needsAttention: needsPermission(item),
+                action: { QuickTogglesService.shared.toggleDarkMode() }
+            )
+        case .keyboardLight:
+            let brightnessStrings = FeatureStrings.brightness(l10n.language)
+            let isOn = brightness.keyboardLightEnabled ?? false
+            return TileDescriptor(
+                title: brightnessStrings.keyboardLight,
+                caption: brightnessStrings.keyboardLightCaption,
+                systemImage: "keyboard",
+                tone: .energyDisplay,
+                isActive: isOn,
+                action: { brightness.setKeyboardLightEnabled(!isOn) }
+            )
+        case .micMute:
+            return TileDescriptor(
+                title: micMute.isMuted ? l10n.s.micUnmuteName : l10n.s.micMuteName,
+                caption: l10n.s.micMuteCaption,
+                systemImage: micMute.isMuted ? "mic.slash.fill" : "mic",
+                tone: .sound,
+                isActive: micMute.isMuted,
+                shortcutHint: shortcutHint(.micMute),
+                action: { MicMuteService.shared.toggle() }
+            )
+        case .emptyTrash:
+            let attention = needsPermission(item)
+            return TileDescriptor(
+                title: strings.emptyTrashTitle,
+                caption: stateCaption(for: item, idle: strings.emptyTrashCaption),
+                systemImage: "trash",
+                tone: .clipboardFiles,
+                isActive: false,
+                statusNote: statusNote(for: item),
+                needsAttention: attention,
+                permissionButtonTitle: attention ? l10n.s.permissionOpenSettings : nil,
+                permissionAction: attention ? { Permissions.shared.openAutomationSettings() } : nil,
+                action: { QuickTogglesService.shared.emptyTrash() }
+            )
+        case .quitAllApps:
+            return TileDescriptor(
+                title: strings.quitAllTitle,
+                caption: stateCaption(for: item, idle: l10n.s.quitAppsCaption),
+                systemImage: "xmark.app",
+                tone: .windowsDock,
+                isActive: false,
+                statusNote: statusNote(for: item),
+                shortcutHint: shortcutHint(.quitAll),
+                action: { QuickTogglesService.shared.showQuitApps() }
+            )
+        case .ejectDisks:
+            let eject = ejectCaption(strings)
+            return TileDescriptor(
+                title: strings.ejectTitle,
+                caption: eject,
+                systemImage: "eject.fill",
+                tone: .monitor,
+                isActive: false,
+                statusNote: eject != strings.ejectCaption ? eject : nil,
+                action: { QuickTogglesService.shared.ejectAllDisks() }
+            )
+        case .hiddenFiles:
+            return TileDescriptor(
+                title: toggles.hiddenFilesShown ? strings.hiddenFilesHide : strings.hiddenFilesShow,
+                caption: stateCaption(for: item, idle: strings.finderRestartCaption),
+                systemImage: toggles.hiddenFilesShown ? "eye.slash" : "eye",
+                tone: .clipboardFiles,
+                isActive: toggles.hiddenFilesShown,
+                statusNote: statusNote(for: item),
+                action: { QuickTogglesService.shared.toggleHiddenFiles() }
+            )
+        case .desktopIcons:
+            let iconsHidden = !toggles.desktopIconsShown
+            return TileDescriptor(
+                title: toggles.desktopIconsShown ? strings.desktopIconsHide : strings.desktopIconsShow,
+                caption: stateCaption(for: item, idle: strings.finderRestartCaption),
+                systemImage: iconsHidden ? "eye.slash.fill" : "desktopcomputer",
+                tone: .windowsDock,
+                isActive: iconsHidden,
+                statusNote: statusNote(for: item),
+                action: { QuickTogglesService.shared.toggleDesktopIcons() }
+            )
+        case .lockScreen:
+            return TileDescriptor(
+                title: strings.lockScreenTitle,
+                caption: strings.lockScreenCaption,
+                systemImage: "lock.fill",
+                tone: .tools,
+                isActive: false,
+                action: {
+                    appDelegate()?.closePopover()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        QuickTogglesService.shared.lockScreen()
+                    }
+                }
+            )
+        case .displayOff:
+            return TileDescriptor(
+                title: strings.displayOffTitle,
+                caption: stateCaption(for: item, idle: strings.displayOffCaption),
+                systemImage: "display",
+                tone: .energyDisplay,
+                isActive: false,
+                statusNote: statusNote(for: item),
+                action: {
+                    appDelegate()?.closePopover()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        QuickTogglesService.shared.turnDisplayOff()
+                    }
+                }
+            )
+        case .screenSaver:
+            return TileDescriptor(
+                title: strings.screenSaverTitle,
+                caption: strings.screenSaverCaption,
+                systemImage: "sparkles.tv",
+                tone: .dynamicIsland,
+                isActive: false,
+                action: {
+                    appDelegate()?.closePopover()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        QuickTogglesService.shared.startScreenSaver()
+                    }
+                }
+            )
+        }
+    }
+
+    private func stateCaption(for item: QuickToggleAction, idle: String) -> String {
+        statusNote(for: item) ?? idle
+    }
+
+    private func statusNote(for item: QuickToggleAction) -> String? {
+        let strings = FeatureStrings.quickToggles(l10n.language)
+        switch toggles.state(for: item) {
+        case .failed: return strings.actionFailed
+        case .needsPermission:
+            let target = FeatureStrings.hub(l10n.language).permAutomationFinder
+            return "\(l10n.s.permissionRequired): \(target)"
+        case .running, .none: return nil
+        }
+    }
+
+    private func ejectCaption(_ strings: QuickToggleFeatureStrings) -> String {
+        switch toggles.state(for: .ejectDisks) {
+        case .running: return l10n.s.diskEjecting
+        case .failed: return l10n.s.diskEjectFailed
+        case .needsPermission, .none:
+            return toggles.ejectableVolumeCount() > 0 ? strings.ejectCaption : l10n.s.diskNoExternal
+        }
+    }
+
+    private func needsPermission(_ item: QuickToggleAction) -> Bool {
+        toggles.state(for: item) == .needsPermission
+    }
+
+    private func shortcutHint(_ role: GlobalShortcutRole) -> String? {
+        guard role.isAvailable(using: { $0.isAvailable }),
+              role.requiredEnableKeys.allSatisfy({ UserDefaults.standard.bool(forKey: $0) })
+        else { return nil }
+        return role.savedShortcut.displayString
+    }
+}
+
+private struct BentoQuickToggleTileView: View {
+    let title: String
+    let caption: String
+    let systemImage: String
+    let accent: Color
+    let isActive: Bool
+    let isRunning: Bool
+    let statusNote: String?
+    let needsAttention: Bool
+    let shortcutHint: String?
+    let permissionButtonTitle: String?
+    let permissionAction: (() -> Void)?
+    let notchPresentation: Bool
+    let reduceMotion: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let tileColor = needsAttention ? Color.orange : accent
+        let backgroundFill: Color = {
+            if isActive {
+                return tileColor.opacity(colorScheme == .dark ? 0.20 : 0.13)
+            }
+            if notchPresentation {
+                return Color.white.opacity(isHovered ? 0.10 : 0.06)
+            }
+            return colorScheme == .dark
+                ? Color.white.opacity(isHovered ? 0.105 : 0.065)
+                : Color.white.opacity(isHovered ? 0.56 : 0.38)
+        }()
+        let borderColor: Color = isActive || needsAttention
+            ? tileColor.opacity(colorScheme == .dark ? 0.52 : 0.42)
+            : (notchPresentation ? Color.white.opacity(0.14) : PanelSurface.border(for: colorScheme))
+
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                VorssaintHaptics.alignment()
+                action()
+            } label: {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 6) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: DesignRadius.iconTile, style: .continuous)
+                                .fill(tileColor.opacity(isActive ? 0.24 : 0.13))
+                                .frame(width: 26, height: 26)
+                            if isRunning {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            } else {
+                                Image(systemName: systemImage)
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(tileColor)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        if let shortcutHint {
+                            Text(shortcutHint)
+                                .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color.primary.opacity(notchPresentation ? 0.12 : 0.07))
+                                )
+                        } else if isActive {
+                            Circle()
+                                .fill(tileColor)
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let statusNote {
+                            Text(statusNote)
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 54, alignment: .topLeading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: 11))
+
+            if let permissionButtonTitle, let permissionAction {
+                Button {
+                    VorssaintHaptics.generic()
+                    permissionAction()
+                } label: {
+                    Label(permissionButtonTitle, systemImage: "hand.raised.fill")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(Color.orange)
+                        .lineLimit(1)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Color.orange.opacity(0.14))
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.orange.opacity(0.32), lineWidth: 0.75)
+                        )
+                }
+                .buttonStyle(VorssaintScalePressButtonStyle())
+            }
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(backgroundFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: (isActive || needsAttention) ? 1.0 : 0.7)
+        )
+        .shadow(color: isActive ? tileColor.opacity(colorScheme == .dark ? 0.22 : 0.10) : .clear,
+                radius: 5, x: 0, y: 1)
+        .onHover { isHovered = $0 }
+        .animation(DesignMotion.resolve(DesignMotion.snappy, reduceMotion: reduceMotion), value: isActive)
+        .help(caption)
     }
 }
 

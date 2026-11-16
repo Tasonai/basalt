@@ -8,6 +8,7 @@ struct NotchShelfDropTargetView: View {
     @ObservedObject var service: NotchService
     @ObservedObject private var shelf = ShelfService.shared
     @ObservedObject private var l10n = L10n.shared
+    @AppStorage(DefaultsKey.notchHapticFeedback) private var hapticFeedback = true
 
     private var text: NotchStrings { FeatureStrings.notch(l10n.language) }
 
@@ -73,6 +74,11 @@ struct NotchShelfDropTargetView: View {
                     style: StrokeStyle(lineWidth: 1.2, dash: [5, 4])
                 )
                 .allowsHitTesting(false)
+        }
+        .onAppear {
+            if hapticFeedback {
+                VorssaintHaptics.alignment()
+            }
         }
     }
 }

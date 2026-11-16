@@ -3,6 +3,28 @@
 
 import SwiftUI
 
+enum NotchAmbientArtworkGlow {
+    static func resolveColor(
+        artwork: NSImage?,
+        artworkData: Data?,
+        fallback: Color?
+    ) async -> Color? {
+        guard let artwork,
+              let cgImage = artwork.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return fallback
+        }
+        let dataHash = artworkData.map(NotchArtworkColorExtractor.artworkHash(for:))
+        let extracted = await Task.detached(priority: .utility) {
+            NotchArtworkColorExtractor.dominantVibrantRGB(from: cgImage, artworkHash: dataHash)
+        }.value
+        guard !Task.isCancelled else { return nil }
+        if let extracted {
+            return Color(.sRGB, red: extracted.red, green: extracted.green, blue: extracted.blue, opacity: 1)
+        }
+        return fallback
+    }
+}
+
 struct NotchMusicView: View {
     let size: CGSize
     /// Room lyrics or the queue may add below the player.
@@ -15,14 +37,31 @@ struct NotchMusicView: View {
     @AppStorage(DefaultsKey.notchQueueEnabled) private var queueEnabled = true
     @AppStorage(DefaultsKey.notchMusicShowVolume) private var showVolume = false
     @State private var extra: MusicExtra?
+    @State private var ambientGlowColor: Color?
     private enum MusicExtra { case lyrics, queue }
+    private struct ArtworkGlowKey: Equatable {
+        let artworkID: ObjectIdentifier?
+        let dataCount: Int?
+        let trackID: NotchMusicIdentity?
+        let hasTint: Bool
+    }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.notchSettingsPreview) private var preview
     @Environment(\.notchBand) private var band
     private var text: RadialMenuFeatureStrings { FeatureStrings.radialMenu(l10n.language) }
+    private var artworkGlowKey: ArtworkGlowKey {
+        ArtworkGlowKey(
+            artworkID: service.artwork.map(ObjectIdentifier.init),
+            dataCount: service.playback?.track.artworkData?.count,
+            trackID: service.playback.map(NotchMusicIdentity.init),
+            hasTint: service.artworkTint != nil
+        )
+    }
+    private var glowColor: Color? { ambientGlowColor ?? service.artworkTint?.color }
     /// The cover's own colour, used for the moving parts that belong to this
     /// track. Neutral covers keep them white.
-    private var accent: Color { service.artworkTint?.color ?? .white }
+    private var accent: Color { glowColor ?? .white }
     private var supportsMusicCatalogExtras: Bool {
         guard let playback = service.playback else { return true }
         if service.lacksTrackSkipping(.next) && service.lacksTrackSkipping(.previous) && !shuffle.isOffered {
@@ -120,6 +159,19 @@ struct NotchMusicView: View {
         .onChange(of: features.revision) { syncExtras() }
         .onChange(of: lyricsEnabled) { syncExtras() }
         .onChange(of: queueEnabled) { syncExtras() }
+        .task(id: artworkGlowKey) {
+            guard let playback = service.playback else {
+                ambientGlowColor = nil
+                return
+            }
+            let resolved = await NotchAmbientArtworkGlow.resolveColor(
+                artwork: service.artwork,
+                artworkData: playback.track.artworkData,
+                fallback: service.artworkTint?.color
+            )
+            guard !Task.isCancelled else { return }
+            ambientGlowColor = resolved
+        }
         .onDisappear {
             guard !preview else { return }
             NotchService.shared.setMusicDetailsVisible(false)
@@ -292,12 +344,13 @@ struct NotchMusicView: View {
                 Button { RadialNowPlayingApplication.open(playback.track) } label: {
                     NotchArtwork(image: service.artwork, size: NotchLayout.musicArtworkSize, source: playback.track)
                         .background {
-                            if service.artworkTint != nil {
+                            if let glow = glowColor, !reduceTransparency {
                                 Circle()
-                                    .fill(accent.opacity(playback.isPlaying ? 0.28 : 0.12))
+                                    .fill(glow.opacity(playback.isPlaying ? 0.30 : 0.14))
                                     .blur(radius: 18)
-                                    .scaleEffect(1.25)
+                                    .scaleEffect(1.28)
                                     .allowsHitTesting(false)
+                                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: glow)
                             }
                         }
                         .scaleEffect(playback.isPlaying || reduceMotion ? 1 : 0.94)
@@ -327,7 +380,7 @@ struct NotchMusicView: View {
                 // bars rest flat while paused, so the title keeps its width.
                 if band.besideCamera || (!showsLyrics && !showsQueue && !band.pageSectionsButton) {
                     NotchLiveEqualizerBars(isPlaying: playback.isPlaying, bars: 4, barWidth: 2.5, height: 15,
-                                           tint: service.artworkTint != nil ? accent.opacity(0.85) : .white.opacity(0.5))
+                                           tint: glowColor != nil ? accent.opacity(0.85) : .white.opacity(0.5))
                 }
                 if band.besideCamera { sectionsButton }
             } corner: {
@@ -354,7 +407,46 @@ struct NotchMusicView: View {
         }
         .padding(.horizontal, band.besideCamera ? 0 : 6)
         .padding(.top, band.besideCamera ? 0 : 3)
+        .background {
+            if let glow = glowColor, !reduceTransparency {
+                ambientPlayerGlow(glow: glow, isPlaying: playback.isPlaying)
+            }
+        }
         .modifier(NotchMusicSwipeFeedback())
+    }
+
+    private func ambientPlayerGlow(glow: Color, isPlaying: Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            glow.opacity(isPlaying ? 0.22 : 0.10),
+                            glow.opacity(isPlaying ? 0.08 : 0.03),
+                            .clear,
+                        ],
+                        center: UnitPoint(x: 0.16, y: 0.22),
+                        startRadius: 6,
+                        endRadius: max(140, size.width * 0.65)
+                    )
+                )
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            glow.opacity(isPlaying ? 0.28 : 0.12),
+                            glow.opacity(0.05),
+                            .clear,
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        }
+        .allowsHitTesting(false)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: glow)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: isPlaying)
     }
 
     /// The player the buttons drive, as its icon, opening the same choice.
@@ -814,10 +906,28 @@ struct NotchMusicControlsView: View {
     @ObservedObject private var music = NotchMusicService.shared
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.notchSettingsPreview) private var preview
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var ambientGlowColor: Color?
+    private struct ArtworkGlowKey: Equatable {
+        let artworkID: ObjectIdentifier?
+        let dataCount: Int?
+        let trackID: NotchMusicIdentity?
+        let hasTint: Bool
+    }
     private var text: RadialMenuFeatureStrings { FeatureStrings.radialMenu(l10n.language) }
     private var isIdle: Bool {
         !preview && music.playback == nil && !music.awaitingPlayback
     }
+    private var artworkGlowKey: ArtworkGlowKey {
+        ArtworkGlowKey(
+            artworkID: music.artwork.map(ObjectIdentifier.init),
+            dataCount: music.playback?.track.artworkData?.count,
+            trackID: music.playback.map(NotchMusicIdentity.init),
+            hasTint: music.artworkTint != nil
+        )
+    }
+    private var glowColor: Color? { ambientGlowColor ?? music.artworkTint?.color }
 
     var body: some View {
         let player = isIdle ? NotchPreferredPlayer.current() : nil
@@ -855,21 +965,49 @@ struct NotchMusicControlsView: View {
         .frame(maxWidth: .infinity)
         .frame(height: cardHeight)
         .background {
-            if let tint = music.artworkTint?.color, music.playback != nil {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [tint.opacity(music.playback?.isPlaying == true ? 0.16 : 0.07), .clear],
-                            startPoint: .leading,
-                            endPoint: .trailing
+            if let tint = glowColor, music.playback != nil, !reduceTransparency {
+                let isPlaying = music.playback?.isPlaying == true
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            RadialGradient(
+                                colors: [tint.opacity(isPlaying ? 0.22 : 0.10), tint.opacity(0.04), .clear],
+                                center: .leading,
+                                startRadius: 4,
+                                endRadius: 160
+                            )
                         )
-                    )
-                    .allowsHitTesting(false)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [tint.opacity(isPlaying ? 0.26 : 0.11), .clear],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            lineWidth: 1
+                        )
+                }
+                .allowsHitTesting(false)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.45), value: tint)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: isPlaying)
             }
         }
         .modifier(NotchControlSurface(cornerRadius: 18))
         .frame(height: height)
         .onAppear { if !preview { music.refreshAutomation() } }
+        .task(id: artworkGlowKey) {
+            guard let playback = music.playback else {
+                ambientGlowColor = nil
+                return
+            }
+            let resolved = await NotchAmbientArtworkGlow.resolveColor(
+                artwork: music.artwork,
+                artworkData: playback.track.artworkData,
+                fallback: music.artworkTint?.color
+            )
+            guard !Task.isCancelled else { return }
+            ambientGlowColor = resolved
+        }
     }
 
     private func titles(artist: Bool) -> some View {
