@@ -543,6 +543,7 @@ private struct NotchAppFader: View {
     @State private var isHovered = false
     @State private var showingEQPopover = false
     private var strings: MixerFeatureStrings { FeatureStrings.mixer(l10n.language) }
+    private var v3Strings: OverhaulV3Strings { OverhaulV3Strings.localized(l10n.language) }
     private var appEQKey: String { mixer.eqStorageKey(for: app) }
     private var hasCustomEQ: Bool { mixer.hasCustomEQ(for: appEQKey) }
     private var percent: Int { MixerRoutingSupport.displayPercent(forVolume: app.volume) }
@@ -550,10 +551,17 @@ private struct NotchAppFader: View {
     private var boosting: Bool { percent > 100 }
     private var muted: Bool { app.volume <= 0.001 }
     private var routed: Bool { !app.isBypassed && app.selectedOutputDeviceUID != nil }
+    private var currentOutputTitle: String {
+        if let selected = app.selectedOutputDeviceUID {
+            if app.outputDeviceUnavailable { return l10n.s.mixerOutputUnavailable }
+            return mixer.outputDevices.first(where: { $0.uid == selected })?.name
+                ?? l10n.s.mixerOutputUnavailable
+        }
+        return v3Strings.systemDefaultOutput
+    }
     private var routeDescription: String {
         if app.outputDeviceUnavailable { return l10n.s.mixerOutputFallback }
-        return mixer.outputDevices.first(where: { $0.uid == app.selectedOutputDeviceUID })?.name
-            ?? l10n.s.mixerOutputUnavailable
+        return currentOutputTitle
     }
 
     var body: some View {
@@ -689,24 +697,43 @@ private struct NotchAppFader: View {
             }
         }
         .overlay(alignment: .bottomLeading) {
-            // An app sent to its own device wears the route on its icon; clicking it
-            // opens a 1-click device switcher for this specific app.
-            if routed {
+            // Compact per-app output routing menu directly on every row's icon:
+            // highlights active per-app routing and offers 1-click switching from System Default.
+            if !app.isBypassed {
                 Menu {
-                    quickRoutingMenuItems
+                    Section(v3Strings.perAppOutputTitle) {
+                        quickRoutingMenuItems
+                    }
                 } label: {
-                    Image(systemName: app.outputDeviceUnavailable ? "exclamationmark.triangle.fill" : "arrow.triangle.branch")
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(app.outputDeviceUnavailable ? Color.orange : Color.white)
-                        .frame(width: 14, height: 14)
-                        .background(.black, in: Circle())
+                    Image(systemName: routed
+                          ? (app.outputDeviceUnavailable ? "exclamationmark.triangle.fill" : "arrow.triangle.branch")
+                          : "speaker.wave.2")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(routed
+                                         ? (app.outputDeviceUnavailable
+                                            ? Color.orange
+                                            : SemanticCategoryTone.sound.color(scheme: .dark))
+                                         : Color.white.opacity(0.85))
+                        .frame(width: 15, height: 15)
+                        .background(.black.opacity(0.88), in: Circle())
+                        .overlay(
+                            Circle()
+                                .strokeBorder(routed
+                                              ? (app.outputDeviceUnavailable
+                                                 ? Color.orange.opacity(0.6)
+                                                 : SemanticCategoryTone.sound.color(scheme: .dark).opacity(0.55))
+                                              : Color.white.opacity(0.22),
+                                              lineWidth: 0.75)
+                        )
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .offset(x: -2, y: 1)
-                .help(routeDescription)
-                .accessibilityLabel(routeDescription)
+                .offset(x: -3, y: 2)
+                .opacity(routed || isHovered ? 1 : 0.65)
+                .help("\(v3Strings.perAppOutputTitle): \(routeDescription)")
+                .accessibilityLabel("\(v3Strings.perAppOutputTitle): \(app.name)")
+                .accessibilityValue(routeDescription)
             }
         }
     }
@@ -760,23 +787,9 @@ private struct NotchAppFader: View {
                 Button("150% (1.5x)") { mixer.setVolume(1.5, for: app) }
                 Button("200% (2.0x)") { mixer.setVolume(2.0, for: app) }
             }
-            Picker(l10n.s.mixerOutputTooltip, selection: outputSelection) {
-                Text(l10n.s.mixerOutputDefault).tag(MixerRoutingSupport.systemDefaultSelectionID)
-                ForEach(mixer.outputDevices) { device in
-                    Text(device.isDefault ? "\(device.name) (\(l10n.s.mixerOutputCurrent))" : device.name).tag(device.uid)
-                }
-                if let selected = app.selectedOutputDeviceUID,
-                   MixerRoutingSupport.needsUnavailableOutputRow(selectedUID: selected,
-                                                                 isUnavailable: app.outputDeviceUnavailable,
-                                                                 listedUIDs: mixer.outputDevices.map(\.uid)) {
-                    Text(l10n.s.mixerOutputUnavailable).tag(selected)
-                }
-                if mixer.outputDevices.contains(where: { MixerRoutingSupport.isAirPlaySentinel($0.uid) }) {
-                    Divider()
-                    Text(l10n.s.mixerAirPlayChooseSpeaker).tag(MixerRoutingSupport.airPlaySpeakerChoiceID)
-                }
+            Menu(v3Strings.perAppOutputTitle) {
+                quickRoutingMenuItems
             }
-            .pickerStyle(.menu)
             Divider()
             Button(l10n.s.mixerResetTooltip) { mixer.setVolume(1, for: app) }
                 .disabled(percent == 100)
@@ -792,7 +805,7 @@ private struct NotchAppFader: View {
             mixer.setOutputDeviceUID(nil, for: app)
         } label: {
             Label(
-                title: { Text(l10n.s.mixerOutputDefault) },
+                title: { Text(v3Strings.systemDefaultOutput) },
                 icon: { Image(systemName: app.selectedOutputDeviceUID == nil ? "checkmark" : "speaker") }
             )
         }
@@ -809,6 +822,16 @@ private struct NotchAppFader: View {
                 )
             }
         }
+        if let selected = app.selectedOutputDeviceUID,
+           MixerRoutingSupport.needsUnavailableOutputRow(selectedUID: selected,
+                                                         isUnavailable: app.outputDeviceUnavailable,
+                                                         listedUIDs: mixer.outputDevices.map(\.uid)) {
+            Button {
+                mixer.setOutputDeviceUID(selected, for: app)
+            } label: {
+                Label(l10n.s.mixerOutputUnavailable, systemImage: "checkmark")
+            }
+        }
         if mixer.outputDevices.contains(where: { MixerRoutingSupport.isAirPlaySentinel($0.uid) }) {
             Divider()
             Button {
@@ -817,15 +840,5 @@ private struct NotchAppFader: View {
                 Label(l10n.s.mixerAirPlayChooseSpeaker, systemImage: "airplayaudio")
             }
         }
-    }
-
-    private var outputSelection: Binding<String> {
-        Binding(
-            get: { app.selectedOutputDeviceUID ?? MixerRoutingSupport.systemDefaultSelectionID },
-            set: { selection in
-                mixer.setOutputDeviceUID(selection == MixerRoutingSupport.systemDefaultSelectionID ? nil : selection,
-                                         for: app)
-            }
-        )
     }
 }

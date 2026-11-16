@@ -31,7 +31,12 @@ final class AppVolumeMixer: ObservableObject {
     @Published private(set) var outputDevices: [MixerOutputDevice] = []
     @Published private(set) var currentOutputDeviceUID: String?
     @Published private(set) var currentSystemSoundOutputDeviceUID: String?
-    @Published private(set) var systemOutputVolume: Double?
+    @Published private(set) var systemOutputVolume: Double? {
+        didSet {
+            guard oldValue != systemOutputVolume else { return }
+            syncLoudnessProcessor(reconcileIfNeeded: true)
+        }
+    }
     @Published private(set) var systemOutputMuted: Bool?
     @Published private(set) var outputSwitchError: String?
     /// Set when tap creation fails with a permission error, so the panel can
@@ -40,9 +45,33 @@ final class AppVolumeMixer: ObservableObject {
     /// Apps kept out of the list (issue #300), including the Finder when its
     /// own toggle hides it, so the panel can offer to bring any of them back.
     @Published private(set) var hiddenApps: [MixerHiddenApp] = []
+    @Published var loudnessEnabled: Bool = false {
+        didSet {
+            guard oldValue != loudnessEnabled else { return }
+            UserDefaults.standard.set(loudnessEnabled, forKey: Self.loudnessEnabledDefaultsKey)
+            syncLoudnessProcessor(reconcileIfNeeded: true)
+        }
+    }
+    @Published var activeAutoEQPresetID: String? = nil {
+        didSet {
+            guard oldValue != activeAutoEQPresetID else { return }
+            if let id = activeAutoEQPresetID, !id.isEmpty {
+                UserDefaults.standard.set(id, forKey: Self.activeAutoEQPresetIDDefaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.activeAutoEQPresetIDDefaultsKey)
+            }
+        }
+    }
+    @Published private(set) var customAutoEQPresets: [MixerEQPreset] = []
+
+    private static let loudnessEnabledDefaultsKey = "vorssaintMixerLoudnessEnabled"
+    private static let activeAutoEQPresetIDDefaultsKey = "vorssaintMixerActiveAutoEQPresetID"
+    private static let customAutoEQPresetsDefaultsKey = "vorssaintMixerCustomAutoEQPresets"
 
     public let tapCoordinator = MixerTapCoordinator()
     private let eqMeterState = MixerEQAndMeterState()
+    private var currentChainSampleRate: Double = 48_000
+    private var auHostCancellable: AnyCancellable?
     private var engines: [String: any GainEngine] = [:]
     /// Arbitrates the engine builds running off-main: it suppresses duplicate
     /// builds while a slider keeps dragging, and discards a build that lands
@@ -164,7 +193,20 @@ final class AppVolumeMixer: ObservableObject {
     private var nativeOutputKeyLifetime: UUID?
     private let halQueue = DispatchQueue(label: "com.vorssaint.utils.mixer.hal", qos: .userInitiated)
 
-    private init() {}
+    private init() {
+        let defaults = UserDefaults.standard
+        let savedLoudness = defaults.bool(forKey: Self.loudnessEnabledDefaultsKey)
+        let savedAutoEQID = defaults.string(forKey: Self.activeAutoEQPresetIDDefaultsKey)
+        let savedCustomAutoEQ = Self.loadCustomAutoEQPresets(from: defaults)
+        self.loudnessEnabled = savedLoudness
+        self.activeAutoEQPresetID = (savedAutoEQID?.isEmpty == false) ? savedAutoEQID : nil
+        self.customAutoEQPresets = savedCustomAutoEQ
+        MixerRealtimeAUChainProcessor.shared.setLoudnessState(
+            volume: 1.0,
+            enabled: savedLoudness,
+            sampleRate: currentChainSampleRate
+        )
+    }
 
     // MARK: - Lifecycle
 
@@ -188,6 +230,8 @@ final class AppVolumeMixer: ObservableObject {
     func start() {
         stopped = false
         processMonitoringEnabled = AppFeature.mixer.isAvailable
+        syncLoudnessProcessor(reconcileIfNeeded: false)
+        installAUHostObserverIfNeeded()
         if processMonitoringEnabled {
             publishHiddenApps()
             // Created here, on the main thread, before any refresh reads the
@@ -270,6 +314,8 @@ final class AppVolumeMixer: ObservableObject {
             AirPlayRouteManager.shared.deactivate()
             airPlayActive = false
         }
+        auHostCancellable?.cancel()
+        auHostCancellable = nil
         if !apps.isEmpty { apps = [] }
         if !hiddenApps.isEmpty { hiddenApps = [] }
         if !outputDevices.isEmpty { outputDevices = [] }
@@ -1245,8 +1291,8 @@ final class AppVolumeMixer: ObservableObject {
             scheduleEngineReconcile(after: delay)
             return
         }
-        // A tap needs a volume, per-app output, universal output, or active EQ request.
-        guard rowMayBeTapped(app) || hasActiveEQ(for: app) else {
+        // A tap needs a volume, per-app output, universal output, active EQ, or AU/loudness chain.
+        guard rowMayBeTapped(app) || hasActiveEQ(for: app) || hasActiveGlobalAudioChain else {
             discardEngine(for: app.id)
             clearPermissionIfNoActiveAdjustments()
             return
@@ -1390,6 +1436,14 @@ final class AppVolumeMixer: ObservableObject {
         engine.gain = MixerRoutingSupport.gain(forVolume: latestApp.volume)
         let eqConfig = eqConfiguration(for: eqStorageKey(for: latestApp))
         engine.updateAppEQ(gainsDB: eqConfig.gainsDB, preampDB: eqConfig.preampDB)
+        if engine.sampleRate >= 8_000, abs(currentChainSampleRate - engine.sampleRate) > 1.0 {
+            let resolvedRate = engine.sampleRate
+            currentChainSampleRate = resolvedRate
+            syncLoudnessProcessor(reconcileIfNeeded: false)
+            Task { @MainActor in
+                MixerAudioUnitHost.shared.updateSampleRate(resolvedRate)
+            }
+        }
         configurationRepairs.removeValue(forKey: id)
         let previous = engines.updateValue(engine, forKey: id)
         tapCoordinator.recordBuildFinished(appID: id,
@@ -1471,11 +1525,16 @@ final class AppVolumeMixer: ObservableObject {
                                            universalOutputRouteUID: app.universalOutputRouteUID)
     }
 
+    private var hasActiveGlobalAudioChain: Bool {
+        MixerRealtimeAUChainProcessor.shared.hasActiveSlots
+            || !MixerRealtimeAUChainProcessor.shared.isLoudnessBypassed
+    }
+
     private func rowRequiresTapEngine(_ app: MixerApp) -> Bool {
         guard !app.isBypassed else { return false }
         if appNeedsEngine(app) { return true }
         guard !app.audioObjects.isEmpty, app.effectiveOutputDeviceUID != nil else { return false }
-        return hasActiveEQ(for: app)
+        return hasActiveEQ(for: app) || hasActiveGlobalAudioChain
     }
 
     private func applyOutputRoute(to app: inout MixerApp,
@@ -2838,6 +2897,7 @@ private protocol GainEngine: AnyObject {
 private extension GainEngine {
     var requiresRebuild: Bool { false }
     var currentMeterLevel: Float { 0 }
+    var sampleRate: Double { 48_000 }
     func updateAppEQ(gainsDB: [Float], preampDB: Float) {}
 }
 
@@ -3344,14 +3404,17 @@ private final class TapGainEngine: GainEngine {
         let appEQ: MixerParametricEQ?
         let masterEQ: MixerParametricEQ?
         let appMeter: RealtimeAudioMeter?
+        let postEQProcessor: ((UnsafeMutableAudioBufferListPointer, Int) -> Void)?
         init(channelCapacity: Int,
              appEQ: MixerParametricEQ? = nil,
              masterEQ: MixerParametricEQ? = nil,
-             appMeter: RealtimeAudioMeter? = nil) {
+             appMeter: RealtimeAudioMeter? = nil,
+             postEQProcessor: ((UnsafeMutableAudioBufferListPointer, Int) -> Void)? = nil) {
             lookahead = BoostLookaheadBufferListLimiter(channelCapacity: channelCapacity)
             self.appEQ = appEQ
             self.masterEQ = masterEQ
             self.appMeter = appMeter
+            self.postEQProcessor = postEQProcessor
         }
 
         func reset() {
@@ -3363,6 +3426,7 @@ private final class TapGainEngine: GainEngine {
         func processEQAndMeter(_ output: UnsafeMutableAudioBufferListPointer, frames: Int) {
             appEQ?.processAudioBufferList(output, frames: frames)
             masterEQ?.processAudioBufferList(output, frames: frames)
+            postEQProcessor?(output, frames)
             appMeter?.record(output, frames: frames)
         }
 
@@ -3392,6 +3456,7 @@ private final class TapGainEngine: GainEngine {
     private let appMeter = RealtimeAudioMeter()
     private var appEQ: MixerParametricEQ?
     private var masterEQ: MixerParametricEQ?
+    private(set) var sampleRate: Double = 48_000
     var renderCycles: UInt64 { cycleBox.value }
     var currentMeterLevel: Float { appMeter.normalizedLevel }
     var requiresRebuild: Bool { configuration?.requiresRebuild ?? false }
@@ -3468,6 +3533,16 @@ private final class TapGainEngine: GainEngine {
         let sharedMasterEQ = AppVolumeMixer.sharedMasterEQ
         self.appEQ = perAppEQ
         self.masterEQ = sharedMasterEQ
+        self.sampleRate = sampleRate
+        let chainProcessor = MixerRealtimeAUChainProcessor.shared
+        let chainSampleRate = sampleRate
+        // AppVolumeMixer creates one disjoint per-process TapGainEngine per routed app
+        // (no separate master mixdown tap exists), so running the shared AUv3 insert
+        // chain and Fletcher-Munson loudness here processes each routed stream once
+        // without double-processing.
+        let postEQProcessor: (UnsafeMutableAudioBufferListPointer, Int) -> Void = { buffers, frames in
+            chainProcessor.processAudioBufferList(buffers, frames: frames, sampleRate: chainSampleRate)
+        }
         // A boost pushes loud samples past full scale, and clamping the
         // overshoot flattens every peak into audible crackle (issue #326).
         // The limiter turns the whole signal down for just the moment a peak
@@ -3476,7 +3551,8 @@ private final class TapGainEngine: GainEngine {
             channelCapacity: max(2, outputChannels.reduce(0, +)),
             appEQ: perAppEQ,
             masterEQ: sharedMasterEQ,
-            appMeter: appMeter)
+            appMeter: appMeter,
+            postEQProcessor: postEQProcessor)
         releaseBox.value = BoostLimiter.release(sampleRate: sampleRate)
         let release = releaseBox
         let cycles = cycleBox
@@ -4154,6 +4230,9 @@ extension AppVolumeMixer {
         let currentPreamp = eqMeterState.lock.withLock { eqMeterState.masterConfig.preampDB }
         let resolvedPreamp: Float = allFlat ? 0 : currentPreamp
         let presetID = allFlat ? "flat" : "custom"
+        if activeAutoEQPresetID != nil {
+            activeAutoEQPresetID = nil
+        }
         updateMasterEQConfiguration(gainsDB: sanitized, preampDB: resolvedPreamp, presetID: presetID)
     }
 
@@ -4175,6 +4254,9 @@ extension AppVolumeMixer {
         if let appKey {
             updateAppEQConfiguration(gainsDB: sanitized, preampDB: clampedPreamp, for: appKey)
         } else {
+            let isAutoEQ = MixerAutoEQCatalog.preset(id: preset.id) != nil
+                || customAutoEQPresets.contains(where: { $0.id == preset.id })
+            activeAutoEQPresetID = isAutoEQ ? preset.id : nil
             updateMasterEQConfiguration(gainsDB: sanitized, preampDB: clampedPreamp, presetID: preset.id)
         }
     }
@@ -4184,7 +4266,127 @@ extension AppVolumeMixer {
         if let appKey {
             updateAppEQConfiguration(gainsDB: flat, preampDB: 0, for: appKey)
         } else {
+            if activeAutoEQPresetID != nil {
+                activeAutoEQPresetID = nil
+            }
             updateMasterEQConfiguration(gainsDB: flat, preampDB: 0, presetID: "flat")
+        }
+    }
+
+    var activeAutoEQPreset: MixerEQPreset? {
+        guard let id = activeAutoEQPresetID else { return nil }
+        return MixerAutoEQCatalog.preset(id: id)
+            ?? customAutoEQPresets.first { $0.id == id }
+    }
+
+    func applyAutoEQPreset(_ preset: MixerEQPreset) {
+        let sanitized = MixerEQAndMeterState.sanitizeGains(preset.gainsDB)
+        let clampedPreamp: Float = preset.preampDB.isFinite ? min(max(preset.preampDB, -18), 18) : 0
+        activeAutoEQPresetID = preset.id
+        updateMasterEQConfiguration(gainsDB: sanitized, preampDB: clampedPreamp, presetID: preset.id)
+    }
+
+    func clearAutoEQPreset() {
+        activeAutoEQPresetID = nil
+        resetEQ(for: nil)
+    }
+
+    @discardableResult
+    func importAutoEQProfile(from url: URL) -> MixerEQPreset? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let baseName = url.deletingPathExtension().lastPathComponent
+        let displayName = baseName.isEmpty ? url.lastPathComponent : baseName
+        guard let parsed = AutoEQProfileParser.parseEqualizerAPO(content, name: displayName) else {
+            return nil
+        }
+        var resolved = parsed
+        if customAutoEQPresets.contains(where: { $0.id == parsed.id })
+            || MixerAutoEQCatalog.preset(id: parsed.id) != nil {
+            resolved = MixerEQPreset(
+                id: "\(parsed.id)-\(UUID().uuidString.prefix(8))",
+                name: parsed.name,
+                category: parsed.category,
+                preampDB: parsed.preampDB,
+                gainsDB: parsed.gainsDB
+            )
+        }
+        customAutoEQPresets.append(resolved)
+        persistCustomAutoEQPresets()
+        applyAutoEQPreset(resolved)
+        return resolved
+    }
+
+    func removeCustomAutoEQPreset(id: String) {
+        guard customAutoEQPresets.contains(where: { $0.id == id }) else { return }
+        customAutoEQPresets.removeAll { $0.id == id }
+        persistCustomAutoEQPresets()
+        if activeAutoEQPresetID == id {
+            clearAutoEQPreset()
+        }
+    }
+
+    func reconcileAudioChainChanges() {
+        guard listenerInstalled, !stopped else { return }
+        reconcileEngines(with: apps)
+    }
+
+    fileprivate func installAUHostObserverIfNeeded() {
+        guard auHostCancellable == nil else { return }
+        let attachObserver = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.auHostCancellable == nil, !self.stopped else { return }
+                self.auHostCancellable = MixerAudioUnitHost.shared.objectWillChange
+                    .receive(on: RunLoop.main)
+                    .sink { [weak self] _ in
+                        DispatchQueue.main.async {
+                            self?.reconcileAudioChainChanges()
+                        }
+                    }
+            }
+        }
+        if Thread.isMainThread {
+            attachObserver()
+        } else {
+            DispatchQueue.main.async(execute: attachObserver)
+        }
+    }
+
+    fileprivate func syncLoudnessProcessor(reconcileIfNeeded: Bool = true) {
+        let wasBypassed = MixerRealtimeAUChainProcessor.shared.isLoudnessBypassed
+        MixerRealtimeAUChainProcessor.shared.setLoudnessState(
+            volume: systemOutputVolume ?? 1.0,
+            enabled: loudnessEnabled,
+            sampleRate: currentChainSampleRate
+        )
+        let isBypassed = MixerRealtimeAUChainProcessor.shared.isLoudnessBypassed
+        if reconcileIfNeeded, wasBypassed != isBypassed, listenerInstalled, !stopped {
+            reconcileEngines(with: apps)
+        }
+    }
+
+    private func persistCustomAutoEQPresets() {
+        if customAutoEQPresets.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.customAutoEQPresetsDefaultsKey)
+        } else if let encoded = try? JSONEncoder().encode(customAutoEQPresets) {
+            UserDefaults.standard.set(encoded, forKey: Self.customAutoEQPresetsDefaultsKey)
+        }
+    }
+
+    fileprivate static func loadCustomAutoEQPresets(from defaults: UserDefaults) -> [MixerEQPreset] {
+        guard let data = defaults.data(forKey: customAutoEQPresetsDefaultsKey),
+              let decoded = try? JSONDecoder().decode([MixerEQPreset].self, from: data) else {
+            return []
+        }
+        return decoded.map { preset in
+            MixerEQPreset(
+                id: preset.id,
+                name: preset.name,
+                category: preset.category,
+                preampDB: preset.preampDB.isFinite ? min(max(preset.preampDB, -18), 18) : 0,
+                gainsDB: MixerEQAndMeterState.sanitizeGains(preset.gainsDB)
+            )
         }
     }
 
@@ -4200,9 +4402,16 @@ extension AppVolumeMixer {
            zip(MixerEQAndMeterState.sanitizeGains(preset.gainsDB), config.gainsDB).allSatisfy({ abs($0 - $1) < 0.05 }) {
             return preset.id
         }
-        return CustomEQPresetStore.shared.allPresets.first { preset in
+        if let matched = CustomEQPresetStore.shared.allPresets.first(where: { preset in
             zip(MixerEQAndMeterState.sanitizeGains(preset.gainsDB), config.gainsDB).allSatisfy { abs($0 - $1) < 0.05 }
-        }?.id
+        })?.id {
+            return matched
+        }
+        if appKey == nil, let autoEQ = activeAutoEQPreset,
+           zip(MixerEQAndMeterState.sanitizeGains(autoEQ.gainsDB), config.gainsDB).allSatisfy({ abs($0 - $1) < 0.05 }) {
+            return autoEQ.id
+        }
+        return nil
     }
 
     func liveMeterLevel(for appID: String) -> Float {

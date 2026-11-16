@@ -3,6 +3,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Per-app volume sliders, the mixer macOS never shipped. Shows every app
 /// holding an audio connection (a green dot marks the ones playing right now).
@@ -576,10 +577,16 @@ struct MixerOptionsControls: View {
     @AppStorage(DefaultsKey.mixerMicLevelerEnabled)
     private var micLevelerEnabled = false
     @State private var showListChooser = false
+    @State private var autoEQImportError: String?
+    @Environment(\.colorScheme) private var colorScheme
     var includeSharedAudioFeatures = true
 
     private var wave3Strings: OverhaulWave3Strings {
         OverhaulStrings.wave3(l10n.language)
+    }
+
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
     }
 
     private var isRussian: Bool {
@@ -587,7 +594,7 @@ struct MixerOptionsControls: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignSpace.sm) {
             if AppVolumeMixer.isSupported {
                 inactiveAppsVisibilityToggle
             }
@@ -611,26 +618,28 @@ struct MixerOptionsControls: View {
     }
 
     private var parametricEQAndMicControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignSpace.sm) {
             InteractiveEQCurveView(title: wave3Strings.parametricEQTitle,
                                    appKey: nil,
                                    compact: true,
                                    curveHeight: 110)
 
+            autoEQAndLoudnessControls
+
             audioUnitHostControls
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
                 Toggle(isRussian ? "Live-монитор DSP микрофона" : "Live Mic DSP Monitor",
                        isOn: Binding(get: { inputManager.liveMicDSPEnabled },
                                      set: { inputManager.setLiveMicDSPEnabled($0) }))
                     .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
 
                 if inputManager.liveMicDSPEnabled {
-                    HStack(spacing: 8) {
+                    HStack(spacing: DesignSpace.sm) {
                         Label(l10n.s.mixerInputTitle, systemImage: "waveform")
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(.secondary)
-                        Spacer(minLength: 4)
+                        Spacer(minLength: DesignSpace.xs)
                         RealtimeLevelMeterBar(level: inputManager.micInputLevel,
                                               isActive: true,
                                               axis: .horizontal,
@@ -638,7 +647,7 @@ struct MixerOptionsControls: View {
                                               barThickness: 6,
                                               showIdleIndicator: false)
                     }
-                    .padding(.leading, 4)
+                    .padding(.leading, DesignSpace.xs)
                 }
 
                 Toggle(wave3Strings.micNoiseGateLabel, isOn: $micNoiseGateEnabled)
@@ -655,14 +664,178 @@ struct MixerOptionsControls: View {
         }
     }
 
-    private var audioUnitHostControls: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Label(isRussian ? "AUv3-эффект" : "AUv3 Effect", systemImage: "fx")
+    private var autoEQAndLoudnessControls: some View {
+        VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
+            HStack(spacing: DesignSpace.sm) {
+                Label(v3(\OverhaulV3Strings.autoEQTitle), systemImage: "headphones")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
-                Spacer(minLength: 4)
+                Spacer(minLength: DesignSpace.xs)
+
+                Menu {
+                    Button {
+                        VorssaintHaptics.generic()
+                        mixer.clearAutoEQPreset()
+                    } label: {
+                        Label(isRussian ? "Без коррекции (Flat)" : "Off (Flat)",
+                              systemImage: mixer.activeAutoEQPresetID == nil ? "checkmark" : "slider.horizontal.3")
+                    }
+                    Divider()
+                    ForEach(MixerAutoEQCatalog.presets) { preset in
+                        Button {
+                            VorssaintHaptics.generic()
+                            mixer.applyAutoEQPreset(preset)
+                        } label: {
+                            Label(preset.name,
+                                  systemImage: mixer.activeAutoEQPresetID == preset.id ? "checkmark" : "headphones")
+                        }
+                    }
+                    if !mixer.customAutoEQPresets.isEmpty {
+                        Divider()
+                        ForEach(mixer.customAutoEQPresets) { preset in
+                            Button {
+                                VorssaintHaptics.generic()
+                                mixer.applyAutoEQPreset(preset)
+                            } label: {
+                                Label(preset.name,
+                                      systemImage: mixer.activeAutoEQPresetID == preset.id ? "checkmark" : "doc.text")
+                            }
+                        }
+                    }
+                    Divider()
+                    Button {
+                        presentAutoEQImportPanel()
+                    } label: {
+                        Label(v3(\OverhaulV3Strings.autoEQImportButton), systemImage: "square.and.arrow.down")
+                    }
+                } label: {
+                    HStack(spacing: DesignSpace.xs) {
+                        Text(mixer.activeAutoEQPreset?.name ?? (isRussian ? "Выкл" : "Off"))
+                            .font(.system(size: 10.5, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, DesignSpace.sm - 1)
+                    .padding(.vertical, 3)
+                    .frame(maxWidth: 146, alignment: .trailing)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.05))
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(v3(\OverhaulV3Strings.autoEQTitle))
+                .accessibilityLabel(v3(\OverhaulV3Strings.autoEQTitle))
+            }
+
+            HStack(spacing: DesignSpace.xs + 2) {
+                VorssaintActionChip(title: v3(\OverhaulV3Strings.autoEQImportButton),
+                                    symbol: "square.and.arrow.down",
+                                    tone: .sound) {
+                    presentAutoEQImportPanel()
+                }
+                if let activeID = mixer.activeAutoEQPresetID,
+                   mixer.customAutoEQPresets.contains(where: { $0.id == activeID }) {
+                    Button {
+                        VorssaintHaptics.generic()
+                        mixer.removeCustomAutoEQPreset(id: activeID)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(PanelMetricColor.red(for: colorScheme))
+                            .frame(width: 24, height: 24)
+                            .background(
+                                RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous)
+                                    .fill(PanelMetricColor.red(for: colorScheme).opacity(0.10))
+                            )
+                    }
+                    .buttonStyle(VorssaintScalePressButtonStyle())
+                    .help(isRussian ? "Удалить импортированный профиль" : "Delete imported AutoEQ profile")
+                }
+                Spacer(minLength: 0)
+            }
+
+            if let autoEQImportError {
+                inputMessage(autoEQImportError, systemImage: "exclamationmark.triangle")
+            }
+
+            HStack(spacing: DesignSpace.sm) {
+                Label(v3(\OverhaulV3Strings.loudnessToggleTitle), systemImage: "ear")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: DesignSpace.xs)
+
+                if mixer.loudnessEnabled {
+                    let gains = FletcherMunsonLoudness.compensationGains(
+                        volume: mixer.systemOutputVolume ?? 1.0,
+                        enabled: true
+                    )
+                    if gains.lowShelfDB >= 0.1 {
+                        Text(String(format: "+%.1f dB", locale: .autoupdatingCurrent, gains.lowShelfDB))
+                            .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(SemanticCategoryTone.sound.color(scheme: colorScheme))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(SemanticCategoryTone.sound.color(scheme: colorScheme).opacity(0.14))
+                            )
+                    }
+                }
+
+                Toggle(v3(\OverhaulV3Strings.loudnessToggleTitle), isOn: $mixer.loudnessEnabled)
+                    .labelsHidden()
+                    .toggleStyle(VorssaintCompactSwitchStyle(tone: .sound))
+                    .accessibilityLabel(v3(\OverhaulV3Strings.loudnessToggleTitle))
+            }
+        }
+        .padding(DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
+        )
+        .hairlineSpecularBorder(cornerRadius: DesignRadius.innerGroup, opacity: 0.14)
+    }
+
+    private func presentAutoEQImportPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.plainText]
+        panel.allowsOtherFileTypes = false
+        panel.title = v3(\OverhaulV3Strings.autoEQImportButton)
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if mixer.importAutoEQProfile(from: url) != nil {
+            autoEQImportError = nil
+            VorssaintHaptics.generic()
+        } else {
+            autoEQImportError = isRussian
+                ? "Не удалось распознать профиль EqualizerAPO (.txt)"
+                : "Could not parse EqualizerAPO AutoEQ profile (.txt)"
+        }
+    }
+
+    private var audioUnitHostControls: some View {
+        VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
+            HStack(spacing: DesignSpace.sm) {
+                Label(v3(\OverhaulV3Strings.audioChainTitle), systemImage: "fx")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: DesignSpace.xs)
 
                 Button {
                     auHost.refreshAvailableEffects()
@@ -671,57 +844,134 @@ struct MixerOptionsControls: View {
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(VorssaintScalePressButtonStyle())
                 .help(isRussian ? "Обновить список Audio Unit" : "Refresh Audio Units")
-
-                Picker(isRussian ? "AUv3-эффект" : "AUv3 Effect",
-                       selection: Binding(
-                        get: { auHost.selectedEffectID ?? "" },
-                        set: { auHost.selectEffect(id: $0.isEmpty ? nil : $0) }
-                       )) {
-                    Text(isRussian ? "Нет" : "None")
-                        .tag("")
-                    ForEach(auHost.availableEffects) { effect in
-                        Text("\(effect.name) — \(effect.manufacturerName)")
-                            .tag(effect.id)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .frame(width: 142)
             }
 
-            if auHost.activeAudioUnit != nil || auHost.isLoading {
-                Toggle(isRussian ? "Обход эффекта (Bypass)" : "Bypass Effect",
-                       isOn: Binding(
-                        get: { auHost.isBypassed },
-                        set: { auHost.setBypassed($0) }
-                       ))
-                    .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
-
-                HStack(spacing: 6) {
-                    VorssaintActionChip(title: isRussian ? "Открыть UI" : "Open UI",
-                                        symbol: "macwindow",
-                                        tone: .sound) {
-                        auHost.openEffectUI()
-                    }
-                    .disabled(auHost.activeAudioUnit == nil || auHost.isLoading)
-
-                    VorssaintActionChip(title: isRussian ? "Убрать" : "Remove",
-                                        symbol: "xmark",
-                                        tone: .sound,
-                                        destructive: true) {
-                        auHost.removeEffect()
-                    }
-                    Spacer(minLength: 0)
-                }
+            ForEach(0..<MixerAudioUnitHost.slotCount, id: \.self) { slot in
+                audioUnitSlotRow(slot: slot)
             }
 
             if let error = auHost.lastError {
                 inputMessage(error, systemImage: "exclamationmark.triangle")
             }
         }
+        .padding(DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
+        )
+        .hairlineSpecularBorder(cornerRadius: DesignRadius.innerGroup, opacity: 0.14)
+    }
+
+    @ViewBuilder
+    private func audioUnitSlotRow(slot: Int) -> some View {
+        let selectedID = auHost.slotSelectedIDs.indices.contains(slot) ? auHost.slotSelectedIDs[slot] : nil
+        let slotComponent = auHost.chainSlots.indices.contains(slot) ? auHost.chainSlots[slot] : nil
+        let slotUnit = auHost.slotAudioUnits.indices.contains(slot) ? auHost.slotAudioUnits[slot] : nil
+        let isBypassed = auHost.slotBypassStates.indices.contains(slot) ? auHost.slotBypassStates[slot] : false
+        let isLoading = auHost.slotLoadingStates.indices.contains(slot) ? auHost.slotLoadingStates[slot] : false
+        let effectTitle = slotComponent?.name
+            ?? auHost.availableEffects.first(where: { $0.id == selectedID })?.name
+            ?? (isRussian ? "Пусто" : "Empty")
+
+        VStack(alignment: .leading, spacing: DesignSpace.xs) {
+            HStack(spacing: DesignSpace.sm) {
+                Text("\(v3(\OverhaulV3Strings.audioChainSlotLabel)) \(slot + 1)")
+                    .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: DesignSpace.xs)
+
+                Menu {
+                    Button {
+                        VorssaintHaptics.generic()
+                        auHost.clearSlot(slot)
+                        mixer.reconcileAudioChainChanges()
+                    } label: {
+                        Label(isRussian ? "Нет" : "None",
+                              systemImage: selectedID == nil ? "checkmark" : "nosign")
+                    }
+                    if !auHost.availableEffects.isEmpty {
+                        Divider()
+                        ForEach(auHost.availableEffects) { effect in
+                            Button {
+                                VorssaintHaptics.generic()
+                                auHost.selectEffect(effect, atSlot: slot)
+                                mixer.reconcileAudioChainChanges()
+                            } label: {
+                                Label("\(effect.name) — \(effect.manufacturerName)",
+                                      systemImage: selectedID == effect.id ? "checkmark" : "fx")
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: DesignSpace.xs) {
+                        if isLoading {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+                        Text(effectTitle)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(selectedID == nil ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, DesignSpace.sm - 1)
+                    .padding(.vertical, 3)
+                    .frame(maxWidth: 164, alignment: .trailing)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.05))
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("\(v3(\OverhaulV3Strings.audioChainSlotLabel)) \(slot + 1): \(effectTitle)")
+                .accessibilityLabel("\(v3(\OverhaulV3Strings.audioChainTitle)) \(v3(\OverhaulV3Strings.audioChainSlotLabel)) \(slot + 1)")
+            }
+
+            if slotUnit != nil || selectedID != nil || isLoading {
+                HStack(spacing: DesignSpace.xs + 2) {
+                    VorssaintActionChip(
+                        title: isRussian ? (isBypassed ? "Обход" : "Вкл") : (isBypassed ? "Bypassed" : "Active"),
+                        symbol: isBypassed ? "pause.circle" : "waveform.path.ecg",
+                        tone: .sound,
+                        prominent: !isBypassed
+                    ) {
+                        auHost.setSlotBypassed(!isBypassed, atSlot: slot)
+                        mixer.reconcileAudioChainChanges()
+                    }
+                    .disabled(slotUnit == nil && !isLoading)
+
+                    VorssaintActionChip(
+                        title: isRussian ? "Открыть UI" : "Open UI",
+                        symbol: "macwindow",
+                        tone: .sound
+                    ) {
+                        auHost.openEditorWindow(forSlot: slot)
+                    }
+                    .disabled(slotUnit == nil || isLoading)
+
+                    VorssaintActionChip(
+                        title: isRussian ? "Сброс" : "Clear",
+                        symbol: "xmark",
+                        tone: .sound,
+                        destructive: true
+                    ) {
+                        auHost.clearSlot(slot)
+                        mixer.reconcileAudioChainChanges()
+                    }
+
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .padding(.vertical, DesignSpace.xxs)
     }
 
     private func inputMessage(_ text: String, systemImage: String) -> some View {
@@ -1045,6 +1295,10 @@ private struct MixerRow: View {
     private var appEQKey: String { mixer.eqStorageKey(for: app) }
     private var hasCustomEQ: Bool { mixer.hasCustomEQ(for: appEQKey) }
 
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
+    }
+
     /// Warm accent to flag the boost range, darkened in Light Mode for contrast.
     private var boostColor: Color { PanelMetricColor.orange(for: colorScheme) }
     /// Tie the visual state to the displayed percentage, so "amber" and ">100%"
@@ -1257,7 +1511,7 @@ private struct MixerRow: View {
                 Button("150% (1.5x)") { mixer.setVolume(1.5, for: app) }
                 Button("200% (2.0x)") { mixer.setVolume(2.0, for: app) }
             }
-            Menu(l10n.s.mixerOutputTooltip) {
+            Menu(v3(\OverhaulV3Strings.perAppOutputTitle)) {
                 quickRoutingMenuItems
             }
         }
@@ -1277,42 +1531,64 @@ private struct MixerRow: View {
         )
     }
 
-    private var outputPicker: some View {
-        Picker(l10n.s.mixerOutputTooltip, selection: outputSelectionBinding) {
-            Text(l10n.s.mixerOutputDefault)
-                .tag(MixerRoutingSupport.systemDefaultSelectionID)
-            ForEach(mixer.outputDevices) { device in
-                Text(outputDeviceTitle(device))
-                    .tag(device.uid)
+    private var selectedOutputName: String {
+        if let selected = app.selectedOutputDeviceUID {
+            if app.outputDeviceUnavailable {
+                return l10n.s.mixerOutputUnavailable
             }
-            if let selected = app.selectedOutputDeviceUID,
-               MixerRoutingSupport.needsUnavailableOutputRow(selectedUID: selected,
-                                                             isUnavailable: app.outputDeviceUnavailable,
-                                                             listedUIDs: mixer.outputDevices.map(\.uid)) {
-                Text(l10n.s.mixerOutputUnavailable)
-                    .tag(selected)
-            }
-            if mixer.outputDevices.contains(where: { MixerRoutingSupport.isAirPlaySentinel($0.uid) }) {
-                Divider()
-                Text(l10n.s.mixerAirPlayChooseSpeaker)
-                    .tag(MixerRoutingSupport.airPlaySpeakerChoiceID)
-            }
+            return mixer.outputDevices.first(where: { $0.uid == selected })?.name
+                ?? l10n.s.mixerOutputUnavailable
         }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .controlSize(.small)
-        .frame(width: 112)
-        .help(l10n.s.mixerOutputTooltip)
+        return v3(\OverhaulV3Strings.systemDefaultOutput)
     }
 
-    private var outputSelectionBinding: Binding<String> {
-        Binding(
-            get: { app.selectedOutputDeviceUID ?? MixerRoutingSupport.systemDefaultSelectionID },
-            set: { selection in
-                mixer.setOutputDeviceUID(selection == MixerRoutingSupport.systemDefaultSelectionID ? nil : selection,
-                                         for: app)
+    private var selectedOutputSymbol: String {
+        if let selected = app.selectedOutputDeviceUID {
+            if app.outputDeviceUnavailable {
+                return "exclamationmark.triangle.fill"
             }
-        )
+            return mixer.outputDevices.first(where: { $0.uid == selected })?.systemImageName
+                ?? "speaker.slash"
+        }
+        return "speaker.wave.2"
+    }
+
+    private var outputPicker: some View {
+        Menu {
+            Section(v3(\OverhaulV3Strings.perAppOutputTitle)) {
+                quickRoutingMenuItems
+            }
+        } label: {
+            HStack(spacing: DesignSpace.xs) {
+                Image(systemName: selectedOutputSymbol)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(app.outputDeviceUnavailable
+                                     ? PanelMetricColor.orange(for: colorScheme)
+                                     : (app.selectedOutputDeviceUID != nil
+                                        ? SemanticCategoryTone.sound.color(scheme: colorScheme)
+                                        : .secondary))
+                Text(selectedOutputName)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, DesignSpace.sm - 1)
+            .padding(.vertical, 3)
+            .frame(maxWidth: 120, alignment: .trailing)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.05))
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("\(v3(\OverhaulV3Strings.perAppOutputTitle)): \(selectedOutputName)")
+        .accessibilityLabel("\(v3(\OverhaulV3Strings.perAppOutputTitle)): \(app.name)")
+        .accessibilityValue(selectedOutputName)
     }
 
     private func outputDeviceTitle(_ device: MixerOutputDevice) -> String {
@@ -1324,7 +1600,7 @@ private struct MixerRow: View {
             mixer.setOutputDeviceUID(nil, for: app)
         } label: {
             Label(
-                title: { Text(l10n.s.mixerOutputDefault) },
+                title: { Text(v3(\OverhaulV3Strings.systemDefaultOutput)) },
                 icon: { Image(systemName: app.selectedOutputDeviceUID == nil ? "checkmark" : "speaker") }
             )
         }
@@ -1339,6 +1615,16 @@ private struct MixerRow: View {
                         Image(systemName: app.selectedOutputDeviceUID == device.uid ? "checkmark" : device.systemImageName)
                     }
                 )
+            }
+        }
+        if let selected = app.selectedOutputDeviceUID,
+           MixerRoutingSupport.needsUnavailableOutputRow(selectedUID: selected,
+                                                         isUnavailable: app.outputDeviceUnavailable,
+                                                         listedUIDs: mixer.outputDevices.map(\.uid)) {
+            Button {
+                mixer.setOutputDeviceUID(selected, for: app)
+            } label: {
+                Label(l10n.s.mixerOutputUnavailable, systemImage: "checkmark")
             }
         }
         if mixer.outputDevices.contains(where: { MixerRoutingSupport.isAirPlaySentinel($0.uid) }) {
