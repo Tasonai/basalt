@@ -19,6 +19,15 @@ struct PortManagerView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
                 Text(strings.title).font(.headline)
+                if !service.filteredEntries.isEmpty {
+                    Text(String(service.filteredEntries.count))
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                }
                 Spacer()
                 Button {
                     service.refresh()

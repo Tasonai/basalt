@@ -102,6 +102,8 @@ struct CleanerView: View {
     @State private var whatsAppExpanded = false
     @State private var scheduleHovered = false
     @State private var whatsAppHovered = false
+    @State private var showSpaceLens = false
+    @ObservedObject private var trashWatcher = TrashWatcherService.shared
     /// Tightens paddings for the panel and launcher.
     var compact = false
 
@@ -115,10 +117,87 @@ struct CleanerView: View {
         switch cleaner.phase {
         case .idle: settingsScrolling(idleState)
         case .scanning: settingsScrolling(busyState(l10n.s.cleanerScanning, detail: scanningDetail))
-        case .results: resultsState
+        case .results:
+            VStack(alignment: .leading, spacing: 6) {
+                spaceLensToggleBar
+                if showSpaceLens {
+                    spaceLensMapView
+                } else {
+                    resultsState
+                }
+            }
         case .cleaning: settingsScrolling(busyState(l10n.s.cleanerCleaning, detail: nil))
         case let .done(freed, failed): settingsScrolling(doneState(freed: freed, failed: failed))
         }
+    }
+
+    private var spaceLensToggleBar: some View {
+        HStack(spacing: 8) {
+            if let trashed = trashWatcher.detectedAppName, !trashWatcher.detectedLeftovers.isEmpty {
+                Label(String(format: OverhaulStrings.wave4(l10n.language).trashLeftoversFoundFormat,
+                             trashWatcher.detectedLeftovers.count, trashed),
+                      systemImage: "sparkles")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Button {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    showSpaceLens.toggle()
+                }
+            } label: {
+                Label(OverhaulStrings.wave4(l10n.language).spaceLensTitle,
+                      systemImage: showSpaceLens ? "list.bullet" : "square.grid.2x2")
+                    .font(.system(size: 10.5, weight: .semibold))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+        }
+        .padding(.horizontal, compact ? 10 : 18)
+        .padding(.top, 6)
+    }
+
+    private var spaceLensMapView: some View {
+        GeometryReader { proxy in
+            let nodes = DisplayGroup.allCases.enumerated().map { idx, grp in
+                SpaceLensNode(id: "\(grp.rawValue)",
+                              title: title(for: grp),
+                              bytes: items(for: grp).reduce(Int64(0)) { $0 + $1.size },
+                              categoryIndex: idx)
+            }
+            let rect = CGRect(origin: .zero, size: CGSize(width: max(120, proxy.size.width),
+                                                          height: max(140, proxy.size.height)))
+            let tiles = SpaceLensTreemap.layout(nodes: nodes, in: rect)
+            ZStack(alignment: .topLeading) {
+                ForEach(tiles) { tile in
+                    let groups = FeatureGroup.allCases
+                    let color = SemanticCategoryPalette.color(for: groups[tile.categoryIndex % max(1, groups.count)])
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(color.opacity(0.26))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(color.opacity(0.55), lineWidth: 1)
+                        )
+                        .overlay(alignment: .topLeading) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(tile.title)
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                    .lineLimit(1)
+                                Text(Self.byteString(tile.bytes))
+                                    .font(.system(size: 9.5).monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(6)
+                        }
+                        .frame(width: max(4, tile.rect.width - 4), height: max(4, tile.rect.height - 4))
+                        .offset(x: tile.rect.minX + 2, y: tile.rect.minY + 2)
+                }
+            }
+        }
+        .frame(minHeight: compact ? 180 : 280)
+        .padding(.horizontal, compact ? 10 : 18)
+        .padding(.bottom, 12)
     }
 
     /// On the Settings page every detail must host a scroll container: the

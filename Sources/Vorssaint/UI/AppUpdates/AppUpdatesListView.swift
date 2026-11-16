@@ -87,6 +87,15 @@ struct AppUpdatesListView: View {
             Text(lastCheckLine)
                 .font(.system(size: compact ? 10.5 : 12))
                 .foregroundStyle(.secondary)
+            if updates.selectableCount > 0 {
+                Text(String(updates.selectableCount))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+            }
             Spacer(minLength: 0)
             Button {
                 updates.check()

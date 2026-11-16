@@ -73,6 +73,9 @@ struct KillProcessView: View {
                 Text(String(format: strings.processCountFormat, service.filteredEntries.count))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
 
                 Button {
                     service.refresh(force: true)

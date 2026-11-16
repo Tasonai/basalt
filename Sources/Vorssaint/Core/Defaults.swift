@@ -222,6 +222,7 @@ enum DefaultsKey {
     static let extraBrightnessLevel = "extraBrightnessLevel"   // Int percent 0-100
     static let brightnessControlEnabled = "brightnessControlEnabled" // sliders for every display
     static let brightnessKeysEnabled = "brightnessKeysEnabled" // brightness keys act on the display under the pointer
+    static let displayAmbientSyncEnabled = "displayAmbientSyncEnabled"
     static let brightnessOSDEnabled = "brightnessOSDEnabled" // brightness adjustment overlay
     static let brightnessKeyStep = "brightnessKeyStep" // BrightnessSupport.KeyStep raw value
     static let displayBrightnessShortcutsEnabled = "displayBrightnessShortcutsEnabled"
@@ -448,6 +449,7 @@ enum DefaultsKey {
     static let fanControlHelperVersion = "fanControlHelperVersion"
     // System monitor — per-metric history graphs (each independently toggleable).
     static let monitorGraphCPU = "monitorGraphCPU"
+    static let telemetryHorizon = "telemetryHorizon"
     static let monitorGraphGPU = "monitorGraphGPU"
     static let monitorGraphMemory = "monitorGraphMemory"
     static let monitorGraphNetwork = "monitorGraphNetwork"
@@ -516,6 +518,9 @@ enum DefaultsKey {
     static let windowLayoutMarginPercent = "windowLayoutMarginPercent" // per-edge percentage for margin maximize
     static let windowLayoutSideRepeatCyclesThirds = "windowLayoutSideRepeatCyclesThirds" // repeated Left/Right cycles half, 2/3, 1/3 on the same display
     static let windowLayoutIgnoredApps = "windowLayoutIgnoredApps" // apps that temporarily disable window layout while focused
+    static let windowCustomGridColumns = "windowCustomGridColumns"
+    static let windowCustomGridRows = "windowCustomGridRows"
+    static let windowWorkspacesJSON = "windowWorkspacesJSON"
     static let panelCollapsedSections = "panelCollapsedSections"
     static let panelCollapsedResetVersion = "panelCollapsedResetVersion"
 
@@ -1396,6 +1401,7 @@ enum Defaults {
         DefaultsKey.extraBrightnessLevel: 100,
         DefaultsKey.brightnessControlEnabled: false,
         DefaultsKey.brightnessKeysEnabled: false,
+        DefaultsKey.displayAmbientSyncEnabled: false,
         DefaultsKey.brightnessOSDEnabled: false,
         DefaultsKey.brightnessKeyStep: BrightnessSupport.KeyStep.standard.rawValue,
         DefaultsKey.displayBrightnessShortcutsEnabled: false,
@@ -1704,6 +1710,9 @@ enum Defaults {
         DefaultsKey.windowReserveStageManagerSpace: false,
         DefaultsKey.windowLayoutMarginPercent: 5.0,
         DefaultsKey.windowLayoutSideRepeatCyclesThirds: false,
+        DefaultsKey.windowCustomGridColumns: 3,
+        DefaultsKey.windowCustomGridRows: 2,
+        DefaultsKey.windowWorkspacesJSON: "[]",
         DefaultsKey.menuBarMetricOrder: defaultMenuBarMetricOrder.joined(separator: ","),
         DefaultsKey.menuBarCombineTemperatures: true,
         DefaultsKey.menuBarSeparateMetrics: false,
@@ -1727,6 +1736,7 @@ enum Defaults {
         DefaultsKey.fanControlHelperVersion: "",
         DefaultsKey.panelNavigationEnabled: true,
         DefaultsKey.monitorGraphCPU: true,
+        DefaultsKey.telemetryHorizon: "1m",
         DefaultsKey.monitorGraphGPU: true,
         DefaultsKey.monitorGraphMemory: true,
         DefaultsKey.monitorGraphNetwork: true,

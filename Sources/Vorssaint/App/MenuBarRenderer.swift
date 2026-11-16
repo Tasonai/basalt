@@ -1270,4 +1270,16 @@ enum MenuBarRenderer {
         case (false, false): return ""
         }
     }
+
+    static func twoRowCompactSummary(cpuPercent: Double, networkBytesPerSec: Double) -> String {
+        let cpuText = MenuBarTwoRowFormatter.formatTwoRowMetric(
+            topLabel: "CPU",
+            bottomValue: MenuBarTwoRowFormatter.compactPercent(cpuPercent)
+        )
+        let netText = MenuBarTwoRowFormatter.formatTwoRowMetric(
+            topLabel: "NET",
+            bottomValue: MenuBarTwoRowFormatter.compactRate(bytesPerSec: networkBytesPerSec)
+        )
+        return "\(cpuText)  \(netText)"
+    }
 }

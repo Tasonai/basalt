@@ -12,10 +12,15 @@ struct BrightnessSection: View {
     @ObservedObject private var permissions = Permissions.shared
     @AppStorage(DefaultsKey.brightnessOSDEnabled) private var brightnessOSDEnabled = false
     @AppStorage(DefaultsKey.brightnessKeysEnabled) private var brightnessKeysEnabled = false
+    @AppStorage(DefaultsKey.displayAmbientSyncEnabled) private var ambientSyncEnabled = false
     @State private var optionsExpanded = false
+    @State private var ddcContrast: Double = 75
+    @State private var ddcVolume: Double = 60
+    @State private var selectedInput: DisplayInputSourcePreset = .usbC
     var collapsible = true
 
     private var strings: BrightnessFeatureStrings { FeatureStrings.brightness(l10n.language) }
+    private var wave4Strings: OverhaulWave4Strings { OverhaulStrings.wave4(l10n.language) }
 
     var body: some View {
         PanelSection(.brightness, title: strings.pageTitle, collapsible: collapsible) {
@@ -107,6 +112,40 @@ struct BrightnessSection: View {
                         .buttonStyle(.link)
                     }
                     DisplayBrightnessShortcutControls()
+                    Divider()
+                    Toggle(wave4Strings.ambientSyncLabel, isOn: $ambientSyncEnabled)
+                        .onChange(of: ambientSyncEnabled) { _, on in
+                            AmbientLightSyncService.shared.isEnabled = on
+                        }
+                    HStack(spacing: 8) {
+                        Text(wave4Strings.hardwareContrastLabel)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                        Slider(value: $ddcContrast, in: 0...100, step: 1)
+                            .controlSize(.mini)
+                    }
+                    HStack(spacing: 8) {
+                        Text(wave4Strings.hardwareVolumeLabel)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                        Slider(value: $ddcVolume, in: 0...100, step: 1)
+                            .controlSize(.mini)
+                    }
+                    HStack(spacing: 8) {
+                        Text(wave4Strings.inputSourceLabel)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Picker("", selection: $selectedInput) {
+                            ForEach(DisplayInputSourcePreset.allCases) { preset in
+                                Text(preset.label).tag(preset)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .controlSize(.mini)
+                        .fixedSize()
+                    }
                 }
                 .font(.system(size: 11.5, weight: .medium))
                 .toggleStyle(.checkbox)

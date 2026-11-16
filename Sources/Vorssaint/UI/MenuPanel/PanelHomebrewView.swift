@@ -82,6 +82,15 @@ struct PanelHomebrewView: View {
         HStack(spacing: 8) {
             Label(l10n.s.homebrewName, systemImage: "shippingbox")
                 .font(.system(size: 12, weight: .semibold))
+            if !homebrew.installed.isEmpty {
+                Text(String(homebrew.installed.count))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Color.primary.opacity(0.07), in: Capsule())
+            }
             Spacer()
             PanelCloseButton(action: onClose)
         }

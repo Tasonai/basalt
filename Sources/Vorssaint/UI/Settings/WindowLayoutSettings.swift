@@ -27,6 +27,10 @@ struct WindowLayoutSettings: View {
     @AppStorage(DefaultsKey.windowReserveStageManagerSpace) private var reserveStageManagerSpace = false
     @AppStorage(DefaultsKey.windowLayoutMarginPercent) private var marginPercent = WindowLayoutMargin.defaultPercent
     @AppStorage(DefaultsKey.windowLayoutSideRepeatCyclesThirds) private var sideRepeatCyclesThirds = false
+    @AppStorage(DefaultsKey.windowCustomGridColumns) private var customGridColumns = 3
+    @AppStorage(DefaultsKey.windowCustomGridRows) private var customGridRows = 2
+    @ObservedObject private var workspaceStore = WindowWorkspaceStore.shared
+    @State private var newWorkspaceName = ""
     @State private var directionalError: String?
     @State private var systemTilingEnabled = WindowEdgeSnapSupport.isSystemTilingEnabled
     // Same preference the Switcher page exposes next to Dock Preview; it is
@@ -240,6 +244,9 @@ struct WindowLayoutSettings: View {
                     }
                 }
             }
+            if AppFeature.windowLayout.isAvailable {
+                workspacesAndGridSection
+            }
         }
         .formStyle(.grouped)
         .onAppear { refreshSystemTilingState() }
@@ -266,6 +273,58 @@ struct WindowLayoutSettings: View {
             WindowMaximizerExclusionsList()
         }
         .settingsFormSectionAnchor(.windowMaximizer)
+    }
+
+    private var wave4Strings: OverhaulWave4Strings {
+        OverhaulStrings.wave4(l10n.language)
+    }
+
+    private var workspacesAndGridSection: some View {
+        Section(wave4Strings.workspacesTitle) {
+            HStack(spacing: 10) {
+                Text(wave4Strings.customSnapGridLabel)
+                Spacer()
+                Picker("", selection: $customGridColumns) {
+                    Text("3x2").tag(3)
+                    Text("4x2").tag(4)
+                    Text("6x2").tag(6)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+            }
+            HStack(spacing: 8) {
+                TextField(wave4Strings.workspacesTitle, text: $newWorkspaceName)
+                    .textFieldStyle(.roundedBorder)
+                Button(wave4Strings.saveWorkspaceButton) {
+                    let grid = CustomSnapGridSpec(columns: customGridColumns, rows: customGridRows)
+                    let rect = grid.cellFrame(in: CGRect(x: 0, y: 0, width: 1, height: 1),
+                                              colRange: 0...0, rowRange: 0...0)
+                    let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "com.apple.Finder"
+                    workspaceStore.savePreset(
+                        name: newWorkspaceName,
+                        slots: [WindowWorkspaceSlot(bundleID: bundle,
+                                                    normalizedX: rect.minX,
+                                                    normalizedY: rect.minY,
+                                                    normalizedWidth: rect.width,
+                                                    normalizedHeight: rect.height)]
+                    )
+                    newWorkspaceName = ""
+                }
+            }
+            ForEach(workspaceStore.presets) { preset in
+                HStack {
+                    Text(preset.name)
+                    Spacer()
+                    Button(role: .destructive) {
+                        workspaceStore.deletePreset(id: preset.id)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+        }
     }
 
     private var directionalTrigger: WindowDirectionalTrigger {

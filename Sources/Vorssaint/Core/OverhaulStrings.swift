@@ -722,7 +722,7 @@ struct OverhaulWave2Strings: Sendable {
                 clickSFXTitle: "Son du clic",
                 motionBlurTitle: "Flou de mouvement",
                 captionsTrackTitle: "Transcription et légendes",
-                transcribeAudioButton: "Transcrire l'audio",
+                transcribeAudioButton: "Transcrire l\u{2019}audio",
                 exportSRTButton: "Exporter SRT",
                 captionsEmptyHint: "Lancez la dictée locale pour éditer ou couper par phrase.",
                 smartRedactButton: "Masquage intelligent",
@@ -1018,7 +1018,7 @@ struct OverhaulWave3Strings: Equatable {
                 layoutGridLabel: "Grille",
                 pinboardAllLabel: "Tous les tableaux",
                 pasteStackTitle: "Pile de collage",
-                pasteStackCountFormat: "Pile : %d",
+                pasteStackCountFormat: "Pile\u{00A0}: %d",
                 transformMenuTitle: "Transformer",
                 syncVaultTitle: "Coffre chiffre",
                 parametricEQTitle: "EQ parametrique 10 bandes",
@@ -1151,6 +1151,342 @@ struct OverhaulWave3Strings: Equatable {
                 eqPresetLabel: "EQ 預設",
                 micNoiseGateLabel: "咪高風降噪閘",
                 micLevelerLabel: "自動人聲平衡"
+            )
+        }
+    }
+}
+
+extension OverhaulStrings {
+    static func wave4(_ language: AppLanguage) -> OverhaulWave4Strings {
+        OverhaulWave4Strings.localized(language)
+    }
+
+    static func shelfActions(_ language: AppLanguage) -> ShelfActionStrings {
+        ShelfActionStrings.localized(language)
+    }
+}
+
+struct ShelfActionStrings: Equatable {
+    let convertWebP: String
+    let convertHEIC: String
+    let mergePDF: String
+    let batchRename: String
+
+    static func localized(_ language: AppLanguage) -> ShelfActionStrings {
+        let w = OverhaulWave4Strings.localized(language)
+        return ShelfActionStrings(
+            convertWebP: w.shelfConvertWebP,
+            convertHEIC: w.shelfConvertHEIC,
+            mergePDF: w.shelfMergePDF,
+            batchRename: w.shelfBatchRename
+        )
+    }
+}
+
+struct OverhaulWave4Strings: Equatable {
+    let hardwareContrastLabel: String
+    let hardwareVolumeLabel: String
+    let inputSourceLabel: String
+    let ambientSyncLabel: String
+    let virtualHiDPILabel: String
+    let workspacesTitle: String
+    let saveWorkspaceButton: String
+    let customSnapGridLabel: String
+    let shelfConvertWebP: String
+    let shelfConvertHEIC: String
+    let shelfMergePDF: String
+    let shelfBatchRename: String
+    let telemetryHorizonLabel: String
+    let spaceLensTitle: String
+    let trashLeftoversFoundFormat: String
+    let cleanLeftoversButton: String
+
+    static func localized(_ language: AppLanguage) -> OverhaulWave4Strings {
+        switch language {
+        case .enUS:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Hardware Contrast",
+                hardwareVolumeLabel: "Monitor Volume",
+                inputSourceLabel: "KVM Input Source",
+                ambientSyncLabel: "Sync with Ambient Light Sensor",
+                virtualHiDPILabel: "Virtual HiDPI Displays",
+                workspacesTitle: "Window Workspaces",
+                saveWorkspaceButton: "Save Current Layout",
+                customSnapGridLabel: "Custom Snap Grid",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "Merge PDFs",
+                shelfBatchRename: "Batch Rename",
+                telemetryHorizonLabel: "History Window",
+                spaceLensTitle: "Space Lens Map",
+                trashLeftoversFoundFormat: "Found %d leftover files for %@ in Library",
+                cleanLeftoversButton: "Sweep Leftovers"
+            )
+        case .ru:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Контрастность монитора",
+                hardwareVolumeLabel: "Громкость монитора",
+                inputSourceLabel: "Видеовход KVM",
+                ambientSyncLabel: "Автояркость по датчику освещения",
+                virtualHiDPILabel: "Виртуальные HiDPI-экраны",
+                workspacesTitle: "Пространства окон",
+                saveWorkspaceButton: "Сохранить раскладку",
+                customSnapGridLabel: "Своя сетка привязки",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "Объединить PDF",
+                shelfBatchRename: "Пакетное переименование",
+                telemetryHorizonLabel: "Горизонт истории",
+                spaceLensTitle: "Карта диска Space Lens",
+                trashLeftoversFoundFormat: "Найдено %d следов %@ в Библиотеке",
+                cleanLeftoversButton: "Очистить следы"
+            )
+        case .ptBR:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Contraste de hardware",
+                hardwareVolumeLabel: "Volume do monitor",
+                inputSourceLabel: "Entrada KVM",
+                ambientSyncLabel: "Sincronizar com luz ambiente",
+                virtualHiDPILabel: "Telas HiDPI virtuais",
+                workspacesTitle: "Espacos de janelas",
+                saveWorkspaceButton: "Salvar layout atual",
+                customSnapGridLabel: "Grade personalizada",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "Juntar PDFs",
+                shelfBatchRename: "Renomear em lote",
+                telemetryHorizonLabel: "Janela de historico",
+                spaceLensTitle: "Mapa Space Lens",
+                trashLeftoversFoundFormat: "%d restos de %@ encontrados na Biblioteca",
+                cleanLeftoversButton: "Limpar restos"
+            )
+        case .tr:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Donanim Kontrasti",
+                hardwareVolumeLabel: "Monitor Sesi",
+                inputSourceLabel: "KVM Giris Kaynagi",
+                ambientSyncLabel: "Ortam isigina gore senkronize et",
+                virtualHiDPILabel: "Sanal HiDPI Ekranlar",
+                workspacesTitle: "Pencere Calisma Alanlari",
+                saveWorkspaceButton: "Mevcut Duzeni Kaydet",
+                customSnapGridLabel: "Ozel Yerlesim Izgarasi",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "PDF Birlestir",
+                shelfBatchRename: "Toplu Yeniden Adlandir",
+                telemetryHorizonLabel: "Gecmis Araligi",
+                spaceLensTitle: "Space Lens Haritasi",
+                trashLeftoversFoundFormat: "Kutuphanede %2$@ icin %1$d artik bulundu",
+                cleanLeftoversButton: "Artiklari Temizle"
+            )
+        case .es:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Contraste por hardware",
+                hardwareVolumeLabel: "Volumen del monitor",
+                inputSourceLabel: "Fuente KVM",
+                ambientSyncLabel: "Sincronizar con sensor de luz",
+                virtualHiDPILabel: "Pantallas HiDPI virtuales",
+                workspacesTitle: "Espacios de ventanas",
+                saveWorkspaceButton: "Guardar disposicion",
+                customSnapGridLabel: "Cuadricula personalizada",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "Unir PDFs",
+                shelfBatchRename: "Renombrar en lote",
+                telemetryHorizonLabel: "Ventana de historial",
+                spaceLensTitle: "Mapa Space Lens",
+                trashLeftoversFoundFormat: "Encontrados %d restos de %@ en Biblioteca",
+                cleanLeftoversButton: "Limpiar restos"
+            )
+        case .sk:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Hardverovy kontrast",
+                hardwareVolumeLabel: "Hlasitost monitora",
+                inputSourceLabel: "KVM vstupny zdroj",
+                ambientSyncLabel: "Synchronizovat so senzorom svetla",
+                virtualHiDPILabel: "Virtualne HiDPI obrazovky",
+                workspacesTitle: "Pracovne plochy okien",
+                saveWorkspaceButton: "Ulozit aktualne rozlozenie",
+                customSnapGridLabel: "Vlastna mriezka",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "Zlucit PDF",
+                shelfBatchRename: "Hromadne premenovanie",
+                telemetryHorizonLabel: "Rozsah historie",
+                spaceLensTitle: "Mapa Space Lens",
+                trashLeftoversFoundFormat: "Najdenych %d zvyskov %@ v Kniznici",
+                cleanLeftoversButton: "Vymazat zvysky"
+            )
+        case .de:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Hardware-Kontrast",
+                hardwareVolumeLabel: "Monitor-Lautstaerke",
+                inputSourceLabel: "KVM-Eingangsquelle",
+                ambientSyncLabel: "Mit Umgebungslicht synchronisieren",
+                virtualHiDPILabel: "Virtuelle HiDPI-Displays",
+                workspacesTitle: "Fenster-Arbeitsbereiche",
+                saveWorkspaceButton: "Layout speichern",
+                customSnapGridLabel: "Benutzerdefiniertes Raster",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "PDFs zusammenfuegen",
+                shelfBatchRename: "Stapel-Umbenennung",
+                telemetryHorizonLabel: "Verlaufszeitraum",
+                spaceLensTitle: "Space Lens Karte",
+                trashLeftoversFoundFormat: "%d Restdateien fuer %@ in Library gefunden",
+                cleanLeftoversButton: "Reste entfernen"
+            )
+        case .fr:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Contraste materiel",
+                hardwareVolumeLabel: "Volume du moniteur",
+                inputSourceLabel: "Entree KVM",
+                ambientSyncLabel: "Synchroniser avec la lumiere ambiante",
+                virtualHiDPILabel: "Ecrans HiDPI virtuels",
+                workspacesTitle: "Espaces de fenetres",
+                saveWorkspaceButton: "Enregistrer la disposition",
+                customSnapGridLabel: "Grille personnalisee",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "Fusionner PDF",
+                shelfBatchRename: "Renommer par lot",
+                telemetryHorizonLabel: "Fenetre d historique",
+                spaceLensTitle: "Carte Space Lens",
+                trashLeftoversFoundFormat: "%d residus de %@ trouves dans Bibliotheque",
+                cleanLeftoversButton: "Nettoyer residus"
+            )
+        case .it:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Contrasto hardware",
+                hardwareVolumeLabel: "Volume monitor",
+                inputSourceLabel: "Ingresso KVM",
+                ambientSyncLabel: "Sincronizza con sensore luce",
+                virtualHiDPILabel: "Schermi HiDPI virtuali",
+                workspacesTitle: "Spazi finestre",
+                saveWorkspaceButton: "Salva layout attuale",
+                customSnapGridLabel: "Griglia personalizzata",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "Unisci PDF",
+                shelfBatchRename: "Rinomina in blocco",
+                telemetryHorizonLabel: "Intervallo cronologia",
+                spaceLensTitle: "Mappa Space Lens",
+                trashLeftoversFoundFormat: "Trovati %d file residui di %@ in Libreria",
+                cleanLeftoversButton: "Pulisci residui"
+            )
+        case .ja:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "ハードウェアコントラスト",
+                hardwareVolumeLabel: "モニター音量",
+                inputSourceLabel: "KVM 入力ソース",
+                ambientSyncLabel: "環境光センサーと同期",
+                virtualHiDPILabel: "仮想 HiDPI ディスプレイ",
+                workspacesTitle: "ウィンドウワークスペース",
+                saveWorkspaceButton: "現在の配置を保存",
+                customSnapGridLabel: "カスタムスナップグリッド",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "PDF を結合",
+                shelfBatchRename: "一括リネーム",
+                telemetryHorizonLabel: "履歴ウィンドウ",
+                spaceLensTitle: "Space Lens マップ",
+                trashLeftoversFoundFormat: "ライブラリ内に %2$@ の関連項目が %1$d 件見つかりました",
+                cleanLeftoversButton: "残余を掃除"
+            )
+        case .ko:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "하드웨어 명암",
+                hardwareVolumeLabel: "모니터 음량",
+                inputSourceLabel: "KVM 입력 소스",
+                ambientSyncLabel: "주변광 센서와 동기화",
+                virtualHiDPILabel: "가상 HiDPI 디스플레이",
+                workspacesTitle: "창 작업 공간",
+                saveWorkspaceButton: "현재 레이아웃 저장",
+                customSnapGridLabel: "사용자 지정 스냅 그리드",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "PDF 병합",
+                shelfBatchRename: "일괄 이름 바꾸기",
+                telemetryHorizonLabel: "기록 기간",
+                spaceLensTitle: "Space Lens 지도",
+                trashLeftoversFoundFormat: "보관함에서 %2$@ 잔여 파일 %1$d개 발견",
+                cleanLeftoversButton: "잔여 파일 정리"
+            )
+        case .uk:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "Апаратна контрастність",
+                hardwareVolumeLabel: "Гучність монітора",
+                inputSourceLabel: "Відеовхід KVM",
+                ambientSyncLabel: "Автояскравість за датчиком світла",
+                virtualHiDPILabel: "Віртуальні HiDPI-екрани",
+                workspacesTitle: "Простори вікон",
+                saveWorkspaceButton: "Зберегти розкладку",
+                customSnapGridLabel: "Власна сітка прив язки",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "Об єднати PDF",
+                shelfBatchRename: "Пакетне перейменування",
+                telemetryHorizonLabel: "Горизонт історії",
+                spaceLensTitle: "Карта диска Space Lens",
+                trashLeftoversFoundFormat: "Знайдено %d залишків %@ у Бібліотеці",
+                cleanLeftoversButton: "Очистити залишки"
+            )
+        case .zhHans:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "硬件对比度",
+                hardwareVolumeLabel: "显示器音量",
+                inputSourceLabel: "KVM 输入源",
+                ambientSyncLabel: "与环境光传感器同步",
+                virtualHiDPILabel: "虚拟 HiDPI 显示器",
+                workspacesTitle: "窗口工作区",
+                saveWorkspaceButton: "保存当前布局",
+                customSnapGridLabel: "自定义吸附网格",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "合并 PDF",
+                shelfBatchRename: "批量重命名",
+                telemetryHorizonLabel: "历史范围",
+                spaceLensTitle: "Space Lens 磁盘视图",
+                trashLeftoversFoundFormat: "在资源库中找到 %d 个 %@ 残留项",
+                cleanLeftoversButton: "清理残留"
+            )
+        case .zhTW:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "硬體對比度",
+                hardwareVolumeLabel: "螢幕音量",
+                inputSourceLabel: "KVM 輸入來源",
+                ambientSyncLabel: "與環境光感測器同步",
+                virtualHiDPILabel: "虛擬 HiDPI 顯示器",
+                workspacesTitle: "視窗工作區",
+                saveWorkspaceButton: "儲存目前版面",
+                customSnapGridLabel: "自訂貼齊格線",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "合併 PDF",
+                shelfBatchRename: "批次重新命名",
+                telemetryHorizonLabel: "歷程區間",
+                spaceLensTitle: "Space Lens 空間地圖",
+                trashLeftoversFoundFormat: "在資料庫找到 %d 個 %@ 殘留項目",
+                cleanLeftoversButton: "清除殘留"
+            )
+        case .zhHK:
+            return OverhaulWave4Strings(
+                hardwareContrastLabel: "硬件對比度",
+                hardwareVolumeLabel: "顯示器音量",
+                inputSourceLabel: "KVM 輸入來源",
+                ambientSyncLabel: "與環境光感應器同步",
+                virtualHiDPILabel: "虛擬 HiDPI 顯示器",
+                workspacesTitle: "視窗工作區",
+                saveWorkspaceButton: "儲存目前佈局",
+                customSnapGridLabel: "自訂貼齊格線",
+                shelfConvertWebP: "WebP",
+                shelfConvertHEIC: "HEIC",
+                shelfMergePDF: "合併 PDF",
+                shelfBatchRename: "批次改名",
+                telemetryHorizonLabel: "歷史區間",
+                spaceLensTitle: "Space Lens 空間圖",
+                trashLeftoversFoundFormat: "喺資料庫搵到 %d 個 %@ 殘留項目",
+                cleanLeftoversButton: "清理殘留"
             )
         }
     }

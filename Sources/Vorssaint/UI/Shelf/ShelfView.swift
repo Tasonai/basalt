@@ -207,6 +207,7 @@ struct ShelfView: View {
             }
 
             let urls = shelf.fileURLsForActions()
+            let shelfStrings = OverhaulStrings.shelfActions(l10n.language)
             let hasImages = urls.contains { ShelfInteractionSupport.editableImage(in: [$0]) != nil }
             if hasImages {
                 Menu {
@@ -218,6 +219,16 @@ struct ShelfView: View {
                     Button("JPEG") {
                         if let img = urls.first(where: { ShelfInteractionSupport.editableImage(in: [$0]) != nil }) {
                             ShelfActionsEngine.convertImage(url: img, to: .jpeg)
+                        }
+                    }
+                    Button(shelfStrings.convertWebP) {
+                        if let img = urls.first(where: { ShelfInteractionSupport.editableImage(in: [$0]) != nil }) {
+                            _ = try? ShelfProActions.convertAndResizeImage(at: img, to: .webp)
+                        }
+                    }
+                    Button(shelfStrings.convertHEIC) {
+                        if let img = urls.first(where: { ShelfInteractionSupport.editableImage(in: [$0]) != nil }) {
+                            _ = try? ShelfProActions.convertAndResizeImage(at: img, to: .heic)
                         }
                     }
                 } label: {

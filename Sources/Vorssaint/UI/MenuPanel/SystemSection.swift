@@ -48,13 +48,43 @@ struct SystemSection: View {
     @AppStorage(DefaultsKey.monitorSysUptime) private var sysUptime = true
     @AppStorage(DefaultsKey.monitorSysConnectedDevices) private var sysConnectedDevices = true
     @AppStorage(DefaultsKey.panelSystemOrder) private var systemOrderRaw = ""
+    @AppStorage(DefaultsKey.telemetryHorizon) private var telemetryHorizonRaw = TelemetryHorizon.oneMinute.rawValue
     @State private var draggingBlock: Block?
+
+    private var telemetryHorizon: TelemetryHorizon {
+        TelemetryHorizon(rawValue: telemetryHorizonRaw) ?? .oneMinute
+    }
 
     var body: some View {
         PanelSection(.system, title: l10n.s.systemSection, collapsible: collapsible,
                      supportsEditing: true,
                      resetAction: resetPanelDefaults) { editing in
             VStack(alignment: .leading, spacing: 10) {
+                if !editing {
+                    HStack(spacing: 4) {
+                        Text(OverhaulStrings.wave4(l10n.language).telemetryHorizonLabel)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        ForEach(TelemetryHorizon.allCases) { horizon in
+                            Button {
+                                telemetryHorizonRaw = horizon.rawValue
+                            } label: {
+                                Text(horizon.rawValue)
+                                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(telemetryHorizon == horizon ? Color.accentColor : Color.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        Capsule().fill(telemetryHorizon == horizon
+                                                       ? Color.accentColor.opacity(0.16)
+                                                       : Color.primary.opacity(0.05))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
                 let currentBlocks = blocks(editing: editing)
                 ForEach(Array(currentBlocks.enumerated()), id: \.element) { index, block in
                     if index > 0 { Divider() }
@@ -74,7 +104,14 @@ struct SystemSection: View {
             }
             .panelCard()
         }
-        .onReceive(monitor.$snapshot) { _ in
+        .onReceive(monitor.$snapshot) { snap in
+            TelemetryHistoryRing.shared.record(TelemetryPoint(
+                timestamp: Date().timeIntervalSince1970,
+                cpu: (snap.cpuUsage ?? 0) * 100.0,
+                gpu: (snap.gpuUsage ?? 0) * 100.0,
+                memory: snap.memoryPressure == .critical ? 90 : (snap.memoryPressure == .warning ? 70 : 40),
+                networkBytesPerSec: 0
+            ))
             guard let kind = expanded,
                   Date().timeIntervalSince(lastBreakdownRefresh) >= kind.processRefreshInterval(
                       configuredMonitorInterval: monitorInterval
