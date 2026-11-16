@@ -259,6 +259,7 @@ struct MetricsTests {
             ("wave5-v3-menubar-ioreport", { Wave5V3MenuBarAndIOReportContract.run(suite) }),
             ("wave6-v3-studio-screenshots", { Wave6V3StudioAndScreenshot3Contract.run(suite) }),
             ("wave7-v3-clipboard-ai", { Wave7V3SQLiteClipboardAndAI3Contract.run(suite) }),
+            ("wave8-v3-disk-final", { Wave8V3DiskEngineAndFinalAuditContract.run(suite) }),
         ]
         var selected = Set<String>()
         var listOnly = false

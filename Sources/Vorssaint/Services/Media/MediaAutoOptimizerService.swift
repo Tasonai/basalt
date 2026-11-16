@@ -9,6 +9,61 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+/// External Clop-compatible CLI media codec binary discovered on the local system.
+struct ExternalMediaCodec: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let executablePath: String?
+
+    var isInstalled: Bool { executablePath != nil }
+}
+
+/// Discovers optional external CLI optimizers (`oxipng`, `pngquant`, `cwebp`,
+/// `gifsicle`, `ffmpeg`) in Homebrew, `/usr/local/bin`, `/usr/bin`, and `PATH`.
+enum ExternalCodecCatalog {
+    static let codecNames: [String] = ["oxipng", "pngquant", "cwebp", "gifsicle", "ffmpeg"]
+
+    static func searchDirectories(environment: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+        var candidates = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+        if let pathEnv = environment["PATH"], !pathEnv.isEmpty {
+            candidates.append(contentsOf: pathEnv.split(separator: ":").map(String.init))
+        }
+        var seen = Set<String>()
+        return candidates.filter { dir in
+            let trimmed = dir.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else { return false }
+            seen.insert(trimmed)
+            return true
+        }
+    }
+
+    static func executablePath(for name: String,
+                               searchDirectories: [String] = searchDirectories(),
+                               fileManager: FileManager = .default) -> String? {
+        for directory in searchDirectories {
+            let path = URL(fileURLWithPath: directory, isDirectory: true)
+                .appendingPathComponent(name, isDirectory: false)
+                .path
+            if fileManager.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    static func discover(environment: [String: String] = ProcessInfo.processInfo.environment,
+                         fileManager: FileManager = .default) -> [ExternalMediaCodec] {
+        let dirs = searchDirectories(environment: environment)
+        return codecNames.map { name in
+            ExternalMediaCodec(
+                id: name,
+                name: name,
+                executablePath: executablePath(for: name, searchDirectories: dirs, fileManager: fileManager)
+            )
+        }
+    }
+}
+
 /// Watches screenshot and Desktop folders when opt-in auto-optimization is enabled,
 /// debounces newly landed images/videos until size stabilizes, keeps a temporary
 /// backup for 1-click undo, and replaces files when compression saves > 5%.
@@ -28,6 +83,7 @@ final class MediaAutoOptimizerService: ObservableObject {
 
     @Published private(set) var lastSavingsSummary: SavingsSummary?
     @Published private(set) var isWatching = false
+    @Published private(set) var externalCodecs: [ExternalMediaCodec]
 
     private nonisolated let queue = DispatchQueue(label: "com.vorssaint.utils.media-auto-optimizer", qos: .utility)
     private nonisolated(unsafe) var sources: [DispatchSourceFileSystemObject] = []
@@ -36,9 +92,21 @@ final class MediaAutoOptimizerService: ObservableObject {
     private nonisolated(unsafe) var pendingPaths: Set<String> = []
     private nonisolated(unsafe) var processedPaths: Set<String> = []
     private nonisolated let stateLock = NSLock()
-    private nonisolated static let supportedExtensions: Set<String> = ["png", "jpg", "jpeg", "mp4", "mov"]
+    private nonisolated static let supportedExtensions: Set<String> = ["png", "jpg", "jpeg", "webp", "gif", "mp4", "mov"]
 
-    private init() {}
+    private init() {
+        self.externalCodecs = ExternalCodecCatalog.discover()
+    }
+
+    func refreshExternalCodecs() {
+        queue.async { [weak self] in
+            let discovered = ExternalCodecCatalog.discover()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.externalCodecs != discovered else { return }
+                self.externalCodecs = discovered
+            }
+        }
+    }
 
     nonisolated static func compressionSavingsPercent(before: Int64, after: Int64) -> Int {
         guard before > 0, after >= 0, after < before else { return 0 }
@@ -47,6 +115,7 @@ final class MediaAutoOptimizerService: ObservableObject {
     }
 
     func syncWithPreferences() {
+        refreshExternalCodecs()
         let enabled = UserDefaults.standard.bool(forKey: Self.enabledDefaultsKey)
         if enabled {
             start()
@@ -61,6 +130,7 @@ final class MediaAutoOptimizerService: ObservableObject {
     }
 
     func start() {
+        refreshExternalCodecs()
         let directories = Self.targetDirectories()
         queue.async { [weak self] in
             self?.startOnQueue(directories: directories)
@@ -249,17 +319,28 @@ final class MediaAutoOptimizerService: ObservableObject {
             return
         }
         let ext = url.pathExtension.lowercased()
-        if ext == "png" || ext == "jpg" || ext == "jpeg" {
-            let resultURL = optimizeImage(at: url, ext: ext)
+        let codecs = ExternalCodecCatalog.discover()
+        switch ext {
+        case "png":
+            let resultURL = Self.optimizePNG(at: url, codecs: codecs)
             finalizeOptimization(originalURL: url, originalBytes: originalBytes, candidateOutputURL: resultURL)
-        } else if ext == "mp4" || ext == "mov" {
+        case "jpg", "jpeg":
+            let resultURL = Self.optimizeImageNative(at: url, ext: ext)
+            finalizeOptimization(originalURL: url, originalBytes: originalBytes, candidateOutputURL: resultURL)
+        case "webp":
+            let resultURL = Self.optimizeWebP(at: url, codecs: codecs)
+            finalizeOptimization(originalURL: url, originalBytes: originalBytes, candidateOutputURL: resultURL)
+        case "gif":
+            let resultURL = Self.optimizeGIF(at: url, codecs: codecs)
+            finalizeOptimization(originalURL: url, originalBytes: originalBytes, candidateOutputURL: resultURL)
+        case "mp4", "mov":
             Task.detached(priority: .utility) { [weak self] in
-                let resultURL = await Self.optimizeVideo(at: url, ext: ext)
+                let resultURL = await Self.optimizeVideo(at: url, ext: ext, codecs: codecs)
                 self?.queue.async {
                     self?.finalizeOptimization(originalURL: url, originalBytes: originalBytes, candidateOutputURL: resultURL)
                 }
             }
-        } else {
+        default:
             finishPending(path: url.path)
         }
     }
@@ -311,14 +392,176 @@ final class MediaAutoOptimizerService: ObservableObject {
         }
     }
 
-    private nonisolated func optimizeImage(at url: URL, ext: String) -> URL? {
+    // MARK: - Clop Pro External Codec Bridge & Native Fallbacks
+
+    nonisolated static func optimizePNG(
+        at url: URL,
+        codecs: [ExternalMediaCodec] = ExternalCodecCatalog.discover()
+    ) -> URL? {
+        let originalBytes = fileByteSize(at: url)
+        var losslessCandidate: URL?
+
+        if let oxipng = executablePath(named: "oxipng", in: codecs) {
+            let tempURL = tempOutputURL(fileExtension: "png")
+            if runBoundedCodecProcess(
+                executablePath: oxipng,
+                arguments: ["-o", "3", "--strip", "safe", "--out", tempURL.path, url.path],
+                timeout: 20
+            ), let valid = validatedNonEmptyOutput(at: tempURL) {
+                let saved = compressionSavingsPercent(before: originalBytes, after: fileByteSize(at: valid))
+                if saved > 5 {
+                    return valid
+                }
+                losslessCandidate = valid
+            } else {
+                try? FileManager.default.removeItem(at: tempURL)
+            }
+        }
+
+        if let pngquant = executablePath(named: "pngquant", in: codecs) {
+            let tempURL = tempOutputURL(fileExtension: "png")
+            if runBoundedCodecProcess(
+                executablePath: pngquant,
+                arguments: ["--quality=70-92", "--skip-if-larger", "--strip", "--output", tempURL.path, "--", url.path],
+                timeout: 20
+            ), let valid = validatedNonEmptyOutput(at: tempURL) {
+                if let losslessCandidate {
+                    try? FileManager.default.removeItem(at: losslessCandidate)
+                }
+                return valid
+            } else {
+                try? FileManager.default.removeItem(at: tempURL)
+            }
+        }
+
+        if let losslessCandidate {
+            return losslessCandidate
+        }
+        return optimizeImageNative(at: url, ext: "png")
+    }
+
+    nonisolated static func optimizeWebP(
+        at url: URL,
+        codecs: [ExternalMediaCodec] = ExternalCodecCatalog.discover()
+    ) -> URL? {
+        if let cwebp = executablePath(named: "cwebp", in: codecs) {
+            let tempURL = tempOutputURL(fileExtension: "webp")
+            if runBoundedCodecProcess(
+                executablePath: cwebp,
+                arguments: ["-q", "80", "-mt", url.path, "-o", tempURL.path],
+                timeout: 20
+            ), let valid = validatedNonEmptyOutput(at: tempURL) {
+                return valid
+            }
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+        return optimizeWebPNativeFallback(at: url)
+    }
+
+    nonisolated static func optimizeGIF(
+        at url: URL,
+        codecs: [ExternalMediaCodec] = ExternalCodecCatalog.discover()
+    ) -> URL? {
+        if let gifsicle = executablePath(named: "gifsicle", in: codecs) {
+            let tempURL = tempOutputURL(fileExtension: "gif")
+            if runBoundedCodecProcess(
+                executablePath: gifsicle,
+                arguments: ["-O3", "--lossy=80", url.path, "-o", tempURL.path],
+                timeout: 25
+            ), let valid = validatedNonEmptyOutput(at: tempURL) {
+                return valid
+            }
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+        return nil
+    }
+
+    nonisolated static func optimizeVideo(
+        at url: URL,
+        ext: String,
+        codecs: [ExternalMediaCodec] = ExternalCodecCatalog.discover()
+    ) async -> URL? {
+        if let ffmpeg = executablePath(named: "ffmpeg", in: codecs) {
+            let tempURL = tempOutputURL(fileExtension: ext)
+            let ok = await runBoundedCodecProcessAsync(
+                executablePath: ffmpeg,
+                arguments: [
+                    "-y", "-i", url.path,
+                    "-c:v", "libx264", "-crf", "24", "-preset", "medium",
+                    "-movflags", "+faststart",
+                    "-c:a", "aac", "-b:a", "128k",
+                    tempURL.path,
+                ],
+                timeout: 60
+            )
+            if ok, let valid = validatedNonEmptyOutput(at: tempURL) {
+                return valid
+            }
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+        return await optimizeVideoNative(at: url, ext: ext)
+    }
+
+    private nonisolated static func executablePath(named name: String, in codecs: [ExternalMediaCodec]) -> String? {
+        codecs.first(where: { $0.name == name })?.executablePath
+    }
+
+    private nonisolated static func tempOutputURL(fileExtension: String) -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("vorssaint-opt-\(UUID().uuidString).\(fileExtension)")
+    }
+
+    private nonisolated static func fileByteSize(at url: URL) -> Int64 {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+    }
+
+    private nonisolated static func validatedNonEmptyOutput(at url: URL) -> URL? {
+        guard FileManager.default.fileExists(atPath: url.path), fileByteSize(at: url) > 0 else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        return url
+    }
+
+    private nonisolated static func runBoundedCodecProcess(
+        executablePath: String,
+        arguments: [String],
+        timeout: TimeInterval
+    ) -> Bool {
+        let result = BoundedProcessRunner.run(
+            executablePath,
+            arguments,
+            timeout: timeout,
+            maxOutputBytes: 64 * 1024
+        )
+        return !result.timedOut && result.status == 0
+    }
+
+    private nonisolated static func runBoundedCodecProcessAsync(
+        executablePath: String,
+        arguments: [String],
+        timeout: TimeInterval
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let ok = runBoundedCodecProcess(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    timeout: timeout
+                )
+                continuation.resume(returning: ok)
+            }
+        }
+    }
+
+    private nonisolated static func optimizeImageNative(at url: URL, ext: String) -> URL? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             return nil
         }
         let targetType: UTType = (ext == "png") ? .png : .jpeg
-        let tempURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("vorssaint-opt-\(UUID().uuidString).\(ext)")
+        let tempURL = tempOutputURL(fileExtension: ext)
         guard let destination = CGImageDestinationCreateWithURL(
             tempURL as CFURL,
             targetType.identifier as CFString,
@@ -339,7 +582,29 @@ final class MediaAutoOptimizerService: ObservableObject {
         return tempURL
     }
 
-    private nonisolated static func optimizeVideo(at url: URL, ext: String) async -> URL? {
+    private nonisolated static func optimizeWebPNativeFallback(at url: URL) -> URL? {
+        let webpType = UTType.webP.identifier
+        let supportedTypes = (CGImageDestinationCopyTypeIdentifiers() as? [String]) ?? []
+        guard supportedTypes.contains(webpType),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+        let tempURL = tempOutputURL(fileExtension: "webp")
+        guard let destination = CGImageDestinationCreateWithURL(tempURL as CFURL, webpType as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, cgImage, [
+            kCGImageDestinationLossyCompressionQuality: 0.80,
+        ] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            try? FileManager.default.removeItem(at: tempURL)
+            return nil
+        }
+        return tempURL
+    }
+
+    private nonisolated static func optimizeVideoNative(at url: URL, ext: String) async -> URL? {
         let asset = AVURLAsset(url: url)
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
             return nil
@@ -353,8 +618,7 @@ final class MediaAutoOptimizerService: ObservableObject {
         guard compatible else {
             return nil
         }
-        let tempURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("vorssaint-opt-\(UUID().uuidString).\(ext)")
+        let tempURL = tempOutputURL(fileExtension: ext)
         session.outputURL = tempURL
         session.outputFileType = targetFileType
         session.shouldOptimizeForNetworkUse = true

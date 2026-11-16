@@ -75,6 +75,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         // Before any window exists, so nothing is ever built with the wrong
         // appearance and then repainted.
         AppAppearanceController.shared.apply()
+
+        if let snapshotDir = ProcessInfo.processInfo.environment["VORSSAINT_SURFACE_SNAPSHOT_DIR"],
+           !snapshotDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            FeaturePreset.prepareFirstRunAvailability()
+            DispatchQueue.main.async {
+                VorssaintSurfaceSnapshotHarness.captureAllAndExit(toDirectoryPath: snapshotDir)
+            }
+            return
+        }
+
         GlobalShortcut.startObservingKeyboardLayout()
         // UNUserNotificationCenter aborts in a process without a bundle;
         // guard keeps ad-hoc runs of the bare binary alive for probing.

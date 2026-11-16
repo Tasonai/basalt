@@ -56,6 +56,7 @@ struct MediaWorkspaceView: View {
     @ObservedObject private var autoOptimizer = MediaAutoOptimizerService.shared
     @AppStorage(MediaAutoOptimizerService.enabledDefaultsKey) private var autoOptimizeEnabled = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.notchPresentation) private var inNotch
 
     @AppStorage(DefaultsKey.mediaLastTool) private var toolRaw = MediaTool.videoCompressor.rawValue
@@ -202,6 +203,7 @@ struct MediaWorkspaceView: View {
     var body: some View {
         layout
         .onAppear {
+            autoOptimizer.refreshExternalCodecs()
             if !workspace.loadedInitialInputs {
                 workspace.loadedInitialInputs = true
                 if let initialTool {
@@ -307,8 +309,8 @@ struct MediaWorkspaceView: View {
 
     private var autoOptimizeBannerCard: some View {
         let v2 = OverhaulV2Strings.localized(l10n.language)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+        return VStack(alignment: .leading, spacing: DesignSpace.sm) {
+            HStack(spacing: DesignSpace.sm) {
                 Toggle(isOn: Binding(
                     get: { autoOptimizeEnabled },
                     set: { newValue in
@@ -329,7 +331,7 @@ struct MediaWorkspaceView: View {
                 .toggleStyle(VorssaintCompactSwitchStyle())
                 .controlSize(.mini)
 
-                Spacer(minLength: 4)
+                Spacer(minLength: DesignSpace.xs)
 
                 if let summary = autoOptimizer.lastSavingsSummary {
                     HStack(spacing: 6) {
@@ -343,25 +345,93 @@ struct MediaWorkspaceView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
 
-                        Button(v2.clopUndoButton) {
+                        VorssaintActionChip(title: v2.clopUndoButton, symbol: "arrow.uturn.backward", tone: .tools) {
                             _ = autoOptimizer.undoLastOptimization()
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
                     }
                 }
             }
+
+            externalCodecsRow
         }
-        .padding(.horizontal, compact ? 10 : 12)
-        .padding(.vertical, compact ? 7 : 9)
+        .padding(.horizontal, compact ? DesignSpace.md - 2 : DesignSpace.md)
+        .padding(.vertical, compact ? DesignSpace.sm : DesignSpace.sm + 2)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
                 .fill(Color.primary.opacity(colorScheme == .dark ? 0.06 : 0.04))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
                         .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
                 )
         )
+    }
+
+    private var externalCodecsRow: some View {
+        let v3 = OverhaulV3Strings.localized(l10n.language)
+        let badgeTitle = v3[keyPath: \OverhaulV3Strings.clopExternalToolsBadge]
+        let codecs = autoOptimizer.externalCodecs
+        let installedCount = codecs.filter(\.isInstalled).count
+        let toolsTone = SemanticCategoryTone.tools.color(
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
+
+        return VStack(alignment: .leading, spacing: DesignSpace.xs) {
+            HStack(spacing: DesignSpace.xs + 2) {
+                Label(badgeTitle, systemImage: "terminal.fill")
+                    .font(.system(size: compact ? 9.5 : 10, weight: .semibold))
+                    .foregroundStyle(toolsTone)
+                    .lineLimit(1)
+
+                Text("\(installedCount)/\(codecs.count)")
+                    .font(.system(size: 9, weight: .bold).monospacedDigit())
+                    .foregroundStyle(installedCount > 0 ? toolsTone : Color.secondary)
+                    .padding(.horizontal, DesignSpace.xs + 1)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill((installedCount > 0 ? toolsTone : Color.primary).opacity(colorScheme == .dark ? 0.14 : 0.09))
+                    )
+
+                Spacer(minLength: 0)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: compact ? 68 : 76), spacing: DesignSpace.xs, alignment: .leading)],
+                alignment: .leading,
+                spacing: DesignSpace.xs
+            ) {
+                ForEach(codecs) { codec in
+                    externalCodecPill(codec, tone: toolsTone)
+                }
+            }
+        }
+    }
+
+    private func externalCodecPill(_ codec: ExternalMediaCodec, tone: Color) -> some View {
+        HStack(spacing: DesignSpace.xs) {
+            Image(systemName: codec.isInstalled ? "checkmark.circle.fill" : "circle.dashed")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(codec.isInstalled ? tone : Color.secondary.opacity(0.6))
+            Text(codec.name)
+                .font(.system(size: compact ? 9.5 : 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(codec.isInstalled ? .primary : .secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, DesignSpace.sm - 1)
+        .padding(.vertical, DesignSpace.xxs + 1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            Capsule(style: .continuous)
+                .fill(codec.isInstalled
+                      ? tone.opacity(colorScheme == .dark ? 0.16 : 0.11)
+                      : Color.primary.opacity(colorScheme == .dark ? 0.05 : 0.04))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(codec.isInstalled ? tone.opacity(0.32) : Color.primary.opacity(0.08), lineWidth: 0.75)
+        )
+        .help(codec.executablePath ?? codec.name)
     }
 
     @ViewBuilder private var inputDropTarget: some View {
