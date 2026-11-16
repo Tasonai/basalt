@@ -94,6 +94,7 @@ enum LocalizationTests {
                 ("shelfDelivery", { ShelfPromiseDeliveryStrings.localized($0) }),
                 ("overhaul", { OverhaulStrings.localized($0) }),
                 ("overhaulWave2", { OverhaulStrings.wave2($0) }),
+                ("overhaulWave3", { OverhaulStrings.wave3($0) }),
             ]
             for (name, factory) in factories + additional {
                 check(factory(language), against: factory(.enUS),

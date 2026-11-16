@@ -240,7 +240,9 @@ enum TextSnippetSupport {
         timeFormatter.timeStyle = .short
         let dateText = dateFormatter.string(from: date)
         let timeText = timeFormatter.string(from: date)
-        let expanded = replacement
+        var expanded = TextSnippetProEngine.resolveArguments(in: replacement, values: [:])
+        expanded = TextSnippetProEngine.resolveDateArithmetic(in: expanded, baseDate: date, locale: locale)
+        expanded = expanded
             .replacingOccurrences(of: "{{date}}", with: dateText)
             .replacingOccurrences(of: "{{time}}", with: timeText)
             .replacingOccurrences(of: "{{datetime}}", with: "\(dateText) \(timeText)")

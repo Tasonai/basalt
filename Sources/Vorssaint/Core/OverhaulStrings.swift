@@ -857,4 +857,301 @@ extension OverhaulStrings {
     static func wave2(_ language: AppLanguage) -> OverhaulWave2Strings {
         OverhaulWave2Strings.localized(language)
     }
+
+    static func wave3(_ language: AppLanguage) -> OverhaulWave3Strings {
+        OverhaulWave3Strings.localized(language)
+    }
+}
+
+struct OverhaulWave3Strings: Equatable {
+    let quickAITitle: String
+    let quickAIPlaceholder: String
+    let quickAIThinking: String
+    let layoutListLabel: String
+    let layoutSplitLabel: String
+    let layoutGridLabel: String
+    let pinboardAllLabel: String
+    let pasteStackTitle: String
+    let pasteStackCountFormat: String
+    let transformMenuTitle: String
+    let syncVaultTitle: String
+    let parametricEQTitle: String
+    let eqPresetLabel: String
+    let micNoiseGateLabel: String
+    let micLevelerLabel: String
+
+    static func localized(_ language: AppLanguage) -> OverhaulWave3Strings {
+        switch language {
+        case .enUS:
+            return OverhaulWave3Strings(
+                quickAITitle: "Quick AI",
+                quickAIPlaceholder: "Ask Ollama, CLI or connected model...",
+                quickAIThinking: "Thinking...",
+                layoutListLabel: "List",
+                layoutSplitLabel: "Split Detail",
+                layoutGridLabel: "Grid",
+                pinboardAllLabel: "All Pinboards",
+                pasteStackTitle: "Paste Stack",
+                pasteStackCountFormat: "Stack: %d",
+                transformMenuTitle: "Transform",
+                syncVaultTitle: "Encrypted Sync Vault",
+                parametricEQTitle: "10-Band Parametric EQ",
+                eqPresetLabel: "EQ Profile",
+                micNoiseGateLabel: "Mic Noise Gate",
+                micLevelerLabel: "Auto Speech Leveler"
+            )
+        case .ru:
+            return OverhaulWave3Strings(
+                quickAITitle: "Быстрый ИИ",
+                quickAIPlaceholder: "Спросите Ollama, CLI или модель...",
+                quickAIThinking: "Думаю...",
+                layoutListLabel: "Список",
+                layoutSplitLabel: "С деталями",
+                layoutGridLabel: "Сетка",
+                pinboardAllLabel: "Все доски",
+                pasteStackTitle: "Стек вставки",
+                pasteStackCountFormat: "Стек: %d",
+                transformMenuTitle: "Преобразовать",
+                syncVaultTitle: "Шифрованное хранилище",
+                parametricEQTitle: "10-полосный параметрический EQ",
+                eqPresetLabel: "Профиль EQ",
+                micNoiseGateLabel: "Шумоподавление микрофона",
+                micLevelerLabel: "Выравнивание громкости речи"
+            )
+        case .ptBR:
+            return OverhaulWave3Strings(
+                quickAITitle: "IA Rapida",
+                quickAIPlaceholder: "Pergunte ao Ollama, CLI ou modelo...",
+                quickAIThinking: "Pensando...",
+                layoutListLabel: "Lista",
+                layoutSplitLabel: "Detalhe dividido",
+                layoutGridLabel: "Grade",
+                pinboardAllLabel: "Todos os paineis",
+                pasteStackTitle: "Pilha de colagem",
+                pasteStackCountFormat: "Pilha: %d",
+                transformMenuTitle: "Transformar",
+                syncVaultTitle: "Cofre criptografado",
+                parametricEQTitle: "EQ parametrico de 10 bandas",
+                eqPresetLabel: "Perfil de EQ",
+                micNoiseGateLabel: "Noise gate do microfone",
+                micLevelerLabel: "Nivelador de voz"
+            )
+        case .tr:
+            return OverhaulWave3Strings(
+                quickAITitle: "Hizli Yapay Zeka",
+                quickAIPlaceholder: "Ollama, CLI veya bagli modele sor...",
+                quickAIThinking: "Dusunuyor...",
+                layoutListLabel: "Liste",
+                layoutSplitLabel: "Bolunmus Detay",
+                layoutGridLabel: "Izgara",
+                pinboardAllLabel: "Tum Panolar",
+                pasteStackTitle: "Yapistirma Yigini",
+                pasteStackCountFormat: "Yigin: %d",
+                transformMenuTitle: "Donustur",
+                syncVaultTitle: "Sifreli Kasa",
+                parametricEQTitle: "10 Bant Parametrik EQ",
+                eqPresetLabel: "EQ Profili",
+                micNoiseGateLabel: "Mikrofon Gurultu Kapisi",
+                micLevelerLabel: "Otomatik Ses Dengeleyici"
+            )
+        case .es:
+            return OverhaulWave3Strings(
+                quickAITitle: "IA Rapida",
+                quickAIPlaceholder: "Pregunta a Ollama, CLI o modelo...",
+                quickAIThinking: "Pensando...",
+                layoutListLabel: "Lista",
+                layoutSplitLabel: "Detalle dividido",
+                layoutGridLabel: "Cuadricula",
+                pinboardAllLabel: "Todos los tableros",
+                pasteStackTitle: "Pila de pegado",
+                pasteStackCountFormat: "Pila: %d",
+                transformMenuTitle: "Transformar",
+                syncVaultTitle: "Boveda cifrada",
+                parametricEQTitle: "Ecualizador parametrico de 10 bandas",
+                eqPresetLabel: "Perfil EQ",
+                micNoiseGateLabel: "Puerta de ruido del microfono",
+                micLevelerLabel: "Nivelador automatico de voz"
+            )
+        case .sk:
+            return OverhaulWave3Strings(
+                quickAITitle: "Rychla AI",
+                quickAIPlaceholder: "Opytajte sa Ollama, CLI alebo modelu...",
+                quickAIThinking: "Rozmyslam...",
+                layoutListLabel: "Zoznam",
+                layoutSplitLabel: "Rozdeleny detail",
+                layoutGridLabel: "Mriezka",
+                pinboardAllLabel: "Vsetky nastenky",
+                pasteStackTitle: "Zasobnik vkladania",
+                pasteStackCountFormat: "Zasobnik: %d",
+                transformMenuTitle: "Transformovat",
+                syncVaultTitle: "Sifrovany trezor",
+                parametricEQTitle: "10-pasmovy parametricky EQ",
+                eqPresetLabel: "Profil EQ",
+                micNoiseGateLabel: "Sumova brana mikrofonu",
+                micLevelerLabel: "Vyrovnavanie reci"
+            )
+        case .de:
+            return OverhaulWave3Strings(
+                quickAITitle: "Schnelle KI",
+                quickAIPlaceholder: "Ollama, CLI oder Modell fragen...",
+                quickAIThinking: "Denke nach...",
+                layoutListLabel: "Liste",
+                layoutSplitLabel: "Geteilte Ansicht",
+                layoutGridLabel: "Raster",
+                pinboardAllLabel: "Alle Pinnwaende",
+                pasteStackTitle: "Einfuege-Stapel",
+                pasteStackCountFormat: "Stapel: %d",
+                transformMenuTitle: "Umwandeln",
+                syncVaultTitle: "Verschluesselter Tresor",
+                parametricEQTitle: "10-Band-Parametrik-EQ",
+                eqPresetLabel: "EQ-Profil",
+                micNoiseGateLabel: "Mikrofon-Noise-Gate",
+                micLevelerLabel: "Sprachpegel-Automatik"
+            )
+        case .fr:
+            return OverhaulWave3Strings(
+                quickAITitle: "IA Rapide",
+                quickAIPlaceholder: "Demander a Ollama, CLI ou modele...",
+                quickAIThinking: "Reflexion...",
+                layoutListLabel: "Liste",
+                layoutSplitLabel: "Detail partage",
+                layoutGridLabel: "Grille",
+                pinboardAllLabel: "Tous les tableaux",
+                pasteStackTitle: "Pile de collage",
+                pasteStackCountFormat: "Pile : %d",
+                transformMenuTitle: "Transformer",
+                syncVaultTitle: "Coffre chiffre",
+                parametricEQTitle: "EQ parametrique 10 bandes",
+                eqPresetLabel: "Profil EQ",
+                micNoiseGateLabel: "Noise gate du micro",
+                micLevelerLabel: "Niveleur vocal auto"
+            )
+        case .it:
+            return OverhaulWave3Strings(
+                quickAITitle: "IA Rapida",
+                quickAIPlaceholder: "Chiedi a Ollama, CLI o modello...",
+                quickAIThinking: "Elaborazione...",
+                layoutListLabel: "Elenco",
+                layoutSplitLabel: "Dettaglio diviso",
+                layoutGridLabel: "Griglia",
+                pinboardAllLabel: "Tutte le bacheche",
+                pasteStackTitle: "Coda incolla",
+                pasteStackCountFormat: "Coda: %d",
+                transformMenuTitle: "Trasforma",
+                syncVaultTitle: "Cassaforte cifrata",
+                parametricEQTitle: "EQ parametrico 10 bande",
+                eqPresetLabel: "Profilo EQ",
+                micNoiseGateLabel: "Noise gate microfono",
+                micLevelerLabel: "Livellatore voce"
+            )
+        case .ja:
+            return OverhaulWave3Strings(
+                quickAITitle: "クイック AI",
+                quickAIPlaceholder: "Ollama や CLI、モデルに質問...",
+                quickAIThinking: "思考中...",
+                layoutListLabel: "リスト",
+                layoutSplitLabel: "分割詳細",
+                layoutGridLabel: "グリッド",
+                pinboardAllLabel: "すべて",
+                pasteStackTitle: "ペーストスタック",
+                pasteStackCountFormat: "スタック: %d",
+                transformMenuTitle: "変換",
+                syncVaultTitle: "暗号化同期ボールト",
+                parametricEQTitle: "10バンド パラメトリックEQ",
+                eqPresetLabel: "EQ プロファイル",
+                micNoiseGateLabel: "マイク ノイズゲート",
+                micLevelerLabel: "音声オートレベラー"
+            )
+        case .ko:
+            return OverhaulWave3Strings(
+                quickAITitle: "빠른 AI",
+                quickAIPlaceholder: "Ollama, CLI 또는 모델에 질문...",
+                quickAIThinking: "생각 중...",
+                layoutListLabel: "목록",
+                layoutSplitLabel: "분할 상세",
+                layoutGridLabel: "그리드",
+                pinboardAllLabel: "모든 보드",
+                pasteStackTitle: "붙여넣기 스택",
+                pasteStackCountFormat: "스택: %d",
+                transformMenuTitle: "변환",
+                syncVaultTitle: "암호화 동기화 보관함",
+                parametricEQTitle: "10밴드 파라메트릭 EQ",
+                eqPresetLabel: "EQ 프로필",
+                micNoiseGateLabel: "마이크 노이즈 게이트",
+                micLevelerLabel: "자동 음성 레벨러"
+            )
+        case .uk:
+            return OverhaulWave3Strings(
+                quickAITitle: "Швидкий ШІ",
+                quickAIPlaceholder: "Запитайте Ollama, CLI або модель...",
+                quickAIThinking: "Міркую...",
+                layoutListLabel: "Список",
+                layoutSplitLabel: "Із деталями",
+                layoutGridLabel: "Сітка",
+                pinboardAllLabel: "Усі дошки",
+                pasteStackTitle: "Стек вставлення",
+                pasteStackCountFormat: "Стек: %d",
+                transformMenuTitle: "Перетворити",
+                syncVaultTitle: "Шифроване сховище",
+                parametricEQTitle: "10-смуговий параметричний EQ",
+                eqPresetLabel: "Профіль EQ",
+                micNoiseGateLabel: "Шумозаглушення мікрофона",
+                micLevelerLabel: "Вирівнювання мовлення"
+            )
+        case .zhHans:
+            return OverhaulWave3Strings(
+                quickAITitle: "快速 AI",
+                quickAIPlaceholder: "向 Ollama、CLI 或模型提问...",
+                quickAIThinking: "思考中...",
+                layoutListLabel: "列表",
+                layoutSplitLabel: "分栏详情",
+                layoutGridLabel: "网格",
+                pinboardAllLabel: "全部看板",
+                pasteStackTitle: "粘贴队列",
+                pasteStackCountFormat: "队列: %d",
+                transformMenuTitle: "格式转换",
+                syncVaultTitle: "加密同步保险库",
+                parametricEQTitle: "10 段参量均衡器",
+                eqPresetLabel: "EQ 预设",
+                micNoiseGateLabel: "麦克风噪声门",
+                micLevelerLabel: "自动人声电平"
+            )
+        case .zhTW:
+            return OverhaulWave3Strings(
+                quickAITitle: "快速 AI",
+                quickAIPlaceholder: "向 Ollama、CLI 或模型提問...",
+                quickAIThinking: "思考中...",
+                layoutListLabel: "列表",
+                layoutSplitLabel: "分割詳情",
+                layoutGridLabel: "格狀",
+                pinboardAllLabel: "所有看板",
+                pasteStackTitle: "貼上佇列",
+                pasteStackCountFormat: "佇列: %d",
+                transformMenuTitle: "格式轉換",
+                syncVaultTitle: "加密同步保險庫",
+                parametricEQTitle: "10 段參數等化器",
+                eqPresetLabel: "EQ 描述檔",
+                micNoiseGateLabel: "麥克風雜訊閘",
+                micLevelerLabel: "自動人聲電平"
+            )
+        case .zhHK:
+            return OverhaulWave3Strings(
+                quickAITitle: "快速 AI",
+                quickAIPlaceholder: "向 Ollama、CLI 或模型提問...",
+                quickAIThinking: "思考緊...",
+                layoutListLabel: "列表",
+                layoutSplitLabel: "分欄詳情",
+                layoutGridLabel: "格狀",
+                pinboardAllLabel: "全部看板",
+                pasteStackTitle: "貼上佇列",
+                pasteStackCountFormat: "佇列: %d",
+                transformMenuTitle: "轉換格式",
+                syncVaultTitle: "加密同步保險庫",
+                parametricEQTitle: "10 段參數均衡器",
+                eqPresetLabel: "EQ 預設",
+                micNoiseGateLabel: "咪高風降噪閘",
+                micLevelerLabel: "自動人聲平衡"
+            )
+        }
+    }
 }

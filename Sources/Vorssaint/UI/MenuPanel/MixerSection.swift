@@ -560,8 +560,18 @@ struct MixerOptionsControls: View {
     private var headphonesDisconnectVolumePercent = Defaults.defaultMixerHeadphonesDisconnectVolumePercent
     @AppStorage(DefaultsKey.preciseVolumeRollerEnabled)
     private var preciseVolumeRollerEnabled = false
+    @AppStorage(DefaultsKey.mixerParametricEQPresetID)
+    private var eqPresetID = "flat"
+    @AppStorage(DefaultsKey.mixerMicNoiseGateEnabled)
+    private var micNoiseGateEnabled = false
+    @AppStorage(DefaultsKey.mixerMicLevelerEnabled)
+    private var micLevelerEnabled = false
     @State private var showListChooser = false
     var includeSharedAudioFeatures = true
+
+    private var wave3Strings: OverhaulWave3Strings {
+        OverhaulStrings.wave3(l10n.language)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -570,6 +580,7 @@ struct MixerOptionsControls: View {
             }
             headphoneDisconnectProtectionToggle
             preciseVolumeRollerToggle
+            parametricEQAndMicControls
             if includeSharedAudioFeatures, AppFeature.soundOutputSwitcher.isAvailable {
                 SoundOutputSwitcherControls()
             }
@@ -579,6 +590,46 @@ struct MixerOptionsControls: View {
             if AppVolumeMixer.isSupported, !listChoices.isEmpty {
                 listVisibilityFooter
             }
+        }
+    }
+
+    private var selectedEQPreset: MixerEQPreset {
+        MixerEQPreset.builtInPresets.first { $0.id == eqPresetID } ?? MixerEQPreset.builtInPresets[0]
+    }
+
+    private var parametricEQAndMicControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Label(wave3Strings.parametricEQTitle, systemImage: "slider.vertical.3")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Picker(wave3Strings.eqPresetLabel, selection: $eqPresetID) {
+                    ForEach(MixerEQPreset.builtInPresets) { preset in
+                        Text(preset.name).tag(preset.id)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .frame(width: 146)
+            }
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(Array(selectedEQPreset.gainsDB.enumerated()), id: \.offset) { _, gain in
+                    let normalized = CGFloat(min(max((gain + 6.0) / 12.0, 0.08), 1.0))
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(abs(gain) < 0.05 ? Color.secondary.opacity(0.35) : Color.accentColor)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: max(3, 18 * normalized))
+                }
+            }
+            .frame(height: 20)
+            Toggle(wave3Strings.micNoiseGateLabel, isOn: $micNoiseGateEnabled)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11, weight: .medium))
+            Toggle(wave3Strings.micLevelerLabel, isOn: $micLevelerEnabled)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11, weight: .medium))
         }
     }
 

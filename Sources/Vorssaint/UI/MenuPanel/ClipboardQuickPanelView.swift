@@ -6,6 +6,8 @@ import SwiftUI
 struct ClipboardQuickPanelView: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var history = ClipboardHistoryService.shared
+    @ObservedObject private var pinboards = ClipboardPinboardStore.shared
+    @ObservedObject private var pasteStack = ClipboardPasteStack.shared
     @AppStorage(DefaultsKey.clipboardHistoryShowSourceAppIcons) private var showSourceAppIcons = false
     @FocusState private var searchFocused: Bool
     @State private var previewSelection = QuickPreviewSelection()
@@ -16,8 +18,12 @@ struct ClipboardQuickPanelView: View {
         FeatureStrings.clipboard(l10n.language)
     }
 
+    private var wave3Strings: OverhaulWave3Strings {
+        OverhaulStrings.wave3(l10n.language)
+    }
+
     private var filtered: [ClipboardHistoryEntry] {
-        history.filteredQuickEntries
+        pinboards.entries(in: pinboards.activePinboardID, from: history.filteredQuickEntries)
     }
 
     private var canReorderEntries: Bool {
@@ -35,6 +41,7 @@ struct ClipboardQuickPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
+            pinboardStrip
             Divider()
             HStack(spacing: 0) {
                 content
@@ -310,6 +317,30 @@ struct ClipboardQuickPanelView: View {
                 .modifier(ClipboardClearRecentConfirmation(entryIDs: $clearingIDs))
             }
             Spacer()
+            if pasteStack.isActive {
+                HStack(spacing: 4) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                    Text(String(format: wave3Strings.pasteStackCountFormat, pasteStack.count))
+                }
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Color.accentColor.opacity(0.14), in: Capsule())
+            }
+            if let selected = history.selectedQuickEntry, selected.kind == .text {
+                Menu(wave3Strings.transformMenuTitle) {
+                    ForEach(ClipboardTransformKind.allCases) { kind in
+                        Button(kind.rawValue) {
+                            if let transformed = ClipboardTransformEngine.apply(kind, to: selected.text) {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(transformed, forType: .string)
+                            }
+                        }
+                    }
+                }
+                .controlSize(.mini)
+            }
             HStack(spacing: 5) {
                 Image(systemName: "doc.on.clipboard")
                 Text("\(history.entries.count)")
@@ -320,6 +351,58 @@ struct ClipboardQuickPanelView: View {
         .controlSize(.small)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var pinboardStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                Button {
+                    pinboards.activePinboardID = nil
+                } label: {
+                    Text(wave3Strings.pinboardAllLabel)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(pinboards.activePinboardID == nil
+                                           ? Color.accentColor.opacity(0.18)
+                                           : Color.primary.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
+                ForEach(pinboards.pinboards) { board in
+                    Button {
+                        pinboards.activePinboardID = board.id
+                    } label: {
+                        Text(board.name)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule().fill(pinboards.activePinboardID == board.id
+                                               ? Color.accentColor.opacity(0.18)
+                                               : Color.primary.opacity(0.06))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button {
+                    let count = pinboards.pinboards.count + 1
+                    let board = pinboards.createBoard(name: "Board \(count)")
+                    if let selected = history.selectedQuickEntry {
+                        pinboards.assignEntry(selected.id, to: board.id)
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+        }
     }
 
     private func shortcutIndex(for entry: ClipboardHistoryEntry) -> Int? {

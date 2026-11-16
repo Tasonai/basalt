@@ -42,9 +42,18 @@ struct CommandBarView: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var uninstaller = AppUninstaller.shared
     @ObservedObject private var homebrew = HomebrewManager.shared
+    @ObservedObject private var quickAI = CommandBarQuickAIService.shared
+    @AppStorage(DefaultsKey.commandBarLayoutMode) private var layoutModeRaw = CommandBarLayoutMode.list.rawValue
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var searchFocused: Bool
     @State private var showHomebrewDetails = false
+    @State private var showQuickAICard = false
+
+    private var wave3Strings: OverhaulWave3Strings { OverhaulStrings.wave3(l10n.language) }
+
+    private var layoutMode: CommandBarLayoutMode {
+        CommandBarLayoutMode(rawValue: layoutModeRaw) ?? .list
+    }
 
     /// The mark, made a handle. Dragging rides on AppKit's own window
     /// dragging — the same machinery a title bar uses — rather than a
@@ -181,6 +190,10 @@ struct CommandBarView: View {
                 Divider()
                 shortcutCard(entryID: entryID)
             }
+            if showQuickAICard || quickAI.isStreaming || !quickAI.responseText.isEmpty || quickAI.errorText != nil {
+                Divider()
+                quickAICard
+            }
             // A footer under a bare field reads as a second row of chrome on
             // something meant to be one strip.
             if !service.isCompactHome {
@@ -272,6 +285,43 @@ struct CommandBarView: View {
                 .disableAutocorrection(true)
                 .accessibilityLabel(text.pageTitle)
             if service.isCompactHome { compactHints }
+            Button {
+                let prompt = service.query.trimmingCharacters(in: .whitespacesAndNewlines)
+                if prompt.isEmpty {
+                    showQuickAICard.toggle()
+                } else {
+                    showQuickAICard = true
+                    quickAI.askLocalOllama(prompt: prompt)
+                }
+            } label: {
+                Image(systemName: quickAI.isStreaming ? "ellipsis.bubble.fill" : "sparkles")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(showQuickAICard || quickAI.isStreaming ? Color.accentColor : Color.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(wave3Strings.quickAITitle)
+            Menu {
+                ForEach(CommandBarLayoutMode.allCases, id: \.self) { mode in
+                    Button {
+                        layoutModeRaw = mode.rawValue
+                    } label: {
+                        HStack {
+                            Text(layoutModeTitle(mode))
+                            if layoutMode == mode { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: layoutMode == .grid ? "square.grid.2x2" : (layoutMode == .splitDetail ? "sidebar.right" : "list.bullet"))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
             if !service.query.isEmpty {
                 CommandBarClearButton {
                     service.query = ""
@@ -1200,6 +1250,61 @@ struct CommandBarView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
+
+    private func layoutModeTitle(_ mode: CommandBarLayoutMode) -> String {
+        switch mode {
+        case .list: return wave3Strings.layoutListLabel
+        case .splitDetail: return wave3Strings.layoutSplitLabel
+        case .grid: return wave3Strings.layoutGridLabel
+        }
+    }
+
+    private var quickAICard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Label(wave3Strings.quickAITitle, systemImage: "sparkles")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                if quickAI.isStreaming {
+                    Text(wave3Strings.quickAIThinking)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showQuickAICard = false
+                    quickAI.reset()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            if let error = quickAI.errorText, !error.isEmpty {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !quickAI.responseText.isEmpty {
+                ScrollView {
+                    Text(quickAI.responseText)
+                        .font(.system(size: 12))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 140)
+            } else {
+                Text(wave3Strings.quickAIPlaceholder)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
 }
 
 /// App and file icons resolved once and kept; NSWorkspace re-reads them from
@@ -1262,12 +1367,18 @@ enum CommandBarIconCache {
 /// matches.
 private struct CommandBarMascot: View {
     @ObservedObject var service: CommandBarService
+    @ObservedObject private var quickAI = CommandBarQuickAIService.shared
     @State private var cue: NotchMascotCue?
     @State private var cueID = 0
 
     private var mood: NotchMascotMood {
-        NotchMascotSupport.commandBarMood(query: service.query, hasResults: !service.rows.isEmpty,
-                                          searching: service.awaitsAnswers)
+        switch quickAI.dropletState {
+        case .thinking: return .thinking
+        case .celebrate: return .happy
+        case .idle:
+            return NotchMascotSupport.commandBarMood(query: service.query, hasResults: !service.rows.isEmpty,
+                                                     searching: service.awaitsAnswers)
+        }
     }
 
     var body: some View {
@@ -1277,6 +1388,11 @@ private struct CommandBarMascot: View {
             // Its eyes go along what is typed, and come back once typing stops.
             .onChange(of: service.query) { _, query in
                 cue = .look(NotchMascotSupport.readingGaze(for: query))
+                cueID += 1
+            }
+            .onChange(of: quickAI.dropletState) { _, newState in
+                guard newState == .celebrate else { return }
+                cue = .celebrate
                 cueID += 1
             }
             // After the look, so results arriving with a keystroke win.
