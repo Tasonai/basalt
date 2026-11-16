@@ -91,6 +91,10 @@ final class BrightnessService: ObservableObject {
     /// brightness keys last moved, or the one picked there. Nil shows the
     /// built-in panel.
     @Published var focusedDisplayID: CGDirectDisplayID?
+    @Published private(set) var ddcContrastLevels: [CGDirectDisplayID: Double] = [:]
+    @Published private(set) var ddcVolumeLevels: [CGDirectDisplayID: Double] = [:]
+    @Published private(set) var ddcMutedDisplays = Set<CGDirectDisplayID>()
+    @Published private(set) var ddcInputSources: [CGDirectDisplayID: DisplayInputSourcePreset] = [:]
 
     /// Whether the island's brightness slider is on and shows the focused
     /// display, so a key that moved it moves the slider.
@@ -198,6 +202,8 @@ final class BrightnessService: ObservableObject {
     /// the key presses that fill it (issue #370).
     private var ddcPendingSteps: [CGDirectDisplayID: Double] = [:]
     private var drainScheduled = false
+    private var pendingDDCProWrites: [CGDirectDisplayID: [DDCControlCode: UInt16]] = [:]
+    private var ddcProDrainScheduled = false
     /// Session memory for write-only monitors, so their slider does not jump
     /// back to a placeholder between panel openings. Each value remembers
     /// which physical monitor it belonged to: display numbers are handed out
@@ -324,6 +330,9 @@ final class BrightnessService: ObservableObject {
         }
         keyboardBrightnessIncreaseHotkey.onPress = { [weak self] in
             self?.stepKeyboardLight(direction: 1)
+        }
+        AmbientLightSyncService.shared.onTargetBrightnessChanged = { [weak self] target in
+            self?.syncExternalDDCDisplays(toNormalizedBrightness: target)
         }
     }
 
@@ -481,6 +490,10 @@ final class BrightnessService: ObservableObject {
         syncKeyTap()
         syncKeyboardBrightnessHotkeys()
         syncDisplayBrightnessHotkeys()
+        let ambientSync = wanted && UserDefaults.standard.bool(forKey: DefaultsKey.displayAmbientSyncEnabled)
+        if AmbientLightSyncService.shared.isEnabled != ambientSync {
+            AmbientLightSyncService.shared.isEnabled = ambientSync
+        }
     }
 
     private func syncDisplayBrightnessHotkeys() {
@@ -569,6 +582,9 @@ final class BrightnessService: ObservableObject {
         displayBrightnessShortcutRegistrationFailed = false
         guard running else { return }
         running = false
+        if AmbientLightSyncService.shared.isEnabled {
+            AmbientLightSyncService.shared.isEnabled = false
+        }
         removeFunctionKeyTap()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
@@ -580,6 +596,8 @@ final class BrightnessService: ObservableObject {
         rebuildingTopology = nil
         routes = [:]
         pendingLevels = [:]
+        pendingDDCProWrites = [:]
+        ddcProDrainScheduled = false
         writeSequence = 0
         systemWritesInFlight = []
         lastApplied = [:]
@@ -591,6 +609,10 @@ final class BrightnessService: ObservableObject {
         pendingDisplayIDs = []
         displayControlFailure = nil
         brightnessOSDSupported = false
+        if !ddcContrastLevels.isEmpty { ddcContrastLevels = [:] }
+        if !ddcVolumeLevels.isEmpty { ddcVolumeLevels = [:] }
+        if !ddcMutedDisplays.isEmpty { ddcMutedDisplays = [] }
+        if !ddcInputSources.isEmpty { ddcInputSources = [:] }
         BrightnessOSD.teardown()
         if !displays.isEmpty { displays = [] }
         if !drawableDisplays.isEmpty { drawableDisplays = [] }
@@ -2399,6 +2421,7 @@ final class BrightnessService: ObservableObject {
             }
             self.refreshKeyboardLight()
             self.syncKeyTap()
+            self.hydrateDDCProState(for: resolved)
         }
     }
 
@@ -3021,4 +3044,194 @@ private enum DisplayConfigurationBridge {
               let pointer = dlsym(coreGraphicsHandle, "CGSConfigureDisplayEnabled") else { return nil }
         return unsafeBitCast(pointer, to: ConfigureEnabledFn.self)
     }()
+}
+
+// MARK: - DDC Pro VCP Controls
+
+extension BrightnessService {
+    private static let ddcContrastDefaultsKey = "brightnessDDCContrastByFingerprint"
+    private static let ddcVolumeDefaultsKey = "brightnessDDCVolumeByFingerprint"
+    private static let ddcMutedDefaultsKey = "brightnessDDCMutedByFingerprint"
+    private static let ddcInputDefaultsKey = "brightnessDDCInputByFingerprint"
+    private static let defaultDDCContrast: Double = 75
+    private static let defaultDDCVolume: Double = 60
+
+    func ddcContrast(for id: CGDirectDisplayID) -> Double {
+        ddcContrastLevels[id] ?? persistedDDCContrast(for: id) ?? Self.defaultDDCContrast
+    }
+
+    func ddcVolume(for id: CGDirectDisplayID) -> Double {
+        ddcVolumeLevels[id] ?? persistedDDCVolume(for: id) ?? Self.defaultDDCVolume
+    }
+
+    func isDDCAudioMuted(for id: CGDirectDisplayID) -> Bool {
+        ddcMutedDisplays.contains(id) || persistedDDCAudioMuted(for: id)
+    }
+
+    func ddcInputSource(for id: CGDirectDisplayID) -> DisplayInputSourcePreset {
+        ddcInputSources[id] ?? persistedDDCInputSource(for: id) ?? .usbC
+    }
+
+    func setDisplayContrast(_ value: Double, for id: CGDirectDisplayID) {
+        guard value.isFinite else { return }
+        let clamped = min(max(value, 0), 100)
+        let rounded = clamped.rounded()
+        updateDDCProMainState {
+            self.ddcContrastLevels[id] = rounded
+        }
+        persistDDCValue(rounded, forKey: Self.ddcContrastDefaultsKey, displayID: id)
+        enqueueDDCProWrite(code: .contrast, value: UInt16(rounded), for: id)
+    }
+
+    func setDisplayAudioVolume(_ value: Double, for id: CGDirectDisplayID) {
+        guard value.isFinite else { return }
+        let clamped = min(max(value, 0), 100)
+        let rounded = clamped.rounded()
+        updateDDCProMainState {
+            self.ddcVolumeLevels[id] = rounded
+        }
+        persistDDCValue(rounded, forKey: Self.ddcVolumeDefaultsKey, displayID: id)
+        enqueueDDCProWrite(code: .audioSpeakerVolume, value: UInt16(rounded), for: id)
+    }
+
+    func setDisplayAudioMuted(_ muted: Bool, for id: CGDirectDisplayID) {
+        updateDDCProMainState {
+            if muted {
+                self.ddcMutedDisplays.insert(id)
+            } else {
+                self.ddcMutedDisplays.remove(id)
+            }
+        }
+        persistDDCValue(muted, forKey: Self.ddcMutedDefaultsKey, displayID: id)
+        // VESA MCCS VCP 0x8D: 0x01 mutes audio, 0x02 unmutes audio.
+        let vcpValue: UInt16 = muted ? 0x0001 : 0x0002
+        enqueueDDCProWrite(code: .audioMute, value: vcpValue, for: id)
+    }
+
+    func setDisplayInputSource(_ source: DisplayInputSourcePreset, for id: CGDirectDisplayID) {
+        updateDDCProMainState {
+            self.ddcInputSources[id] = source
+        }
+        persistDDCValue(Int(source.rawValue), forKey: Self.ddcInputDefaultsKey, displayID: id)
+        enqueueDDCProWrite(code: .inputSource, value: source.rawValue, for: id)
+    }
+
+    func syncExternalDDCDisplays(toNormalizedBrightness brightness: Double) {
+        guard brightness.isFinite else { return }
+        let apply = { [weak self] in
+            guard let self, self.running else { return }
+            let clamped = min(max(brightness, 0), 1)
+            let targets = self.displays.filter { $0.isActive && !$0.isBuiltIn && $0.method == .ddc }
+            for display in targets {
+                self.setBrightness(clamped, for: display.id, showOSD: false, smooth: false, announces: false)
+            }
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
+    }
+
+    private func hydrateDDCProState(for displays: [BrightnessDisplay]) {
+        let ddcIDs = displays.filter { $0.method == .ddc }.map(\.id)
+        var nextContrast: [CGDirectDisplayID: Double] = [:]
+        var nextVolume: [CGDirectDisplayID: Double] = [:]
+        var nextMuted = Set<CGDirectDisplayID>()
+        var nextInputs: [CGDirectDisplayID: DisplayInputSourcePreset] = [:]
+        for id in ddcIDs {
+            nextContrast[id] = persistedDDCContrast(for: id) ?? Self.defaultDDCContrast
+            nextVolume[id] = persistedDDCVolume(for: id) ?? Self.defaultDDCVolume
+            if persistedDDCAudioMuted(for: id) {
+                nextMuted.insert(id)
+            }
+            nextInputs[id] = persistedDDCInputSource(for: id) ?? .usbC
+        }
+        if ddcContrastLevels != nextContrast { ddcContrastLevels = nextContrast }
+        if ddcVolumeLevels != nextVolume { ddcVolumeLevels = nextVolume }
+        if ddcMutedDisplays != nextMuted { ddcMutedDisplays = nextMuted }
+        if ddcInputSources != nextInputs { ddcInputSources = nextInputs }
+    }
+
+    private func updateDDCProMainState(_ body: @escaping () -> Void) {
+        if Thread.isMainThread {
+            body()
+        } else {
+            DispatchQueue.main.async(execute: body)
+        }
+    }
+
+    private func persistedDDCContrast(for id: CGDirectDisplayID) -> Double? {
+        let fingerprint = Self.displayFingerprint(id)
+        let map = UserDefaults.standard.dictionary(forKey: Self.ddcContrastDefaultsKey)
+        return (map?[fingerprint] as? NSNumber).map { min(max($0.doubleValue, 0), 100) }
+    }
+
+    private func persistedDDCVolume(for id: CGDirectDisplayID) -> Double? {
+        let fingerprint = Self.displayFingerprint(id)
+        let map = UserDefaults.standard.dictionary(forKey: Self.ddcVolumeDefaultsKey)
+        return (map?[fingerprint] as? NSNumber).map { min(max($0.doubleValue, 0), 100) }
+    }
+
+    private func persistedDDCAudioMuted(for id: CGDirectDisplayID) -> Bool {
+        let fingerprint = Self.displayFingerprint(id)
+        let map = UserDefaults.standard.dictionary(forKey: Self.ddcMutedDefaultsKey)
+        return (map?[fingerprint] as? NSNumber)?.boolValue ?? false
+    }
+
+    private func persistedDDCInputSource(for id: CGDirectDisplayID) -> DisplayInputSourcePreset? {
+        let fingerprint = Self.displayFingerprint(id)
+        let map = UserDefaults.standard.dictionary(forKey: Self.ddcInputDefaultsKey)
+        guard let raw = (map?[fingerprint] as? NSNumber)?.intValue,
+              let presetValue = UInt16(exactly: raw) else { return nil }
+        return DisplayInputSourcePreset(rawValue: presetValue)
+    }
+
+    private func persistDDCValue<T>(_ value: T, forKey defaultsKey: String, displayID: CGDirectDisplayID) {
+        let fingerprint = Self.displayFingerprint(displayID)
+        var map = UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: T] ?? [:]
+        map[fingerprint] = value
+        UserDefaults.standard.set(map, forKey: defaultsKey)
+    }
+
+    private func enqueueDDCProWrite(code: DDCControlCode, value: UInt16, for id: CGDirectDisplayID) {
+        stateLock.lock()
+        var perDisplay = pendingDDCProWrites[id] ?? [:]
+        perDisplay[code] = value
+        pendingDDCProWrites[id] = perDisplay
+        let schedule = !ddcProDrainScheduled
+        if schedule { ddcProDrainScheduled = true }
+        stateLock.unlock()
+        guard schedule else { return }
+        workQueue.async { [weak self] in
+            self?.drainPendingDDCProWrites()
+        }
+    }
+
+    private func drainPendingDDCProWrites() {
+        while true {
+            stateLock.lock()
+            guard let (id, codeMap) = pendingDDCProWrites.first,
+                  let (code, rawValue) = codeMap.first else {
+                ddcProDrainScheduled = false
+                stateLock.unlock()
+                return
+            }
+            if codeMap.count <= 1 {
+                pendingDDCProWrites.removeValue(forKey: id)
+            } else {
+                pendingDDCProWrites[id]?.removeValue(forKey: code)
+            }
+            let route = routes[id]
+            stateLock.unlock()
+
+            guard let route, route.method == .ddc, let service = route.service else { continue }
+            let packet = DDCPacketBuilder.buildSetVCPPacket(code: code, value: rawValue)
+            guard DDCPacketBuilder.verifySetVCPPacket(packet) else { continue }
+            // IOAVServiceWriteI2C sends BrightnessSupport.dataAddress (0x51) ahead of the buffer.
+            let wirePacket = Array(packet.dropFirst())
+            let ok = ddcSend(to: id, service: service, packet: wirePacket)
+            Self.log.log("ddc pro write display \(id) code \(code.rawValue) value \(rawValue) ok \(ok)")
+        }
+    }
 }

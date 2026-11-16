@@ -10,17 +10,19 @@ struct BrightnessSection: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var service = BrightnessService.shared
     @ObservedObject private var permissions = Permissions.shared
+    @ObservedObject private var ambientSync = AmbientLightSyncService.shared
+    @ObservedObject private var xdrUpscale = XDRUpscaleOverlayController.shared
+    @ObservedObject private var virtualDisplays = VirtualDisplayManager.shared
     @AppStorage(DefaultsKey.brightnessOSDEnabled) private var brightnessOSDEnabled = false
     @AppStorage(DefaultsKey.brightnessKeysEnabled) private var brightnessKeysEnabled = false
     @AppStorage(DefaultsKey.displayAmbientSyncEnabled) private var ambientSyncEnabled = false
     @State private var optionsExpanded = false
-    @State private var ddcContrast: Double = 75
-    @State private var ddcVolume: Double = 60
-    @State private var selectedInput: DisplayInputSourcePreset = .usbC
     var collapsible = true
 
     private var strings: BrightnessFeatureStrings { FeatureStrings.brightness(l10n.language) }
     private var wave4Strings: OverhaulWave4Strings { OverhaulStrings.wave4(l10n.language) }
+    private var v2Strings: OverhaulV2Strings { OverhaulV2Strings.localized(l10n.language) }
+    private var ddcDisplays: [BrightnessDisplay] { service.displays.filter { $0.isActive && $0.method == .ddc } }
 
     var body: some View {
         PanelSection(.brightness, title: strings.pageTitle, collapsible: collapsible) {
@@ -66,6 +68,9 @@ struct BrightnessSection: View {
             .onAppear {
                 service.refresh()
                 service.refreshKeyboardLight()
+                if ambientSync.isEnabled != ambientSyncEnabled {
+                    ambientSync.isEnabled = ambientSyncEnabled
+                }
             }
         }
     }
@@ -116,39 +121,94 @@ struct BrightnessSection: View {
                     Toggle(wave4Strings.ambientSyncLabel, isOn: $ambientSyncEnabled)
                         .onChange(of: ambientSyncEnabled) { _, on in
                             AmbientLightSyncService.shared.isEnabled = on
+                            service.syncWithPreferences()
                         }
-                    HStack(spacing: 8) {
-                        Text(wave4Strings.hardwareContrastLabel)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.secondary)
-                        Slider(value: $ddcContrast, in: 0...100, step: 1)
-                            .controlSize(.mini)
+                    if ambientSyncEnabled {
+                        HStack(spacing: 6) {
+                            Image(systemName: ambientSync.hasAmbientSensor ? "sun.max.circle.fill" : "sun.min")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Text(v2Strings.alsPollingActive)
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 4)
+                            Text("\(Int(ambientSync.lastLux.rounded())) lx")
+                                .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        VorssaintDetentSlider(
+                            value: ambientBiasBinding,
+                            range: -0.35...0.35,
+                            detent: 0,
+                            tone: .energyDisplay,
+                            icon: "sun.and.horizon",
+                            formattedValue: String(format: "%+.0f%%", locale: Locale.current, ambientSync.userBias * 100)
+                        )
                     }
-                    HStack(spacing: 8) {
-                        Text(wave4Strings.hardwareVolumeLabel)
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.secondary)
-                        Slider(value: $ddcVolume, in: 0...100, step: 1)
-                            .controlSize(.mini)
+                    Divider()
+                    Toggle(v2Strings.xdrBoostLabel, isOn: $xdrUpscale.isEnabled)
+                        .disabled(!xdrUpscale.isXDRCapable && !xdrUpscale.isEnabled)
+                        .help(v2Strings.xdrBoostCaption)
+                    Text(v2Strings.xdrBoostCaption)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if xdrUpscale.isEnabled {
+                        VorssaintDetentSlider(
+                            value: $xdrUpscale.boostAmount,
+                            range: XDRUpscaleOverlayController.minBoostAmount...XDRUpscaleOverlayController.maxBoostAmount,
+                            detent: 1.5,
+                            tone: .energyDisplay,
+                            icon: "sun.max.fill",
+                            title: l10n.s.extraBrightnessLevelLabel,
+                            formattedValue: String(format: "%.2fx", locale: Locale.current, xdrUpscale.boostAmount)
+                        )
                     }
-                    HStack(spacing: 8) {
-                        Text(wave4Strings.inputSourceLabel)
-                            .font(.system(size: 10.5))
+                    if !ddcDisplays.isEmpty {
+                        Divider()
+                        ForEach(ddcDisplays) { display in
+                            ddcControlsRow(for: display)
+                        }
+                    }
+                    Divider()
+                    HStack(spacing: 6) {
+                        Image(systemName: "rectangle.badge.plus")
+                            .font(.system(size: 10.5, weight: .semibold))
                             .foregroundStyle(.secondary)
-                        Spacer()
-                        Picker("", selection: $selectedInput) {
-                            ForEach(DisplayInputSourcePreset.allCases) { preset in
-                                Text(preset.label).tag(preset)
+                        Text(wave4Strings.virtualHiDPILabel)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        if !virtualDisplays.activePresetIDs.isEmpty {
+                            VorssaintActionChip(
+                                title: v2Strings.virtualDisplayDestroy,
+                                symbol: "xmark.circle",
+                                tone: .energyDisplay,
+                                destructive: true
+                            ) {
+                                virtualDisplays.deactivateAll()
                             }
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .controlSize(.mini)
-                        .fixedSize()
+                    }
+                    ForEach(VirtualDisplayManager.presets) { preset in
+                        Toggle(isOn: virtualPresetBinding(preset)) {
+                            HStack(spacing: 6) {
+                                Text(preset.title)
+                                    .font(.system(size: 11, weight: .medium))
+                                if let displayID = virtualDisplays.virtualDisplayIDs[preset.id] {
+                                    Text("#\(displayID)")
+                                        .font(.system(size: 9.5, weight: .medium).monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .help(virtualDisplays.activePresetIDs.contains(preset.id)
+                              ? v2Strings.virtualDisplayDestroy
+                              : v2Strings.virtualDisplayCreate)
                     }
                 }
                 .font(.system(size: 11.5, weight: .medium))
-                .toggleStyle(.checkbox)
+                .toggleStyle(VorssaintPillToggleStyle(tone: .energyDisplay))
                 .controlSize(.small)
                 .padding(.leading, 19)
             }
@@ -222,6 +282,118 @@ struct BrightnessSection: View {
         Binding(get: { display.brightness },
                 set: { service.setBrightness($0, for: display.id,
                                              showOSD: brightnessOSDEnabled) })
+    }
+
+    @ViewBuilder
+    private func ddcControlsRow(for display: BrightnessDisplay) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if ddcDisplays.count > 1 {
+                HStack(spacing: 5) {
+                    Image(systemName: "display")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(display.name)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            VorssaintDetentSlider(
+                value: ddcContrastBinding(display.id),
+                range: 0...100,
+                detent: 75,
+                tone: .energyDisplay,
+                icon: "circle.lefthalf.filled",
+                title: wave4Strings.hardwareContrastLabel,
+                formattedValue: "\(Int(service.ddcContrast(for: display.id).rounded()))%"
+            )
+            HStack(alignment: .bottom, spacing: 8) {
+                VorssaintDetentSlider(
+                    value: ddcVolumeBinding(display.id),
+                    range: 0...100,
+                    detent: 50,
+                    tone: .energyDisplay,
+                    icon: service.isDDCAudioMuted(for: display.id) ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                    title: wave4Strings.hardwareVolumeLabel,
+                    formattedValue: "\(Int(service.ddcVolume(for: display.id).rounded()))%"
+                )
+                .disabled(service.isDDCAudioMuted(for: display.id))
+                Button {
+                    VorssaintHaptics.generic()
+                    service.setDisplayAudioMuted(!service.isDDCAudioMuted(for: display.id), for: display.id)
+                } label: {
+                    Image(systemName: service.isDDCAudioMuted(for: display.id) ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(service.isDDCAudioMuted(for: display.id) ? .red : .secondary)
+                        .frame(width: 24, height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(0.08))
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(display.name): \(wave4Strings.hardwareVolumeLabel)")
+            }
+            HStack(spacing: 8) {
+                Text(wave4Strings.inputSourceLabel)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: ddcInputBinding(display.id)) {
+                    ForEach(DisplayInputSourcePreset.allCases) { preset in
+                        Text(preset.label).tag(preset)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.mini)
+                .fixedSize()
+            }
+        }
+    }
+
+    private var ambientBiasBinding: Binding<Double> {
+        Binding(
+            get: { ambientSync.userBias },
+            set: { newBias in
+                ambientSync.userBias = newBias
+                ambientSync.update(lux: ambientSync.lastLux)
+            }
+        )
+    }
+
+    private func ddcContrastBinding(_ id: CGDirectDisplayID) -> Binding<Double> {
+        Binding(
+            get: { service.ddcContrast(for: id) },
+            set: { service.setDisplayContrast($0, for: id) }
+        )
+    }
+
+    private func ddcVolumeBinding(_ id: CGDirectDisplayID) -> Binding<Double> {
+        Binding(
+            get: { service.ddcVolume(for: id) },
+            set: { service.setDisplayAudioVolume($0, for: id) }
+        )
+    }
+
+    private func ddcInputBinding(_ id: CGDirectDisplayID) -> Binding<DisplayInputSourcePreset> {
+        Binding(
+            get: { service.ddcInputSource(for: id) },
+            set: { service.setDisplayInputSource($0, for: id) }
+        )
+    }
+
+    private func virtualPresetBinding(_ preset: VirtualDisplayManager.ScaledPreset) -> Binding<Bool> {
+        Binding(
+            get: { virtualDisplays.activePresetIDs.contains(preset.id) },
+            set: { enabled in
+                if enabled {
+                    virtualDisplays.activatePreset(preset)
+                } else {
+                    virtualDisplays.deactivatePreset(preset)
+                }
+            }
+        )
     }
 }
 

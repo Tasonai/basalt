@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Vorssaint
 
 import AudioToolbox
+import AVFoundation
 import Combine
 import CoreAudio
 import Foundation
@@ -28,6 +29,17 @@ final class AudioInputDeviceManager: ObservableObject {
     @Published private(set) var inputVolume: Double?
     @Published private(set) var preferredUnavailable = false
     @Published private(set) var lastError: String?
+    @Published private(set) var micInputLevel: Float = 0
+    @Published var liveMicDSPEnabled: Bool = false {
+        didSet {
+            guard oldValue != liveMicDSPEnabled else { return }
+            liveMicDSPToggleCallback?(liveMicDSPEnabled)
+        }
+    }
+
+    fileprivate var liveMicDSPController: AnyObject?
+    fileprivate var liveMicDSPTeardown: (() -> Void)?
+    fileprivate var liveMicDSPToggleCallback: ((Bool) -> Void)?
 
     private var listenerInstalled = false
     /// Stored so stop() can remove the HAL listeners when the mixer leaves
@@ -86,6 +98,11 @@ final class AudioInputDeviceManager: ObservableObject {
     }
 
     func stop() {
+        liveMicDSPTeardown?()
+        liveMicDSPTeardown = nil
+        liveMicDSPController = nil
+        if liveMicDSPEnabled { liveMicDSPEnabled = false }
+        if micInputLevel != 0 { micInputLevel = 0 }
         removeVolumeListeners()
         // Priority selections are meant to survive a quit and the next
         // launch. Only the singular preferred-microphone override is restored.
@@ -762,5 +779,177 @@ final class AudioInputDeviceManager: ObservableObject {
         }
         guard status == noErr else { return nil }
         return unmanagedRef?.takeRetainedValue() as String?
+    }
+}
+
+// MARK: - Live Mic DSP Monitor (AVAudioEngine)
+
+private final class LiveMicDSPMonitor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var engine: AVAudioEngine?
+    private let dspProcessor = AudioMicDSPProcessor()
+    private var noiseGateEnabled: Bool
+    private var levelerEnabled: Bool
+    private var lastPublishedAt: CFAbsoluteTime = 0
+    private var configObserver: NSObjectProtocol?
+    private let onLevel: (Float) -> Void
+    private let onFailure: (String) -> Void
+
+    init(noiseGateEnabled: Bool,
+         levelerEnabled: Bool,
+         onLevel: @escaping (Float) -> Void,
+         onFailure: @escaping (String) -> Void) {
+        self.noiseGateEnabled = noiseGateEnabled
+        self.levelerEnabled = levelerEnabled
+        self.onLevel = onLevel
+        self.onFailure = onFailure
+        dspProcessor.noiseGateEnabled = noiseGateEnabled
+        dspProcessor.levelerEnabled = levelerEnabled
+    }
+
+    func updateDSPSettings(noiseGateEnabled: Bool, levelerEnabled: Bool) {
+        lock.withLock {
+            self.noiseGateEnabled = noiseGateEnabled
+            self.levelerEnabled = levelerEnabled
+        }
+    }
+
+    func start() -> Bool {
+        stop()
+        let audioEngine = AVAudioEngine()
+        let inputNode = audioEngine.inputNode
+        let format = inputNode.outputFormat(forBus: 0)
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            onFailure("No active audio input format")
+            return false
+        }
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            guard let self else { return }
+            self.processBuffer(buffer)
+        }
+        do {
+            try audioEngine.start()
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            onFailure(error.localizedDescription)
+            return false
+        }
+        engine = audioEngine
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: audioEngine,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.engine != nil else { return }
+            _ = self.start()
+        }
+        return true
+    }
+
+    func stop() {
+        if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configObserver = nil
+        }
+        if let audioEngine = engine {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            audioEngine.stop()
+            engine = nil
+        }
+        onLevel(0)
+    }
+
+    private func processBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.floatChannelData else { return }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return }
+        let (gate, leveler) = lock.withLock { (noiseGateEnabled, levelerEnabled) }
+        dspProcessor.noiseGateEnabled = gate
+        dspProcessor.levelerEnabled = leveler
+        dspProcessor.processInPlace(channelData[0], count: frameCount)
+        let levels = MixerPeakMeterMath.measure(channelData[0], count: frameCount)
+        let now = CFAbsoluteTimeGetCurrent()
+        let shouldPublish = lock.withLock { () -> Bool in
+            if now - lastPublishedAt >= (1.0 / 30.0) {
+                lastPublishedAt = now
+                return true
+            }
+            return false
+        }
+        if shouldPublish {
+            onLevel(levels.normalizedBar)
+        }
+    }
+
+    deinit {
+        stop()
+    }
+}
+
+extension AudioInputDeviceManager {
+    func prepareLiveMicDSPMonitor() {
+        guard liveMicDSPToggleCallback == nil else { return }
+        liveMicDSPToggleCallback = { [weak self] enabled in
+            self?.applyLiveMicDSPState(enabled)
+        }
+    }
+
+    func setLiveMicDSPEnabled(_ enabled: Bool) {
+        prepareLiveMicDSPMonitor()
+        if liveMicDSPEnabled != enabled {
+            liveMicDSPEnabled = enabled
+        } else {
+            applyLiveMicDSPState(enabled)
+        }
+    }
+
+    func syncLiveMicDSPSettings() {
+        let gate = UserDefaults.standard.bool(forKey: DefaultsKey.mixerMicNoiseGateEnabled)
+        let leveler = UserDefaults.standard.bool(forKey: DefaultsKey.mixerMicLevelerEnabled)
+        (liveMicDSPController as? LiveMicDSPMonitor)?.updateDSPSettings(noiseGateEnabled: gate,
+                                                                        levelerEnabled: leveler)
+    }
+
+    private func applyLiveMicDSPState(_ enabled: Bool) {
+        if !enabled {
+            liveMicDSPTeardown?()
+            liveMicDSPTeardown = nil
+            liveMicDSPController = nil
+            if micInputLevel != 0 { micInputLevel = 0 }
+            return
+        }
+        let gate = UserDefaults.standard.bool(forKey: DefaultsKey.mixerMicNoiseGateEnabled)
+        let leveler = UserDefaults.standard.bool(forKey: DefaultsKey.mixerMicLevelerEnabled)
+        let monitor = LiveMicDSPMonitor(
+            noiseGateEnabled: gate,
+            levelerEnabled: leveler,
+            onLevel: { [weak self] level in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.liveMicDSPEnabled else { return }
+                    if abs(self.micInputLevel - level) > 0.005 || (level == 0 && self.micInputLevel > 0) {
+                        self.micInputLevel = level
+                    }
+                }
+            },
+            onFailure: { [weak self] message in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.lastError = message
+                    self.liveMicDSPController = nil
+                    self.liveMicDSPTeardown = nil
+                    if self.liveMicDSPEnabled { self.liveMicDSPEnabled = false }
+                    if self.micInputLevel != 0 { self.micInputLevel = 0 }
+                }
+            }
+        )
+        liveMicDSPController = monitor
+        liveMicDSPTeardown = { [weak monitor] in
+            monitor?.stop()
+        }
+        if !monitor.start() {
+            liveMicDSPController = nil
+            liveMicDSPTeardown = nil
+            if liveMicDSPEnabled { liveMicDSPEnabled = false }
+        }
     }
 }

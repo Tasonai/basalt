@@ -42,6 +42,7 @@ final class AppVolumeMixer: ObservableObject {
     @Published private(set) var hiddenApps: [MixerHiddenApp] = []
 
     public let tapCoordinator = MixerTapCoordinator()
+    private let eqMeterState = MixerEQAndMeterState()
     private var engines: [String: any GainEngine] = [:]
     /// Arbitrates the engine builds running off-main: it suppresses duplicate
     /// builds while a slider keeps dragging, and discards a build that lands
@@ -246,6 +247,7 @@ final class AppVolumeMixer: ObservableObject {
         objectsLostAt.removeAll()
         engineRenderProgress.removeAll()
         engineRecovery.clearAll()
+        eqMeterState.stopMeterTimer()
         restoreLoweredOutputVolume()
     }
 
@@ -1224,7 +1226,7 @@ final class AppVolumeMixer: ObservableObject {
             return
         }
         guard let targetOutputDeviceUID = app.effectiveOutputDeviceUID,
-              appNeedsEngine(app) else {
+              rowRequiresTapEngine(app) else {
             // No volume or routing adjustment remains.
             discardEngine(for: app.id)
             clearPermissionIfNoActiveAdjustments()
@@ -1235,14 +1237,16 @@ final class AppVolumeMixer: ObservableObject {
            engine.outputDeviceUID == targetOutputDeviceUID,
            !engine.requiresRebuild {
             engine.gain = MixerRoutingSupport.gain(forVolume: app.volume)
+            let eqConfig = eqConfiguration(for: eqStorageKey(for: app))
+            engine.updateAppEQ(gainsDB: eqConfig.gainsDB, preampDB: eqConfig.preampDB)
             return
         }
         if let delay = configurationRepairDelay(for: app.id) {
             scheduleEngineReconcile(after: delay)
             return
         }
-        // A tap needs a volume, per-app output or universal output request.
-        guard rowMayBeTapped(app) else {
+        // A tap needs a volume, per-app output, universal output, or active EQ request.
+        guard rowMayBeTapped(app) || hasActiveEQ(for: app) else {
             discardEngine(for: app.id)
             clearPermissionIfNoActiveAdjustments()
             return
@@ -1291,6 +1295,9 @@ final class AppVolumeMixer: ObservableObject {
             }
             return
         }
+
+        let initialEQ = eqConfiguration(for: eqStorageKey(for: app))
+        Self.stageInitialEQConfiguration(initialEQ, forObjects: app.audioObjects)
 
         buildQueue.async { [weak self] in
             let engine = TapGainEngine(objects: app.audioObjects,
@@ -1374,13 +1381,15 @@ final class AppVolumeMixer: ObservableObject {
         }
         guard latestApp.audioObjects == engine.tappedObjects,
               latestApp.effectiveOutputDeviceUID == engine.outputDeviceUID,
-              appNeedsEngine(latestApp) else {
+              rowRequiresTapEngine(latestApp) else {
             engine.stop()
             tapCoordinator.unregister(appID: id)
             applyRouting(for: latestApp)
             return
         }
         engine.gain = MixerRoutingSupport.gain(forVolume: latestApp.volume)
+        let eqConfig = eqConfiguration(for: eqStorageKey(for: latestApp))
+        engine.updateAppEQ(gainsDB: eqConfig.gainsDB, preampDB: eqConfig.preampDB)
         configurationRepairs.removeValue(forKey: id)
         let previous = engines.updateValue(engine, forKey: id)
         tapCoordinator.recordBuildFinished(appID: id,
@@ -1417,7 +1426,7 @@ final class AppVolumeMixer: ObservableObject {
         guard configurationRepairs[id] != nil || engines[id]?.requiresRebuild == true else { return false }
         engines.removeValue(forKey: id)?.stop()
         engineRenderProgress.removeValue(forKey: id)
-        guard let app = apps.first(where: { $0.id == id }), appNeedsEngine(app),
+        guard let app = apps.first(where: { $0.id == id }), rowRequiresTapEngine(app),
               let outputDeviceUID = app.effectiveOutputDeviceUID else {
             configurationRepairs.removeValue(forKey: id)
             return true
@@ -1460,6 +1469,13 @@ final class AppVolumeMixer: ObservableObject {
                                            targetOutputDeviceUID: app.effectiveOutputDeviceUID,
                                            defaultOutputDeviceUID: app.effectiveOutputDeviceUID,
                                            universalOutputRouteUID: app.universalOutputRouteUID)
+    }
+
+    private func rowRequiresTapEngine(_ app: MixerApp) -> Bool {
+        guard !app.isBypassed else { return false }
+        if appNeedsEngine(app) { return true }
+        guard !app.audioObjects.isEmpty, app.effectiveOutputDeviceUID != nil else { return false }
+        return hasActiveEQ(for: app)
     }
 
     private func applyOutputRoute(to app: inout MixerApp,
@@ -2096,11 +2112,11 @@ final class AppVolumeMixer: ObservableObject {
             let clockIsGone = engine.clockDeviceUID.map { !listedUIDs.contains($0) } == true
             guard engine.tappedObjects != app.audioObjects
                 || engine.outputDeviceUID != app.effectiveOutputDeviceUID
-                || !appNeedsEngine(app)
+                || !rowRequiresTapEngine(app)
                 || clockIsGone else { continue }
 
             engineChangeAt[id] = now
-            guard appNeedsEngine(app) else {
+            guard rowRequiresTapEngine(app) else {
                 // No remaining volume or output adjustment needs a tap.
                 discardEngine(for: id)
                 continue
@@ -2118,7 +2134,7 @@ final class AppVolumeMixer: ObservableObject {
             applyRouting(for: app)
         }
 
-        for app in apps where appNeedsEngine(app) && engines[app.id] == nil {
+        for app in apps where rowRequiresTapEngine(app) && engines[app.id] == nil {
             applyRouting(for: app)
         }
         forgetEngineStateOfMissingRows(byId)
@@ -2372,7 +2388,7 @@ final class AppVolumeMixer: ObservableObject {
 
     private func clearPermissionIfNoActiveAdjustments() {
         guard needsPermission,
-              !apps.contains(where: appNeedsEngine),
+              !apps.contains(where: rowRequiresTapEngine),
               engines.isEmpty,
               builds.isEmpty else { return }
         needsPermission = false
@@ -2821,6 +2837,8 @@ private protocol GainEngine: AnyObject {
 
 private extension GainEngine {
     var requiresRebuild: Bool { false }
+    var currentMeterLevel: Float { 0 }
+    func updateAppEQ(gainsDB: [Float], preampDB: Float) {}
 }
 
 /// Keeps a tap's level correct for the outputs its processes play to.
@@ -3323,13 +3341,33 @@ private final class TapGainEngine: GainEngine {
     private final class LimiterBox {
         let lookahead: BoostLookaheadBufferListLimiter
         var fallback = BoostBufferListLimiter()
-        init(channelCapacity: Int) {
+        let appEQ: MixerParametricEQ?
+        let masterEQ: MixerParametricEQ?
+        let appMeter: RealtimeAudioMeter?
+        init(channelCapacity: Int,
+             appEQ: MixerParametricEQ? = nil,
+             masterEQ: MixerParametricEQ? = nil,
+             appMeter: RealtimeAudioMeter? = nil) {
             lookahead = BoostLookaheadBufferListLimiter(channelCapacity: channelCapacity)
+            self.appEQ = appEQ
+            self.masterEQ = masterEQ
+            self.appMeter = appMeter
         }
 
         func reset() {
             lookahead.reset()
             fallback = BoostBufferListLimiter()
+            appMeter?.reset()
+        }
+
+        func processEQAndMeter(_ output: UnsafeMutableAudioBufferListPointer, frames: Int) {
+            appEQ?.processAudioBufferList(output, frames: frames)
+            masterEQ?.processAudioBufferList(output, frames: frames)
+            appMeter?.record(output, frames: frames)
+        }
+
+        func noteSilentCycle() {
+            appMeter?.reset()
         }
 
         func process(_ output: UnsafeMutableAudioBufferListPointer, release: Float) {
@@ -3351,13 +3389,21 @@ private final class TapGainEngine: GainEngine {
     private let compensationBox = AtomicFloatBox(1)
     private let cycleBox = AtomicCycleBox()
     private let releaseBox = AtomicFloatBox(BoostLimiter.release(sampleRate: 48000))
+    private let appMeter = RealtimeAudioMeter()
+    private var appEQ: MixerParametricEQ?
+    private var masterEQ: MixerParametricEQ?
     var renderCycles: UInt64 { cycleBox.value }
+    var currentMeterLevel: Float { appMeter.normalizedLevel }
     var requiresRebuild: Bool { configuration?.requiresRebuild ?? false }
     private var tapID = AudioObjectID(0)
     private var aggregateID = AudioObjectID(0)
     private var ioProc: AudioDeviceIOProcID?
     private var configuration: MixerTapConfiguration?
     private var levelWatch: LevelCompensationWatch?
+
+    func updateAppEQ(gainsDB: [Float], preampDB: Float) {
+        appEQ?.update(gainsDB: gainsDB, preampDB: preampDB)
+    }
 
     init?(objects: [AudioObjectID], gain: Float, outputDeviceUID: String) {
         tappedObjects = objects
@@ -3415,12 +3461,22 @@ private final class TapGainEngine: GainEngine {
         }
         self.configuration = configuration
         let ramp = TapLevelRamp()
+        let perAppEQ = MixerParametricEQ(sampleRate: sampleRate)
+        if let initialEQ = AppVolumeMixer.consumeInitialEQConfiguration(forObjects: objects) {
+            perAppEQ.update(gainsDB: initialEQ.gainsDB, preampDB: initialEQ.preampDB)
+        }
+        let sharedMasterEQ = AppVolumeMixer.sharedMasterEQ
+        self.appEQ = perAppEQ
+        self.masterEQ = sharedMasterEQ
         // A boost pushes loud samples past full scale, and clamping the
         // overshoot flattens every peak into audible crackle (issue #326).
         // The limiter turns the whole signal down for just the moment a peak
         // would not fit, so a boosted app gets louder without distorting.
         let limiterBox = LimiterBox(
-            channelCapacity: max(2, outputChannels.reduce(0, +)))
+            channelCapacity: max(2, outputChannels.reduce(0, +)),
+            appEQ: perAppEQ,
+            masterEQ: sharedMasterEQ,
+            appMeter: appMeter)
         releaseBox.value = BoostLimiter.release(sampleRate: sampleRate)
         let release = releaseBox
         let cycles = cycleBox
@@ -3444,6 +3500,7 @@ private final class TapGainEngine: GainEngine {
                 // No samples to put in the buffer is not a reason to leave it:
                 // whatever the HAL left there plays otherwise (issue #326).
                 MixerRender.silence(outputBuffers)
+                limiterBox.noteSilentCycle()
                 return
             }
             let gain = box.value * ramp.next(toward: compensation.value, hostTime: now.pointee.mHostTime)
@@ -3455,6 +3512,7 @@ private final class TapGainEngine: GainEngine {
             // Draining delayed audio alone must not hide a stalled capture
             // from the engine's recovery check.
             guard frames > 0 else { return }
+            limiterBox.processEQAndMeter(outputBuffers, frames: frames)
             cycles.increment()
         }) == noErr else {
             ioProc = nil
@@ -3590,6 +3648,7 @@ private final class TapGainEngine: GainEngine {
         self.tapID = 0
         self.aggregateID = 0
         self.ioProc = nil
+        appMeter.reset()
         configuration?.stop()
         configuration = nil
         levelWatch?.stop()
@@ -3831,5 +3890,444 @@ private final class AirPlayGainEngine: GainEngine {
         var rate: Double = 44_100
         _ = AppVolumeMixer.read(deviceID, kAudioDevicePropertyNominalSampleRate, &rate)
         return rate > 0 ? rate : 44_100
+    }
+}
+
+// MARK: - Parametric EQ & Live VU Metering
+
+/// Lightweight observable level feed updated at 30Hz strictly while a mixer UI surface is visible.
+final class MixerMeterPublisher: ObservableObject {
+    @Published private(set) var levels: [String: Float] = [:]
+
+    func level(for appID: String) -> Float {
+        levels[appID] ?? 0
+    }
+
+    fileprivate func publishIfChanged(_ next: [String: Float]) {
+        if next.isEmpty && levels.isEmpty { return }
+        if next.count == levels.count {
+            var changed = false
+            for (key, value) in next {
+                if let prev = levels[key] {
+                    if abs(prev - value) > 0.003 || (value == 0 && prev > 0) {
+                        changed = true
+                        break
+                    }
+                } else {
+                    changed = true
+                    break
+                }
+            }
+            if !changed { return }
+        }
+        levels = next
+    }
+}
+
+private struct MixerEQConfiguration: Equatable {
+    var gainsDB: [Float]
+    var preampDB: Float
+}
+
+private final class MixerEQAndMeterState: @unchecked Sendable {
+    static let masterEQGainsDefaultsKey = "vorssaintMixerMasterEQGainsDB"
+    static let masterEQPreampDefaultsKey = "vorssaintMixerMasterEQPreampDB"
+    static let appEQGainsDefaultsKey = "vorssaintMixerAppEQGainsDB"
+    static let appEQPreampDefaultsKey = "vorssaintMixerAppEQPreampDB"
+
+    static let sharedMasterEQ: MixerParametricEQ = {
+        let eq = MixerParametricEQ(sampleRate: 48_000)
+        let config = loadMasterConfiguration()
+        eq.update(gainsDB: config.gainsDB, preampDB: config.preampDB)
+        return eq
+    }()
+
+    private static let initialStageLock = NSLock()
+    private static var stagedInitialEQByObjects: [[AudioObjectID]: MixerEQConfiguration] = [:]
+
+    static func stageInitialEQ(_ config: MixerEQConfiguration, forObjects objects: [AudioObjectID]) {
+        initialStageLock.withLock {
+            stagedInitialEQByObjects[objects] = config
+        }
+    }
+
+    static func consumeInitialEQ(forObjects objects: [AudioObjectID]) -> MixerEQConfiguration? {
+        initialStageLock.withLock {
+            stagedInitialEQByObjects.removeValue(forKey: objects)
+        }
+    }
+
+    let lock = NSLock()
+    let meterPublisher = MixerMeterPublisher()
+    var masterConfig: MixerEQConfiguration
+    var appConfigs: [String: MixerEQConfiguration]
+    var sessionAppConfigs: [String: MixerEQConfiguration] = [:]
+    var cachedMeterLevels: [String: Float] = [:]
+    var meterObserverCount = 0
+    var meterTimer: Timer?
+
+    init() {
+        self.masterConfig = Self.loadMasterConfiguration()
+        self.appConfigs = Self.loadAppConfigurations()
+    }
+
+    static func sanitizeGains(_ gains: [Float]) -> [Float] {
+        var result = Array(gains.prefix(MixerParametricEQ.bandCount)).map {
+            $0.isFinite ? min(max($0, -18), 18) : Float(0)
+        }
+        while result.count < MixerParametricEQ.bandCount {
+            result.append(0)
+        }
+        return result
+    }
+
+    static func isFlat(_ config: MixerEQConfiguration) -> Bool {
+        config.gainsDB.allSatisfy { abs($0) < 0.01 } && abs(config.preampDB) < 0.01
+    }
+
+    private static func loadMasterConfiguration() -> MixerEQConfiguration {
+        let defaults = UserDefaults.standard
+        if let raw = defaults.array(forKey: masterEQGainsDefaultsKey) as? [NSNumber], !raw.isEmpty {
+            let gains = sanitizeGains(raw.map(\.floatValue))
+            let preamp = Float(defaults.double(forKey: masterEQPreampDefaultsKey))
+            return MixerEQConfiguration(gainsDB: gains,
+                                        preampDB: preamp.isFinite ? min(max(preamp, -18), 18) : 0)
+        }
+        if let presetID = defaults.string(forKey: DefaultsKey.mixerParametricEQPresetID),
+           let preset = CustomEQPresetStore.shared.preset(id: presetID) {
+            return MixerEQConfiguration(gainsDB: sanitizeGains(preset.gainsDB), preampDB: preset.preampDB)
+        }
+        return MixerEQConfiguration(gainsDB: [Float](repeating: 0, count: MixerParametricEQ.bandCount),
+                                    preampDB: 0)
+    }
+
+    private static func loadAppConfigurations() -> [String: MixerEQConfiguration] {
+        let defaults = UserDefaults.standard
+        let rawGains = defaults.dictionary(forKey: appEQGainsDefaultsKey) as? [String: [NSNumber]] ?? [:]
+        let rawPreamps = defaults.dictionary(forKey: appEQPreampDefaultsKey) as? [String: NSNumber] ?? [:]
+        var loaded: [String: MixerEQConfiguration] = [:]
+        for (key, values) in rawGains {
+            let gains = sanitizeGains(values.map(\.floatValue))
+            let preamp = rawPreamps[key]?.floatValue ?? 0
+            let config = MixerEQConfiguration(gainsDB: gains,
+                                              preampDB: preamp.isFinite ? min(max(preamp, -18), 18) : 0)
+            if !isFlat(config) {
+                loaded[key] = config
+            }
+        }
+        return loaded
+    }
+
+    func persistMasterConfiguration(_ config: MixerEQConfiguration) {
+        let defaults = UserDefaults.standard
+        if Self.isFlat(config) {
+            defaults.removeObject(forKey: Self.masterEQGainsDefaultsKey)
+            defaults.removeObject(forKey: Self.masterEQPreampDefaultsKey)
+        } else {
+            defaults.set(config.gainsDB.map(Double.init), forKey: Self.masterEQGainsDefaultsKey)
+            defaults.set(Double(config.preampDB), forKey: Self.masterEQPreampDefaultsKey)
+        }
+    }
+
+    func persistAppConfigurations() {
+        let defaults = UserDefaults.standard
+        if appConfigs.isEmpty {
+            defaults.removeObject(forKey: Self.appEQGainsDefaultsKey)
+            defaults.removeObject(forKey: Self.appEQPreampDefaultsKey)
+        } else {
+            var gainsDict: [String: [Double]] = [:]
+            var preampsDict: [String: Double] = [:]
+            for (key, config) in appConfigs where !Self.isFlat(config) {
+                gainsDict[key] = config.gainsDB.map(Double.init)
+                if abs(config.preampDB) >= 0.01 {
+                    preampsDict[key] = Double(config.preampDB)
+                }
+            }
+            defaults.set(gainsDict, forKey: Self.appEQGainsDefaultsKey)
+            if preampsDict.isEmpty {
+                defaults.removeObject(forKey: Self.appEQPreampDefaultsKey)
+            } else {
+                defaults.set(preampsDict, forKey: Self.appEQPreampDefaultsKey)
+            }
+        }
+    }
+
+    func hasActiveEQ(for appKey: String, masterEQ: MixerParametricEQ) -> Bool {
+        if !masterEQ.isBypassed { return true }
+        return lock.withLock {
+            let config = appConfigs[appKey] ?? sessionAppConfigs[appKey]
+            return config.map { !Self.isFlat($0) } ?? false
+        }
+    }
+
+    func stopMeterTimer() {
+        if Thread.isMainThread {
+            meterTimer?.invalidate()
+            meterTimer = nil
+            lock.withLock { cachedMeterLevels.removeAll() }
+            meterPublisher.publishIfChanged([:])
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.stopMeterTimer()
+            }
+        }
+    }
+}
+
+extension AppVolumeMixer {
+    fileprivate static var sharedMasterEQ: MixerParametricEQ {
+        MixerEQAndMeterState.sharedMasterEQ
+    }
+
+    fileprivate static func stageInitialEQConfiguration(_ config: MixerEQConfiguration,
+                                                        forObjects objects: [AudioObjectID]) {
+        MixerEQAndMeterState.stageInitialEQ(config, forObjects: objects)
+    }
+
+    fileprivate static func consumeInitialEQConfiguration(forObjects objects: [AudioObjectID])
+        -> MixerEQConfiguration? {
+        MixerEQAndMeterState.consumeInitialEQ(forObjects: objects)
+    }
+
+    fileprivate func eqConfiguration(for appKey: String) -> MixerEQConfiguration {
+        eqMeterState.lock.withLock {
+            if appKey.hasPrefix(MixerRoutingSupport.unidentifiedRowPrefix) {
+                return eqMeterState.sessionAppConfigs[appKey]
+                    ?? MixerEQConfiguration(gainsDB: [Float](repeating: 0, count: MixerParametricEQ.bandCount),
+                                            preampDB: 0)
+            }
+            return eqMeterState.appConfigs[appKey]
+                ?? eqMeterState.sessionAppConfigs[appKey]
+                ?? MixerEQConfiguration(gainsDB: [Float](repeating: 0, count: MixerParametricEQ.bandCount),
+                                        preampDB: 0)
+        }
+    }
+
+    fileprivate func hasActiveEQ(for app: MixerApp) -> Bool {
+        eqMeterState.hasActiveEQ(for: eqStorageKey(for: app), masterEQ: Self.sharedMasterEQ)
+    }
+
+    func eqStorageKey(for app: MixerApp) -> String {
+        app.persistenceID ?? app.id
+    }
+
+    var meterPublisher: MixerMeterPublisher {
+        eqMeterState.meterPublisher
+    }
+
+    var isMasterEQActive: Bool {
+        !Self.sharedMasterEQ.isBypassed
+    }
+
+    func hasCustomEQ(for appKey: String) -> Bool {
+        let config = eqConfiguration(for: appKey)
+        return !MixerEQAndMeterState.isFlat(config)
+    }
+
+    func masterEQGains() -> [Float] {
+        eqMeterState.lock.withLock {
+            eqMeterState.masterConfig.gainsDB
+        }
+    }
+
+    func eqPreampDB(for appKey: String?) -> Float {
+        if let appKey {
+            return eqConfiguration(for: appKey).preampDB
+        }
+        return eqMeterState.lock.withLock { eqMeterState.masterConfig.preampDB }
+    }
+
+    func setEQPreampDB(_ preampDB: Float, for appKey: String?) {
+        let clamped: Float = preampDB.isFinite ? min(max(preampDB, -18), 18) : 0
+        if let appKey {
+            let gains = eqGains(for: appKey)
+            updateAppEQConfiguration(gainsDB: gains, preampDB: clamped, for: appKey)
+        } else {
+            let gains = masterEQGains()
+            updateMasterEQConfiguration(gainsDB: gains, preampDB: clamped, presetID: nil)
+        }
+    }
+
+    func setMasterEQGains(_ gains: [Float]) {
+        let sanitized = MixerEQAndMeterState.sanitizeGains(gains)
+        let allFlat = sanitized.allSatisfy { abs($0) < 0.01 }
+        let currentPreamp = eqMeterState.lock.withLock { eqMeterState.masterConfig.preampDB }
+        let resolvedPreamp: Float = allFlat ? 0 : currentPreamp
+        let presetID = allFlat ? "flat" : "custom"
+        updateMasterEQConfiguration(gainsDB: sanitized, preampDB: resolvedPreamp, presetID: presetID)
+    }
+
+    func eqGains(for appKey: String) -> [Float] {
+        eqConfiguration(for: appKey).gainsDB
+    }
+
+    func setEQGains(_ gains: [Float], for appKey: String) {
+        let sanitized = MixerEQAndMeterState.sanitizeGains(gains)
+        let allFlat = sanitized.allSatisfy { abs($0) < 0.01 }
+        let currentPreamp = eqConfiguration(for: appKey).preampDB
+        let resolvedPreamp: Float = allFlat ? 0 : currentPreamp
+        updateAppEQConfiguration(gainsDB: sanitized, preampDB: resolvedPreamp, for: appKey)
+    }
+
+    func applyEQPreset(_ preset: MixerEQPreset, for appKey: String?) {
+        let sanitized = MixerEQAndMeterState.sanitizeGains(preset.gainsDB)
+        let clampedPreamp: Float = preset.preampDB.isFinite ? min(max(preset.preampDB, -18), 18) : 0
+        if let appKey {
+            updateAppEQConfiguration(gainsDB: sanitized, preampDB: clampedPreamp, for: appKey)
+        } else {
+            updateMasterEQConfiguration(gainsDB: sanitized, preampDB: clampedPreamp, presetID: preset.id)
+        }
+    }
+
+    func resetEQ(for appKey: String?) {
+        let flat = [Float](repeating: 0, count: MixerParametricEQ.bandCount)
+        if let appKey {
+            updateAppEQConfiguration(gainsDB: flat, preampDB: 0, for: appKey)
+        } else {
+            updateMasterEQConfiguration(gainsDB: flat, preampDB: 0, presetID: "flat")
+        }
+    }
+
+    func activeEQPresetID(for appKey: String?) -> String? {
+        let config = appKey.map { eqConfiguration(for: $0) }
+            ?? eqMeterState.lock.withLock { eqMeterState.masterConfig }
+        if MixerEQAndMeterState.isFlat(config) {
+            return "flat"
+        }
+        if appKey == nil,
+           let savedID = UserDefaults.standard.string(forKey: DefaultsKey.mixerParametricEQPresetID),
+           let preset = CustomEQPresetStore.shared.preset(id: savedID),
+           zip(MixerEQAndMeterState.sanitizeGains(preset.gainsDB), config.gainsDB).allSatisfy({ abs($0 - $1) < 0.05 }) {
+            return preset.id
+        }
+        return CustomEQPresetStore.shared.allPresets.first { preset in
+            zip(MixerEQAndMeterState.sanitizeGains(preset.gainsDB), config.gainsDB).allSatisfy { abs($0 - $1) < 0.05 }
+        }?.id
+    }
+
+    func liveMeterLevel(for appID: String) -> Float {
+        if Thread.isMainThread, let engine = engines[appID] {
+            return engine.currentMeterLevel
+        }
+        return eqMeterState.lock.withLock {
+            eqMeterState.cachedMeterLevels[appID] ?? 0
+        }
+    }
+
+    func retainMeterObserver() {
+        let startTimer = { [weak self] in
+            guard let self else { return }
+            self.eqMeterState.meterObserverCount += 1
+            guard self.eqMeterState.meterObserverCount == 1,
+                  self.eqMeterState.meterTimer == nil else { return }
+            let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+                self?.pollLiveMeterLevels()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            self.eqMeterState.meterTimer = timer
+            self.pollLiveMeterLevels()
+        }
+        if Thread.isMainThread {
+            startTimer()
+        } else {
+            DispatchQueue.main.async(execute: startTimer)
+        }
+    }
+
+    func releaseMeterObserver() {
+        let stopIfIdle = { [weak self] in
+            guard let self else { return }
+            self.eqMeterState.meterObserverCount = max(0, self.eqMeterState.meterObserverCount - 1)
+            if self.eqMeterState.meterObserverCount == 0 {
+                self.eqMeterState.stopMeterTimer()
+            }
+        }
+        if Thread.isMainThread {
+            stopIfIdle()
+        } else {
+            DispatchQueue.main.async(execute: stopIfIdle)
+        }
+    }
+
+    private func pollLiveMeterLevels() {
+        guard eqMeterState.meterObserverCount > 0 else {
+            eqMeterState.stopMeterTimer()
+            return
+        }
+        var next: [String: Float] = [:]
+        next.reserveCapacity(engines.count)
+        for (appID, engine) in engines {
+            let level = engine.currentMeterLevel
+            if level > 0.001 {
+                next[appID] = level
+            }
+        }
+        eqMeterState.lock.withLock {
+            eqMeterState.cachedMeterLevels = next
+        }
+        eqMeterState.meterPublisher.publishIfChanged(next)
+    }
+
+    private func updateMasterEQConfiguration(gainsDB: [Float], preampDB: Float, presetID: String?) {
+        let next = MixerEQConfiguration(gainsDB: gainsDB, preampDB: preampDB)
+        eqMeterState.lock.withLock {
+            eqMeterState.masterConfig = next
+            eqMeterState.persistMasterConfiguration(next)
+        }
+        if let presetID {
+            UserDefaults.standard.set(presetID, forKey: DefaultsKey.mixerParametricEQPresetID)
+        }
+        Self.sharedMasterEQ.update(gainsDB: gainsDB, preampDB: preampDB)
+
+        let notifyAndReconcile = { [weak self] in
+            guard let self else { return }
+            self.objectWillChange.send()
+            if self.listenerInstalled, !self.stopped {
+                self.reconcileEngines(with: self.apps)
+            }
+        }
+        if Thread.isMainThread {
+            notifyAndReconcile()
+        } else {
+            DispatchQueue.main.async(execute: notifyAndReconcile)
+        }
+    }
+
+    private func updateAppEQConfiguration(gainsDB: [Float], preampDB: Float, for appKey: String) {
+        let next = MixerEQConfiguration(gainsDB: gainsDB, preampDB: preampDB)
+        let isSessionOnly = appKey.hasPrefix(MixerRoutingSupport.unidentifiedRowPrefix)
+        eqMeterState.lock.withLock {
+            if isSessionOnly {
+                if MixerEQAndMeterState.isFlat(next) {
+                    eqMeterState.sessionAppConfigs.removeValue(forKey: appKey)
+                } else {
+                    eqMeterState.sessionAppConfigs[appKey] = next
+                }
+            } else {
+                if MixerEQAndMeterState.isFlat(next) {
+                    eqMeterState.appConfigs.removeValue(forKey: appKey)
+                } else {
+                    eqMeterState.appConfigs[appKey] = next
+                }
+                eqMeterState.persistAppConfigurations()
+            }
+        }
+
+        let applyLiveAndReconcile = { [weak self] in
+            guard let self else { return }
+            for app in self.apps where app.id == appKey || app.persistenceID == appKey {
+                self.engines[app.id]?.updateAppEQ(gainsDB: gainsDB, preampDB: preampDB)
+            }
+            self.engines[appKey]?.updateAppEQ(gainsDB: gainsDB, preampDB: preampDB)
+            self.objectWillChange.send()
+            if self.listenerInstalled, !self.stopped {
+                self.reconcileEngines(with: self.apps)
+            }
+        }
+        if Thread.isMainThread {
+            applyLiveAndReconcile()
+        } else {
+            DispatchQueue.main.async(execute: applyLiveAndReconcile)
+        }
     }
 }

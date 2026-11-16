@@ -68,13 +68,20 @@ struct NotchMixerView: View {
                             title: showingOptions ? l10n.s.menuClose : l10n.s.keepAwakeOptions,
                             selected: showingOptions, action: toggleOptions)
         })
-        .onAppear { mixer.refreshApps() }
+        .onAppear {
+            mixer.refreshApps()
+            mixer.retainMeterObserver()
+            input.prepareLiveMicDSPMonitor()
+        }
         // Escape closes the options before the island.
         .onChange(of: showingOptions) { _, showing in
             guard !preview else { return }
             NotchService.shared.setPageLayer(.mixer, close: showing ? closeOptions : nil)
         }
-        .onDisappear { if !preview { NotchService.shared.setPageLayer(.mixer, close: nil) } }
+        .onDisappear {
+            mixer.releaseMeterObserver()
+            if !preview { NotchService.shared.setPageLayer(.mixer, close: nil) }
+        }
     }
 
     private func toggleOptions() {
@@ -196,6 +203,7 @@ private struct NotchMasterFader: View {
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showingEQPopover = false
     private var level: Double? { mixer.systemOutputVolume.map { mixer.systemOutputMuted == true ? 0 : $0 } }
     private var muted: Bool { mixer.systemOutputMuted == true }
 
@@ -223,9 +231,36 @@ private struct NotchMasterFader: View {
             .disabled(mixer.systemOutputMuted == nil)
             .accessibilityLabel(muted ? l10n.s.actionUnmute : l10n.s.actionMute)
             if let level {
+                let sliderHeight = NotchMixerFaderLayout.trackHeight(in: height)
                 NotchLevelSlider(value: Binding(get: { level }, set: { adjustOutput(volume: $0) }),
                                  label: l10n.s.mixerSystemOutputTitle, vertical: true, trackThickness: 28)
-                    .frame(width: 40, height: NotchMixerFaderLayout.trackHeight(in: height))
+                    .frame(width: 40, height: sliderHeight)
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .leading) {
+                        Button {
+                            showingEQPopover.toggle()
+                        } label: {
+                            Image(systemName: "slider.vertical.3")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(mixer.isMasterEQActive
+                                                 ? SemanticCategoryTone.sound.color(scheme: .dark)
+                                                 : Color.secondary)
+                                .frame(width: 18, height: 18)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(NotchButtonStyle(cornerRadius: 5))
+                        .opacity(mixer.isMasterEQActive || showingEQPopover ? 1 : 0.5)
+                        .help(OverhaulStrings.wave3(l10n.language).parametricEQTitle)
+                        .accessibilityLabel(OverhaulStrings.wave3(l10n.language).parametricEQTitle)
+                        .popover(isPresented: $showingEQPopover, arrowEdge: .bottom) {
+                            InteractiveEQCurveView(title: OverhaulStrings.wave3(l10n.language).parametricEQTitle,
+                                                   appKey: nil,
+                                                   compact: true,
+                                                   curveHeight: 112)
+                                .frame(width: 300)
+                                .padding(8)
+                        }
+                    }
                 NotchEditablePercent(percent: MixerRoutingSupport.displayPercent(forVolume: level), maximum: 100,
                                      editorID: "notch-system-output", editingID: $editingVolumeID,
                                      label: l10n.s.mixerSystemOutputTitle, height: 28) {
@@ -266,9 +301,22 @@ private struct NotchMicrophoneFader: View {
                     .accessibilityHidden(true)
             }
             if let volume = input.inputVolume {
+                let sliderHeight = NotchMixerFaderLayout.trackHeight(in: height)
                 NotchLevelSlider(value: Binding(get: { volume }, set: { input.setInputVolume($0) }),
                                  label: l10n.s.mixerInputTitle, vertical: true, trackThickness: 28)
-                    .frame(width: 40, height: NotchMixerFaderLayout.trackHeight(in: height))
+                    .frame(width: 40, height: sliderHeight)
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .trailing) {
+                        if input.liveMicDSPEnabled {
+                            RealtimeLevelMeterBar(level: input.micInputLevel,
+                                                  isActive: true,
+                                                  axis: .vertical,
+                                                  barLength: max(24, sliderHeight - 12),
+                                                  barThickness: 5,
+                                                  showIdleIndicator: false)
+                                .padding(.trailing, 4)
+                        }
+                    }
                     .disabled(micMute.isMuted)
                 NotchEditablePercent(percent: MixerRoutingSupport.displayPercent(forVolume: volume), maximum: 100,
                                      editorID: "notch-microphone-fader", editingID: $editingVolumeID,
@@ -493,7 +541,10 @@ private struct NotchAppFader: View {
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var l10n = L10n.shared
     @State private var isHovered = false
+    @State private var showingEQPopover = false
     private var strings: MixerFeatureStrings { FeatureStrings.mixer(l10n.language) }
+    private var appEQKey: String { mixer.eqStorageKey(for: app) }
+    private var hasCustomEQ: Bool { mixer.hasCustomEQ(for: appEQKey) }
     private var percent: Int { MixerRoutingSupport.displayPercent(forVolume: app.volume) }
     private var sharingStrings: MixerScreenSharingStrings { .localized(l10n.language) }
     private var boosting: Bool { percent > 100 }
@@ -528,11 +579,56 @@ private struct NotchAppFader: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                let sliderHeight = NotchMixerFaderLayout.trackHeight(in: height)
                 NotchLevelSlider(value: Binding(get: { app.volume }, set: { mixer.setVolume($0, for: app) }),
                                  label: app.name, range: 0...AppVolumeMixer.maxVolume,
                                  tint: boosting ? .orange : .white, vertical: true, trackThickness: 28, marker: 1,
                                  valueLabel: "\(percent)%")
-                    .frame(width: 40, height: NotchMixerFaderLayout.trackHeight(in: height))
+                    .frame(width: 40, height: sliderHeight)
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .leading) {
+                        Button {
+                            showingEQPopover.toggle()
+                        } label: {
+                            Image(systemName: "slider.vertical.3")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(hasCustomEQ
+                                                 ? SemanticCategoryTone.sound.color(scheme: .dark)
+                                                 : Color.secondary)
+                                .frame(width: 22, height: 22)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(hasCustomEQ
+                                              ? SemanticCategoryTone.sound.color(scheme: .dark).opacity(0.18)
+                                              : Color.clear)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(NotchButtonStyle(cornerRadius: 6))
+                        .opacity(hasCustomEQ || isHovered || showingEQPopover ? 1 : 0.45)
+                        .help(OverhaulStrings.wave3(l10n.language).parametricEQTitle)
+                        .accessibilityLabel("\(OverhaulStrings.wave3(l10n.language).parametricEQTitle): \(app.name)")
+                        .popover(isPresented: $showingEQPopover, arrowEdge: .bottom) {
+                            InteractiveEQCurveView(title: app.name,
+                                                   appKey: appEQKey,
+                                                   compact: true,
+                                                   curveHeight: 112)
+                                .frame(width: 300)
+                                .padding(8)
+                        }
+                        .padding(.leading, 2)
+                    }
+                    .overlay(alignment: .trailing) {
+                        if app.isPlaying || mixer.liveMeterLevel(for: app.id) > 0.005 {
+                            LiveVUMeterBar(appID: app.id,
+                                           isPlaying: app.isPlaying,
+                                           meterFeed: mixer.meterPublisher,
+                                           axis: .vertical,
+                                           barLength: max(24, sliderHeight - 12),
+                                           barThickness: 5)
+                                .padding(.trailing, 6)
+                        }
+                    }
                 NotchEditablePercent(percent: percent, maximum: Int(AppVolumeMixer.maxVolume * 100),
                                      editorID: "notch-app:\(app.id)", editingID: $editingVolumeID,
                                      label: app.name, tint: boosting ? .orange : .secondary,
@@ -649,6 +745,12 @@ private struct NotchAppFader: View {
         }
         if !app.isBypassed {
             if app.persistenceID != nil { Divider() }
+            Button {
+                showingEQPopover = true
+            } label: {
+                Label(OverhaulStrings.wave3(l10n.language).parametricEQTitle,
+                      systemImage: "slider.vertical.3")
+            }
             Menu(l10n.language == .ru ? "Уровень громкости" : "Volume Preset") {
                 Button("0% (\(l10n.s.actionMute))") { mixer.setVolume(0, for: app) }
                 Button("25%") { mixer.setVolume(0.25, for: app) }

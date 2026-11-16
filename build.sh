@@ -627,6 +627,7 @@ if (( TEST )); then
         Sources/Vorssaint/Services/Clipboard/ClipboardProSupport.swift
         Sources/Vorssaint/Services/CommandBar/CommandBarProSupport.swift
         Sources/Vorssaint/Services/Display/DisplayProSupport.swift
+        Sources/Vorssaint/Services/Display/XDRUpscaleOverlayController.swift
         Sources/Vorssaint/Services/Metrics/TelemetryHistoryRing.swift
         Sources/Vorssaint/Services/QuickTools/ScreenshotProTools.swift
         Sources/Vorssaint/Services/Recorder/RecorderStudioTracks.swift

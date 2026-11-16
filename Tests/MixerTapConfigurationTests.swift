@@ -60,6 +60,7 @@ enum MixerTapConfigurationTests {
         var scheduledDelays: [Double] = []
 
         func appNeedsEngine(_ app: App) -> Bool { app.needsEngine }
+        func rowRequiresTapEngine(_ app: App) -> Bool { app.needsEngine }
         func scheduleEngineReconcile(after delay: Double) { scheduledDelays.append(delay) }
     }
 

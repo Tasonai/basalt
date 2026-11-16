@@ -53,7 +53,14 @@ struct MixerSection: View {
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("NSSystemColorsDidChangeNotification"))) { _ in
             refreshSliderTint()
         }
-        .onAppear { mixer.refreshApps() }
+        .onAppear {
+            mixer.refreshApps()
+            mixer.retainMeterObserver()
+            inputManager.prepareLiveMicDSPMonitor()
+        }
+        .onDisappear {
+            mixer.releaseMeterObserver()
+        }
     }
 
     private var mixerControls: some View {
@@ -550,6 +557,8 @@ struct MixerSection: View {
 struct MixerOptionsControls: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var mixer = AppVolumeMixer.shared
+    @ObservedObject private var inputManager = AudioInputDeviceManager.shared
+    @ObservedObject private var auHost = MixerAudioUnitHost.shared
     @ObservedObject private var preciseVolumeRoller = PreciseVolumeRollerService.shared
     @ObservedObject private var permissions = Permissions.shared
     @AppStorage(DefaultsKey.mixerHideInactiveApps)
@@ -573,6 +582,10 @@ struct MixerOptionsControls: View {
         OverhaulStrings.wave3(l10n.language)
     }
 
+    private var isRussian: Bool {
+        l10n.language == .ru
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if AppVolumeMixer.isSupported {
@@ -591,45 +604,123 @@ struct MixerOptionsControls: View {
                 listVisibilityFooter
             }
         }
-    }
-
-    private var selectedEQPreset: MixerEQPreset {
-        MixerEQPreset.builtInPresets.first { $0.id == eqPresetID } ?? MixerEQPreset.builtInPresets[0]
+        .onAppear {
+            inputManager.prepareLiveMicDSPMonitor()
+            auHost.refreshAvailableEffects()
+        }
     }
 
     private var parametricEQAndMicControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            InteractiveEQCurveView(title: wave3Strings.parametricEQTitle,
+                                   appKey: nil,
+                                   compact: true,
+                                   curveHeight: 110)
+
+            audioUnitHostControls
+
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isRussian ? "Live-монитор DSP микрофона" : "Live Mic DSP Monitor",
+                       isOn: Binding(get: { inputManager.liveMicDSPEnabled },
+                                     set: { inputManager.setLiveMicDSPEnabled($0) }))
+                    .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
+
+                if inputManager.liveMicDSPEnabled {
+                    HStack(spacing: 8) {
+                        Label(l10n.s.mixerInputTitle, systemImage: "waveform")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        RealtimeLevelMeterBar(level: inputManager.micInputLevel,
+                                              isActive: true,
+                                              axis: .horizontal,
+                                              barLength: 74,
+                                              barThickness: 6,
+                                              showIdleIndicator: false)
+                    }
+                    .padding(.leading, 4)
+                }
+
+                Toggle(wave3Strings.micNoiseGateLabel, isOn: $micNoiseGateEnabled)
+                    .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
+                    .onChange(of: micNoiseGateEnabled) { _, _ in
+                        inputManager.syncLiveMicDSPSettings()
+                    }
+                Toggle(wave3Strings.micLevelerLabel, isOn: $micLevelerEnabled)
+                    .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
+                    .onChange(of: micLevelerEnabled) { _, _ in
+                        inputManager.syncLiveMicDSPSettings()
+                    }
+            }
+        }
+    }
+
+    private var audioUnitHostControls: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Label(wave3Strings.parametricEQTitle, systemImage: "slider.vertical.3")
+            HStack(spacing: 6) {
+                Label(isRussian ? "AUv3-эффект" : "AUv3 Effect", systemImage: "fx")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
+
                 Spacer(minLength: 4)
-                Picker(wave3Strings.eqPresetLabel, selection: $eqPresetID) {
-                    ForEach(MixerEQPreset.builtInPresets) { preset in
-                        Text(preset.name).tag(preset.id)
+
+                Button {
+                    auHost.refreshAvailableEffects()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isRussian ? "Обновить список Audio Unit" : "Refresh Audio Units")
+
+                Picker(isRussian ? "AUv3-эффект" : "AUv3 Effect",
+                       selection: Binding(
+                        get: { auHost.selectedEffectID ?? "" },
+                        set: { auHost.selectEffect(id: $0.isEmpty ? nil : $0) }
+                       )) {
+                    Text(isRussian ? "Нет" : "None")
+                        .tag("")
+                    ForEach(auHost.availableEffects) { effect in
+                        Text("\(effect.name) — \(effect.manufacturerName)")
+                            .tag(effect.id)
                     }
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .controlSize(.small)
-                .frame(width: 146)
+                .frame(width: 142)
             }
-            HStack(alignment: .bottom, spacing: 3) {
-                ForEach(Array(selectedEQPreset.gainsDB.enumerated()), id: \.offset) { _, gain in
-                    let normalized = CGFloat(min(max((gain + 6.0) / 12.0, 0.08), 1.0))
-                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                        .fill(abs(gain) < 0.05 ? Color.secondary.opacity(0.35) : Color.accentColor)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: max(3, 18 * normalized))
+
+            if auHost.activeAudioUnit != nil || auHost.isLoading {
+                Toggle(isRussian ? "Обход эффекта (Bypass)" : "Bypass Effect",
+                       isOn: Binding(
+                        get: { auHost.isBypassed },
+                        set: { auHost.setBypassed($0) }
+                       ))
+                    .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
+
+                HStack(spacing: 6) {
+                    VorssaintActionChip(title: isRussian ? "Открыть UI" : "Open UI",
+                                        symbol: "macwindow",
+                                        tone: .sound) {
+                        auHost.openEffectUI()
+                    }
+                    .disabled(auHost.activeAudioUnit == nil || auHost.isLoading)
+
+                    VorssaintActionChip(title: isRussian ? "Убрать" : "Remove",
+                                        symbol: "xmark",
+                                        tone: .sound,
+                                        destructive: true) {
+                        auHost.removeEffect()
+                    }
+                    Spacer(minLength: 0)
                 }
             }
-            .frame(height: 20)
-            Toggle(wave3Strings.micNoiseGateLabel, isOn: $micNoiseGateEnabled)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11, weight: .medium))
-            Toggle(wave3Strings.micLevelerLabel, isOn: $micLevelerEnabled)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11, weight: .medium))
+
+            if let error = auHost.lastError {
+                inputMessage(error, systemImage: "exclamationmark.triangle")
+            }
         }
     }
 
@@ -645,8 +736,7 @@ struct MixerOptionsControls: View {
         VStack(alignment: .leading, spacing: 3) {
             Toggle(l10n.s.mixerLowerOnHeadphonesDisconnect,
                    isOn: $lowerOnHeadphonesDisconnect)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .medium))
+                .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
 
             Text(l10n.s.mixerLowerOnHeadphonesDisconnectCaption)
                 .font(.system(size: 9.5))
@@ -687,8 +777,7 @@ struct MixerOptionsControls: View {
     private var preciseVolumeRollerToggle: some View {
         VStack(alignment: .leading, spacing: 3) {
             Toggle(l10n.s.preciseVolumeRollerEnable, isOn: $preciseVolumeRollerEnabled)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .medium))
+                .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
                 .onChange(of: preciseVolumeRollerEnabled) { _, enabled in
                     if enabled { permissions.requestAccessibility() }
                     PreciseVolumeRollerService.shared.syncWithPreferences()
@@ -789,8 +878,7 @@ struct MixerOptionsControls: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    .toggleStyle(.checkbox)
-                    .controlSize(.small)
+                    .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
                     .disabled(!choice.canToggle)
                 }
             }
@@ -838,8 +926,7 @@ struct SoundOutputSwitcherControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Toggle(l10n.s.soundOutputSwitcherEnable, isOn: $enabled)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .medium))
+                .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
                 .onChange(of: enabled) { _, isEnabled in
                     if isEnabled, selectedUIDs.isEmpty,
                        let current = mixer.currentOutputDeviceUID,
@@ -883,8 +970,7 @@ struct SoundOutputSwitcherControls: View {
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
-                            .toggleStyle(.checkbox)
-                            .controlSize(.small)
+                            .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
                         }
                     }
                 }
@@ -952,9 +1038,12 @@ private struct MixerRow: View {
     let moveUp: (() -> Void)?
     let moveDown: (() -> Void)?
     @State private var isHovered = false
+    @State private var showingEQPopover = false
 
     private var arrangementStrings: MixerFeatureStrings { FeatureStrings.mixer(l10n.language) }
     private var sharingStrings: MixerScreenSharingStrings { .localized(l10n.language) }
+    private var appEQKey: String { mixer.eqStorageKey(for: app) }
+    private var hasCustomEQ: Bool { mixer.hasCustomEQ(for: appEQKey) }
 
     /// Warm accent to flag the boost range, darkened in Light Mode for contrast.
     private var boostColor: Color { PanelMetricColor.orange(for: colorScheme) }
@@ -999,6 +1088,47 @@ private struct MixerRow: View {
                             .accessibilityLabel(arrangementStrings.pin)
                     }
                     Spacer(minLength: 4)
+
+                    if !app.isBypassed && (app.isPlaying || mixer.liveMeterLevel(for: app.id) > 0.005) {
+                        LiveVUMeterBar(appID: app.id,
+                                       isPlaying: app.isPlaying,
+                                       meterFeed: mixer.meterPublisher,
+                                       axis: .horizontal,
+                                       barLength: 24,
+                                       barThickness: 5)
+                    }
+
+                    if !app.isBypassed {
+                        Button {
+                            showingEQPopover.toggle()
+                        } label: {
+                            Image(systemName: "slider.vertical.3")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(hasCustomEQ
+                                                 ? SemanticCategoryTone.sound.color(scheme: colorScheme)
+                                                 : Color.secondary)
+                                .frame(width: 18, height: 18)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(hasCustomEQ
+                                              ? SemanticCategoryTone.sound.color(scheme: colorScheme).opacity(0.14)
+                                              : Color.clear)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(hasCustomEQ || isHovered || showingEQPopover ? 1 : 0.55)
+                        .help(OverhaulStrings.wave3(l10n.language).parametricEQTitle)
+                        .accessibilityLabel("\(OverhaulStrings.wave3(l10n.language).parametricEQTitle): \(app.name)")
+                        .popover(isPresented: $showingEQPopover, arrowEdge: .trailing) {
+                            InteractiveEQCurveView(title: app.name,
+                                                   appKey: appEQKey,
+                                                   compact: true,
+                                                   curveHeight: 112)
+                                .frame(width: 300)
+                                .padding(8)
+                        }
+                    }
 
                     if app.persistenceID != nil {
                         Menu { arrangementActions } label: {
