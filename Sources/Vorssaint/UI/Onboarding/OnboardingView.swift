@@ -28,7 +28,11 @@ struct OnboardingView: View {
     @AppStorage(DefaultsKey.onboardingStep) private var index = 0
     @State private var selectedFeatures: Set<AppFeature>
     @State private var selectedPreset: FeaturePreset?
-    @State private var selectedWorkspace: FeatureWorkspaceProfile?
+    @State private var selectedRole: OnboardingRoleProfile?
+    @State private var activeEnableKeys: [String]
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(mode: OnboardingMode = .full, onFinish: @escaping () -> Void) {
         self.mode = mode
@@ -41,6 +45,8 @@ struct OnboardingView: View {
             : FeaturePreset.essential.features
         _selectedFeatures = State(initialValue: features)
         _selectedPreset = State(initialValue: selectionWasApplied ? nil : .essential)
+        _selectedRole = State(initialValue: nil)
+        _activeEnableKeys = State(initialValue: selectionWasApplied ? [] : FeaturePreset.essential.enableKeys)
     }
 
     private var setupPermissions: [AppPermission] {
@@ -66,7 +72,8 @@ struct OnboardingView: View {
             Divider()
             navigationBar
         }
-        .frame(width: 540, height: 600)
+        .frame(width: 640, height: 590)
+        .background(DesignSurfaceTier.canvas.fillColor(for: colorScheme))
         .onAppear {
             if !steps.indices.contains(index) { index = 0 }
             // Onboarding narrates the permission trip itself; the floating
@@ -81,54 +88,80 @@ struct OnboardingView: View {
     @ViewBuilder
     private var content: some View {
         switch current {
-        case .welcome: WelcomeStep()
-        case .purpose: PurposeStep(selectedFeatures: $selectedFeatures,
-                                   selectedPreset: $selectedPreset,
-                                   selectedWorkspace: $selectedWorkspace)
-        case .permissions: SelectedPermissionsStep(features: selectedFeatures,
-                                                   permissions: setupPermissions)
-        case .done: DoneStep()
+        case .welcome:
+            WelcomeStep()
+        case .purpose:
+            PurposeStep(
+                selectedFeatures: $selectedFeatures,
+                selectedPreset: $selectedPreset,
+                selectedRole: $selectedRole,
+                activeEnableKeys: $activeEnableKeys
+            )
+        case .permissions:
+            SelectedPermissionsStep(features: selectedFeatures, permissions: setupPermissions)
+        case .done:
+            DoneStep()
         }
     }
 
     private var navigationBar: some View {
-        HStack {
-            Button(l10n.s.obBack) {
-                withAnimation(.easeInOut(duration: 0.2)) { index = max(0, index - 1) }
+        let activeTint = SemanticCategoryTone.brand.color(
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
+        return HStack(spacing: DesignSpace.md) {
+            VorssaintActionChip(
+                title: l10n.s.obBack,
+                symbol: "chevron.left",
+                tone: .brand
+            ) {
+                withAnimation(DesignMotion.resolve(DesignMotion.fluidX, reduceMotion: reduceMotion)) {
+                    index = max(0, index - 1)
+                }
             }
             .disabled(index == 0)
 
-            Spacer()
+            Spacer(minLength: DesignSpace.sm)
 
-            HStack(spacing: 6) {
+            HStack(spacing: DesignSpace.sm) {
                 ForEach(steps.indices, id: \.self) { i in
-                    Capsule()
-                        .fill(i == index ? Color.accentColor : Color.primary.opacity(0.15))
-                        .frame(width: i == index ? 18 : 7, height: 7)
-                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: index)
+                    Capsule(style: .continuous)
+                        .fill(i == index ? activeTint : Color.primary.opacity(0.16))
+                        .frame(width: i == index ? 20 : 7, height: 7)
+                        .animation(DesignMotion.resolve(DesignMotion.fluidX, reduceMotion: reduceMotion), value: index)
                 }
             }
 
-            Spacer()
+            Spacer(minLength: DesignSpace.sm)
 
-            Button(primaryButtonTitle) {
+            VorssaintActionChip(
+                title: primaryButtonTitle,
+                symbol: index >= steps.count - 1 ? "checkmark" : "arrow.right",
+                tone: .brand,
+                prominent: true
+            ) {
                 if index >= steps.count - 1 {
                     index = 0
                     onFinish()
                 } else {
                     if current == .purpose {
+                        let enableKeys = selectedRole?.recommendedEnableKeys
+                            ?? selectedPreset?.enableKeys
+                            ?? activeEnableKeys
                         FeatureRuntime.shared.replaceAvailable(
                             with: selectedFeatures,
-                            enabling: selectedWorkspace?.enableKeys ?? selectedPreset?.enableKeys ?? [])
+                            enabling: enableKeys
+                        )
                     }
-                    withAnimation(.easeInOut(duration: 0.2)) { index += 1 }
+                    withAnimation(DesignMotion.resolve(DesignMotion.fluidX, reduceMotion: reduceMotion)) {
+                        index += 1
+                    }
                 }
             }
             .keyboardShortcut(.defaultAction)
-            .controlSize(.large)
-            .buttonStyle(.borderedProminent)
         }
-        .padding(16)
+        .padding(.horizontal, DesignSpace.lg)
+        .padding(.vertical, DesignSpace.md)
     }
 
     private var primaryButtonTitle: String {
@@ -137,256 +170,223 @@ struct OnboardingView: View {
     }
 }
 
-// MARK: - Step 1: welcome & language
+// MARK: - Step 1: welcome & interactive stage
 
 private struct WelcomeStep: View {
     @ObservedObject private var l10n = L10n.shared
-    @AppStorage(DefaultsKey.notchMascotStyle) private var mascotStyleRaw = NotchMascotStyle.minimal.rawValue
-    @AppStorage(DefaultsKey.notchMascotShape) private var mascotShapeRaw = NotchMascotShape.ball.rawValue
-    @AppStorage(DefaultsKey.notchMascotPalette) private var mascotPaletteRaw = NotchMascotPalette.pearl.rawValue
-    @State private var mascotReaction: NotchMascotReaction? = .wakeUp
-
-    private var currentLook: NotchMascotLook {
-        NotchMascotLook(
-            style: NotchMascotStyle(rawValue: mascotStyleRaw) ?? .minimal,
-            shape: NotchMascotShape(rawValue: mascotShapeRaw) ?? .ball,
-            palette: NotchMascotPalette(rawValue: mascotPaletteRaw) ?? .pearl
-        )
-    }
-
-    private var mascotCustomizationBar: some View {
-        let overhaul = OverhaulStrings.localized(l10n.language)
-        return HStack(spacing: 12) {
-            Text(overhaul.mascotCustomizeTitle)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Spacer()
-            paletteSwatches
-            styleButtons
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
-                .fill(Color.primary.opacity(0.045))
-        )
-        .hairlineSpecularBorder(cornerRadius: DesignRadius.innerGroup, opacity: 0.14)
-    }
-
-    private var paletteSwatches: some View {
-        HStack(spacing: 6) {
-            ForEach(NotchMascotPalette.allCases) { palette in
-                let selected = palette.rawValue == mascotPaletteRaw
-                Button {
-                    mascotPaletteRaw = palette.rawValue
-                    triggerMascot(.love)
-                } label: {
-                    Circle()
-                        .fill(Color(.sRGB, red: palette.light.red, green: palette.light.green, blue: palette.light.blue))
-                        .frame(width: 18, height: 18)
-                        .overlay(
-                            Circle()
-                                .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.18), lineWidth: selected ? 2.2 : 0.8)
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private var styleButtons: some View {
-        let mascotText = FeatureStrings.notchMascot(l10n.language)
-        return HStack(spacing: 4) {
-            ForEach(NotchMascotStyle.allCases) { style in
-                let active = style.rawValue == mascotStyleRaw
-                Button(style == .minimal ? mascotText.minimal : mascotText.robot) {
-                    mascotStyleRaw = style.rawValue
-                    triggerMascot(.perk)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .tint(active ? SemanticCategoryTone.dynamicIsland.badgeColor : .secondary)
-            }
-        }
-    }
-
-    private func triggerMascot(_ reaction: NotchMascotReaction) {
-        if mascotReaction == reaction {
-            mascotReaction = nil
-            DispatchQueue.main.async { mascotReaction = reaction }
-        } else {
-            mascotReaction = reaction
-        }
-        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-    }
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     var body: some View {
-        return VStack(spacing: 0) {
-            ZStack {
-                Theme.spaceGradient
-                VStack(spacing: 10) {
-                    HStack(spacing: 16) {
-                        Button {
-                            triggerMascot(.love)
-                        } label: {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.black.opacity(0.32))
-                                    .frame(width: 78, height: 78)
-                                    .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 1))
-                                NotchMascotView(
-                                    look: currentLook,
-                                    mood: .happy,
-                                    size: 54,
-                                    followsDrag: true,
-                                    reaction: mascotReaction
-                                )
-                                .frame(width: 68, height: 68)
-                            }
-                        }
-                        .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: DesignSpace.md) {
+            OnboardingInteractiveStageView(showsBrandHeader: true, showsSandboxCards: true)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            BrandMark(width: 108)
-                            Text(AppInfo.name)
-                                .font(.system(size: 26, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                    }
-
-                    Text(l10n.s.obStepWelcomeBody)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 40)
-                }
-                .padding(.top, 10)
-            }
-            .frame(height: 210)
-
-            VStack(alignment: .leading, spacing: 14) {
-                mascotCustomizationBar
-
+            HStack(spacing: DesignSpace.md) {
                 Picker(l10n.s.obLanguageLabel, selection: $l10n.language) {
                     ForEach(AppLanguage.allCases) { language in
                         Text(language.displayName).tag(language)
                     }
                 }
-                // A menu (not segmented): with nine languages a segmented control
-                // would overflow, and several names are in their own script.
+                // A menu (not segmented): with fifteen languages a segmented
+                // control would overflow, and several names use their own script.
                 .pickerStyle(.menu)
-
-                featureRow(icon: "bolt.fill",
-                           title: l10n.s.obWelcomeBullet1Title,
-                           text: l10n.s.obWelcomeBullet1Body)
-                featureRow(icon: "gauge.with.dots.needle.50percent",
-                           title: l10n.s.obWelcomeBullet2Title,
-                           text: l10n.s.obWelcomeBullet2Body)
-                featureRow(icon: "rectangle.on.rectangle",
-                           title: l10n.s.obWelcomeBullet3Title,
-                           text: l10n.s.obWelcomeBullet3Body)
             }
-            .padding(24)
+            .padding(.horizontal, DesignSpace.md)
+            .padding(.vertical, DesignSpace.sm)
+            .background(
+                RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                    .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
+            )
+            .hairlineSpecularBorder(cornerRadius: DesignRadius.innerGroup, opacity: 0.14)
+
+            VStack(spacing: DesignSpace.sm) {
+                featureRow(
+                    icon: "bolt.fill",
+                    tone: .brand,
+                    title: l10n.s.obWelcomeBullet1Title,
+                    text: l10n.s.obWelcomeBullet1Body
+                )
+                featureRow(
+                    icon: "gauge.with.dots.needle.50percent",
+                    tone: .monitor,
+                    title: l10n.s.obWelcomeBullet2Title,
+                    text: l10n.s.obWelcomeBullet2Body
+                )
+                featureRow(
+                    icon: "rectangle.on.rectangle",
+                    tone: .windowsDock,
+                    title: l10n.s.obWelcomeBullet3Title,
+                    text: l10n.s.obWelcomeBullet3Body
+                )
+            }
         }
+        .padding(.horizontal, DesignSpace.xxl)
+        .padding(.vertical, DesignSpace.lg)
     }
 
-    private func featureRow(icon: String, title: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+    private func featureRow(
+        icon: String,
+        tone: SemanticCategoryTone,
+        title: String,
+        text: String
+    ) -> some View {
+        let tint = tone.color(scheme: colorScheme, highContrast: colorSchemeContrast == .increased)
+        return HStack(alignment: .top, spacing: DesignSpace.md) {
             ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Theme.spaceGradient)
-                    .frame(width: 30, height: 30)
+                RoundedRectangle(cornerRadius: DesignRadius.iconTile, style: .continuous)
+                    .fill(tint.opacity(colorScheme == .dark ? 0.18 : 0.12))
+                    .frame(width: 28, height: 28)
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(tint)
             }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: DesignSpace.xxs) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12.5, weight: .semibold))
                 Text(text)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, DesignSpace.md)
+        .padding(.vertical, DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
+                .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
+        )
+        .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.14)
     }
 }
 
 // MARK: - Purpose step
 
-/// Presets are quick starts, while the catalog below allows an exact choice.
-/// Both use the Features hub's own names and descriptions so setup stays
-/// consistent with what the person can change later.
+/// Role profiles and presets offer instant starting setups, while the
+/// collapsible catalog below allows per-feature customization.
 private struct PurposeStep: View {
     @ObservedObject private var l10n = L10n.shared
     @Binding var selectedFeatures: Set<AppFeature>
     @Binding var selectedPreset: FeaturePreset?
-    @Binding var selectedWorkspace: FeatureWorkspaceProfile?
+    @Binding var selectedRole: OnboardingRoleProfile?
+    @Binding var activeEnableKeys: [String]
     @State private var hoveredPreset: FeaturePreset?
-    @State private var hoveredWorkspace: FeatureWorkspaceProfile?
+    @State private var hoveredRole: OnboardingRoleProfile?
     @State private var hoveredFeature: AppFeature?
+    @State private var showingCustomCatalog = false
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var hub: FeatureHubStrings { FeatureStrings.hub(l10n.language) }
+    private var v3: OverhaulV3Strings { OverhaulV3Strings.localized(l10n.language) }
 
     var body: some View {
-        VStack(spacing: 16) {
-            StepHeader(icon: "sparkles.rectangle.stack",
-                       title: l10n.s.obPurposeTitle,
-                       subtitle: l10n.s.obPurposeBody)
+        VStack(spacing: DesignSpace.lg) {
+            StepHeader(
+                icon: "sparkles.rectangle.stack",
+                title: l10n.s.obPurposeTitle,
+                subtitle: l10n.s.obPurposeBody
+            )
 
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                ForEach(FeatureWorkspaceProfile.allCases) { profile in
-                    workspaceCard(profile)
-                }
-            }
-            .padding(.horizontal, 28)
-
-            VStack(spacing: 8) {
-                ForEach(FeaturePreset.allCases) { preset in
-                    bundleCard(preset)
-                }
-            }
-            .padding(.horizontal, 28)
-
-            HStack {
-                Text(hub.tabFeatures.uppercased())
-                    .font(.system(size: 11, weight: .bold))
+            VStack(alignment: .leading, spacing: DesignSpace.sm) {
+                Text(v3.onboardingRoleTitle)
+                    .font(.system(size: 11.5, weight: .bold))
                     .foregroundStyle(.secondary)
-                    .tracking(1)
-                Spacer()
-                Text(String(format: hub.activeCountFormat,
-                            selectedFeatures.count, FeatureRuntime.shared.installableCount))
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 28)
+                    .tracking(0.4)
 
-            // Eager, like the Features hub (#2311, #2642): a lazy stack nested
-            // here re-estimated the cards below the fold on every scroll step
-            // and re-anchored the viewport until the app hung.
-            VStack(spacing: 14) {
-                ForEach(FeatureGroup.allCases, id: \.self) { group in
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(groupTitle(group))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        ForEach(AppFeature.features(in: group), id: \.self) { feature in
-                            featureCard(feature)
-                        }
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: DesignSpace.sm),
+                        GridItem(.flexible(), spacing: DesignSpace.sm),
+                    ],
+                    spacing: DesignSpace.sm
+                ) {
+                    ForEach(OnboardingRoleProfile.allCases) { profile in
+                        roleCard(profile)
                     }
                 }
             }
-            .padding(.horizontal, 28)
+            .padding(.horizontal, DesignSpace.xxl)
+
+            VStack(alignment: .leading, spacing: DesignSpace.sm) {
+                Text(hub.presetsTitle)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .tracking(0.4)
+
+                HStack(spacing: DesignSpace.sm) {
+                    ForEach(FeaturePreset.allCases) { preset in
+                        presetPill(preset)
+                    }
+                }
+            }
+            .padding(.horizontal, DesignSpace.xxl)
+
+            VStack(alignment: .leading, spacing: 0) {
+                DisclosureGroup(isExpanded: $showingCustomCatalog) {
+                    // Eager, like the Features hub (#2311, #2642): a lazy stack nested
+                    // here re-estimated the cards below the fold on every scroll step
+                    // and re-anchored the viewport until the app hung.
+                    VStack(spacing: DesignSpace.md) {
+                        ForEach(FeatureGroup.allCases, id: \.self) { group in
+                            VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
+                                Text(groupTitle(group))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                ForEach(AppFeature.features(in: group), id: \.self) { feature in
+                                    featureCard(feature)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, DesignSpace.md)
+                } label: {
+                    HStack(spacing: DesignSpace.sm) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(
+                                SemanticCategoryTone.brand.color(
+                                    scheme: colorScheme,
+                                    highContrast: colorSchemeContrast == .increased
+                                )
+                            )
+                        Text(hub.tabFeatures)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: DesignSpace.sm)
+                        Text(
+                            String(
+                                format: hub.activeCountFormat,
+                                locale: l10n.language.formattingLocale(),
+                                selectedFeatures.count,
+                                FeatureRuntime.shared.installableCount
+                            )
+                        )
+                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, DesignSpace.xs)
+                }
+            }
+            .padding(DesignSpace.md)
+            .background(
+                RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
+                    .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
+            )
+            .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.16)
+            .padding(.horizontal, DesignSpace.xxl)
+            .animation(DesignMotion.resolve(DesignMotion.snappy, reduceMotion: reduceMotion), value: showingCustomCatalog)
 
             Text(l10n.s.obPurposeSkip)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 36)
-                .padding(.bottom, 12)
+                .padding(.horizontal, DesignSpace.section)
+                .padding(.bottom, DesignSpace.md)
 
-            Spacer()
+            Spacer(minLength: 0)
         }
     }
 
@@ -406,26 +406,30 @@ private struct PurposeStep: View {
         }
     }
 
-    private func workspaceCard(_ profile: FeatureWorkspaceProfile) -> some View {
-        let selected = selectedWorkspace == profile
-        let hovered = hoveredWorkspace == profile
-        let accent = profile.tone.badgeColor
+    private func roleCard(_ profile: OnboardingRoleProfile) -> some View {
+        let selected = selectedRole == profile
+        let hovered = hoveredRole == profile
+        let accent = profile.tone.color(
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
         return Button {
-            selectedWorkspace = profile
+            selectedRole = profile
             selectedPreset = nil
             selectedFeatures = profile.features
-            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+            activeEnableKeys = profile.recommendedEnableKeys
+            VorssaintHaptics.alignment()
         } label: {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: DesignSpace.sm + 2) {
                 Image(systemName: profile.symbolName)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 28, height: 28)
                     .background(
                         RoundedRectangle(cornerRadius: DesignRadius.iconTile, style: .continuous)
                             .fill(accent.gradient)
                     )
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: DesignSpace.xxs) {
                     Text(profile.title(in: l10n.language))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
@@ -442,68 +446,85 @@ private struct PurposeStep: View {
                         .foregroundStyle(accent)
                 }
             }
-            .padding(11)
+            .padding(DesignSpace.md)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
-                    .fill(selected ? accent.opacity(0.14) : Color.primary.opacity(hovered ? 0.075 : 0.045))
+                    .fill(
+                        selected
+                            ? accent.opacity(colorScheme == .dark ? 0.16 : 0.11)
+                            : Color.primary.opacity(hovered ? 0.075 : 0.045)
+                    )
             )
             .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: selected ? 0.34 : 0.16)
+            .contentShape(RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .onHover { hoveredWorkspace = $0 ? profile : (hoveredWorkspace == profile ? nil : hoveredWorkspace) }
-        .animation(DesignMotion.snappy, value: selected)
+        .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: DesignRadius.card))
+        .onHover { hovering in
+            if hovering {
+                hoveredRole = profile
+            } else if hoveredRole == profile {
+                hoveredRole = nil
+            }
+        }
+        .accessibilityLabel("\(profile.title(in: l10n.language)). \(profile.subtitle(in: l10n.language))")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .animation(DesignMotion.resolve(DesignMotion.snappy, reduceMotion: reduceMotion), value: selected)
     }
 
-    private func bundleCard(_ preset: FeaturePreset) -> some View {
+    private func presetPill(_ preset: FeaturePreset) -> some View {
         let selected = selectedPreset == preset
         let isHovered = hoveredPreset == preset
+        let accent = SemanticCategoryTone.brand.color(
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
         return Button {
             selectedPreset = preset
-            selectedWorkspace = nil
+            selectedRole = nil
             selectedFeatures = preset.features
+            activeEnableKeys = preset.enableKeys
+            VorssaintHaptics.alignment()
         } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: DesignSpace.sm) {
                 Image(systemName: preset.symbolName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 26)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(selected ? accent : .secondary)
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name(preset))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text(caption(preset))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
+                Text(name(preset))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary.opacity(isHovered ? 0.6 : 0.35))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(selected ? accent : Color.secondary.opacity(isHovered ? 0.65 : 0.35))
                     .accessibilityHidden(true)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, DesignSpace.md)
+            .padding(.vertical, DesignSpace.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected
-                          ? Color.accentColor.opacity(isHovered ? 0.16 : 0.12)
-                          : Color.primary.opacity(isHovered ? 0.08 : 0.05))
+                RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous)
+                    .fill(
+                        selected
+                            ? accent.opacity(isHovered ? 0.16 : 0.12)
+                            : Color.primary.opacity(isHovered ? 0.08 : 0.045)
+                    )
             )
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(selected
-                                  ? Color.accentColor.opacity(0.45)
-                                  : Color.primary.opacity(isHovered ? 0.14 : 0),
-                                  lineWidth: 1)
+                RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous)
+                    .strokeBorder(
+                        selected ? accent.opacity(0.42) : Color.primary.opacity(isHovered ? 0.14 : 0.08),
+                        lineWidth: 0.75
+                    )
             }
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .onHover { isHovered in
-            if isHovered {
+        .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: DesignRadius.pill))
+        .help(caption(preset))
+        .onHover { hovering in
+            if hovering {
                 hoveredPreset = preset
             } else if hoveredPreset == preset {
                 hoveredPreset = nil
@@ -511,7 +532,7 @@ private struct PurposeStep: View {
         }
         .accessibilityLabel("\(name(preset)). \(caption(preset))")
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .animation(.easeOut(duration: 0.15), value: selectedPreset)
+        .animation(DesignMotion.resolve(DesignMotion.snappy, reduceMotion: reduceMotion), value: selectedPreset)
     }
 
     private func featureCard(_ feature: AppFeature) -> some View {
@@ -522,31 +543,35 @@ private struct PurposeStep: View {
         // being ticked here. It is shown and refused instead, exactly as the
         // hub row does it.
         let blocked = feature.installBlockedReason
-        let card = Button {
-            selectedPreset = nil
-            selectedWorkspace = nil
-            if selected {
-                selectedFeatures.remove(feature)
-                if feature == .notch {
-                    selectedFeatures.subtract(AppFeature.dynamicIslandExtensions)
+        let tone = SemanticCategoryPalette.tone(for: feature)
+        let tint = tone.color(scheme: colorScheme, highContrast: colorSchemeContrast == .increased)
+        let binding = Binding<Bool>(
+            get: { selectedFeatures.contains(feature) },
+            set: { isOn in
+                selectedPreset = nil
+                selectedRole = nil
+                if isOn {
+                    selectedFeatures.formUnion(feature.initialInstallGroup)
+                } else {
+                    selectedFeatures.remove(feature)
+                    if feature == .notch {
+                        selectedFeatures.subtract(AppFeature.dynamicIslandExtensions)
+                    }
                 }
-            } else {
-                selectedFeatures.formUnion(feature.initialInstallGroup)
             }
-        } label: {
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(selected
-                          ? AnyShapeStyle(Theme.spaceGradient)
-                          : AnyShapeStyle(Color.secondary.opacity(0.16)))
-                    .frame(width: 32, height: 32)
+        )
+        let card = Toggle(isOn: binding) {
+            HStack(spacing: DesignSpace.sm + 2) {
+                RoundedRectangle(cornerRadius: DesignRadius.iconTile, style: .continuous)
+                    .fill(selected ? tint : Color.secondary.opacity(0.16))
+                    .frame(width: 28, height: 28)
                     .overlay {
                         Image(systemName: feature.symbolName)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(selected ? Color.white : Color.secondary)
                             .accessibilityHidden(true)
                     }
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: DesignSpace.xxs) {
                     Text(feature.hubTitle(l10n.s, hub: hub))
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(.primary)
@@ -556,33 +581,29 @@ private struct PurposeStep: View {
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary.opacity(isHovered ? 0.65 : 0.45))
-                    .accessibilityHidden(true)
+                Spacer(minLength: DesignSpace.xs)
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected
-                          ? Color.accentColor.opacity(isHovered ? 0.13 : 0.09)
-                          : Color.primary.opacity(isHovered ? 0.065 : 0.035))
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(selected
-                                  ? Color.accentColor.opacity(isHovered ? 0.35 : 0.18)
-                                  : Color.primary.opacity(isHovered ? 0.12 : 0),
-                                  lineWidth: 1)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .onHover { isHovered in
+        .toggleStyle(VorssaintCheckPillStyle(tone: tone))
+        .padding(.horizontal, DesignSpace.md)
+        .padding(.vertical, DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .fill(selected
+                      ? tint.opacity(isHovered ? 0.13 : 0.09)
+                      : Color.primary.opacity(isHovered ? 0.065 : 0.035))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
+                .strokeBorder(selected
+                              ? tint.opacity(isHovered ? 0.35 : 0.18)
+                              : Color.primary.opacity(isHovered ? 0.12 : 0),
+                              lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous))
+        .onHover { hovering in
             guard blocked == nil else { return }
-            if isHovered {
+            if hovering {
                 hoveredFeature = feature
             } else if hoveredFeature == feature {
                 hoveredFeature = nil
@@ -619,61 +640,76 @@ private struct SelectedPermissionsStep: View {
     let features: Set<AppFeature>
     let permissions: [AppPermission]
 
+    @Environment(\.colorScheme) private var colorScheme
+
     private var hub: FeatureHubStrings { FeatureStrings.hub(l10n.language) }
     private var otherPermissions: [AppPermission] {
         AppPermission.allCases.filter { !permissions.contains($0) }
     }
 
     var body: some View {
-        VStack(spacing: 18) {
-            StepHeader(icon: "key.horizontal.fill",
-                       title: hub.tabPermissions,
-                       subtitle: hub.permissionsIntro)
+        VStack(spacing: DesignSpace.lg) {
+            StepHeader(
+                icon: "key.horizontal.fill",
+                title: hub.tabPermissions,
+                subtitle: hub.permissionsIntro
+            )
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: DesignSpace.md) {
                 Text(hub.onboardingSelectedPermissionsTitle)
                     .font(.headline)
 
                 if permissions.isEmpty {
-                    Label(hub.onboardingNoSelectedPermissions,
-                          systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                    Label(
+                        hub.onboardingNoSelectedPermissions,
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .foregroundStyle(.secondary)
                 } else {
                     VStack(spacing: 0) {
                         ForEach(Array(permissions.enumerated()), id: \.offset) { index, permission in
-                            if index > 0 { Divider().padding(.vertical, 12) }
-                            VStack(alignment: .leading, spacing: 8) {
-                                PermissionRow(kind: permission == .accessibility
-                                              ? .accessibility : .screenRecording)
+                            if index > 0 { Divider().padding(.vertical, DesignSpace.md) }
+                            VStack(alignment: .leading, spacing: DesignSpace.sm) {
+                                PermissionRow(
+                                    kind: permission == .accessibility
+                                        ? .accessibility : .screenRecording
+                                )
                                 Text(permission.explainer(hub))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                Text(String(format: hub.usedByFormat,
-                                            featureNames(for: permission)))
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                Text(
+                                    String(
+                                        format: hub.usedByFormat,
+                                        locale: l10n.language.formattingLocale(),
+                                        featureNames(for: permission)
+                                    )
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
                             }
                         }
                     }
                 }
             }
-            .padding(16)
+            .padding(DesignSpace.lg)
             .background(
                 RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
+                    .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
             )
             .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.18)
-            .padding(.horizontal, 28)
+            .padding(.horizontal, DesignSpace.xxl)
             .animation(.easeOut(duration: 0.16), value: showingOtherPermissions)
 
             DisclosureGroup(isExpanded: $showingOtherPermissions) {
                 VStack(alignment: .leading, spacing: 14) {
-                    PermissionsPortalSections(hub: hub,
-                                              visiblePermissions: otherPermissions)
+                    PermissionsPortalSections(
+                        hub: hub,
+                        visiblePermissions: otherPermissions
+                    )
                 }
-                .padding(.top, 12)
+                .padding(.top, DesignSpace.md)
             } label: {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: DesignSpace.xxs) {
                     Text(hub.onboardingOtherPermissionsTitle)
                         .font(.headline)
                     Text(hub.onboardingOtherPermissionsCaption)
@@ -681,22 +717,22 @@ private struct SelectedPermissionsStep: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(16)
+            .padding(DesignSpace.lg)
             .background(
                 RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
+                    .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
             )
             .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.18)
-            .padding(.horizontal, 28)
+            .padding(.horizontal, DesignSpace.xxl)
             .animation(.easeOut(duration: 0.16), value: showingOtherPermissions)
 
             Text(l10n.s.permissionRestartNote)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 36)
+                .padding(.horizontal, DesignSpace.section)
 
-            Spacer()
+            Spacer(minLength: 0)
         }
     }
 
@@ -712,129 +748,54 @@ private struct SelectedPermissionsStep: View {
     }
 }
 
-// MARK: - Done
+// MARK: - Done & interactive sandbox
 
 private struct DoneStep: View {
     @ObservedObject private var l10n = L10n.shared
-    @AppStorage(DefaultsKey.notchMascotStyle) private var mascotStyleRaw = NotchMascotStyle.minimal.rawValue
-    @AppStorage(DefaultsKey.notchMascotShape) private var mascotShapeRaw = NotchMascotShape.ball.rawValue
-    @AppStorage(DefaultsKey.notchMascotPalette) private var mascotPaletteRaw = NotchMascotPalette.pearl.rawValue
-    @State private var mascotReaction: NotchMascotReaction? = .celebrate
-
-    private var currentLook: NotchMascotLook {
-        NotchMascotLook(
-            style: NotchMascotStyle(rawValue: mascotStyleRaw) ?? .minimal,
-            shape: NotchMascotShape(rawValue: mascotShapeRaw) ?? .ball,
-            palette: NotchMascotPalette(rawValue: mascotPaletteRaw) ?? .pearl
-        )
-    }
-
-    private func triggerReaction(_ next: NotchMascotReaction, feedback: NSHapticFeedbackManager.FeedbackPattern = .levelChange) {
-        if mascotReaction == next {
-            mascotReaction = nil
-            DispatchQueue.main.async { mascotReaction = next }
-        } else {
-            mascotReaction = next
-        }
-        NSHapticFeedbackManager.defaultPerformer.perform(feedback, performanceTime: .default)
-    }
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let overhaul = OverhaulStrings.localized(l10n.language)
-        return VStack(spacing: 0) {
-            ZStack {
-                Theme.spaceGradient
-                VStack(spacing: 12) {
-                    BrandMark(width: 112)
-                    Text(l10n.s.obStepDoneTitle)
-                        .font(.system(size: 25, weight: .bold))
-                        .foregroundStyle(.white)
-                    Text(l10n.s.obStepDoneBody)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
+        return VStack(spacing: DesignSpace.lg) {
+            VStack(spacing: DesignSpace.sm) {
+                BrandBadge(size: 44)
+                Text(l10n.s.obStepDoneTitle)
+                    .font(.system(size: 21, weight: .bold))
+                Text(l10n.s.obStepDoneBody)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .frame(height: 195)
+            .padding(.top, DesignSpace.lg)
 
-            VStack(spacing: 12) {
-                HStack(spacing: 14) {
-                    Button {
-                        triggerReaction(.love)
-                    } label: {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
-                                .fill(Color.black.opacity(0.88))
-                                .frame(width: 72, height: 64)
-                                .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.25)
-                            NotchMascotView(
-                                look: currentLook,
-                                mood: .happy,
-                                size: 48,
-                                followsDrag: true,
-                                reaction: mascotReaction
-                            )
-                            .frame(width: 64, height: 56)
-                        }
-                    }
-                    .buttonStyle(.plain)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(overhaul.sandboxTitle)
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(overhaul.sandboxSubtitle)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                        HStack(spacing: 6) {
-                            Button(overhaul.sandboxTryPet) {
-                                triggerReaction(.love)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-
-                            Button(overhaul.sandboxTryPalette) {
-                                let all = NotchMascotPalette.allCases
-                                if let idx = all.firstIndex(where: { $0.rawValue == mascotPaletteRaw }) {
-                                    mascotPaletteRaw = all[(idx + 1) % all.count].rawValue
-                                } else {
-                                    mascotPaletteRaw = all.first?.rawValue ?? NotchMascotPalette.pearl.rawValue
-                                }
-                                triggerReaction(.perk, feedback: .alignment)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-
-                            Button(overhaul.sandboxTrySnap) {
-                                triggerReaction(.celebrate)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(SemanticCategoryTone.dynamicIsland.badgeColor)
-                            .controlSize(.small)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                )
-                .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.18)
-                .padding(.horizontal, 28)
-
-                VStack(spacing: 8) {
-                    Image(systemName: "menubar.arrow.up.rectangle")
-                        .font(.system(size: 22))
-                        .foregroundStyle(.secondary)
-                    Text(l10n.s.obDoneHint)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 60)
-                }
+            VStack(alignment: .leading, spacing: DesignSpace.sm) {
+                Text(overhaul.sandboxTitle)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                OnboardingInteractiveStageView(showsBrandHeader: false, showsSandboxCards: true)
             }
-            .padding(.top, 36)
+            .padding(.horizontal, DesignSpace.xxl)
 
-            Spacer()
+            HStack(spacing: DesignSpace.md) {
+                Image(systemName: "menubar.arrow.up.rectangle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(l10n.s.obDoneHint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(DesignSpace.md)
+            .background(
+                RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
+                    .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
+            )
+            .hairlineSpecularBorder(cornerRadius: DesignRadius.card, opacity: 0.14)
+            .padding(.horizontal, DesignSpace.xxl)
+            .padding(.bottom, DesignSpace.md)
+
+            Spacer(minLength: 0)
         }
     }
 }
@@ -847,24 +808,24 @@ private struct StepHeader: View {
     let subtitle: String
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: DesignSpace.sm) {
             ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: DesignRadius.card, style: .continuous)
                     .fill(Theme.spaceGradient)
-                    .frame(width: 56, height: 56)
+                    .frame(width: 48, height: 48)
                 Image(systemName: icon)
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.system(size: 21, weight: .semibold))
                     .foregroundStyle(.white)
             }
             Text(title)
-                .font(.system(size: 19, weight: .bold))
+                .font(.system(size: 18, weight: .bold))
             Text(subtitle)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 48)
+                .padding(.horizontal, DesignSpace.section)
         }
-        .padding(.top, 30)
+        .padding(.top, DesignSpace.lg)
     }
 }

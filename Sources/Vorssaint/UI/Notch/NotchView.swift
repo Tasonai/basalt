@@ -27,6 +27,11 @@ struct NotchView: View {
         tint: NotchMusicService.shared.artworkTint
     )
     @State private var ambientGlowColor: Color?
+    @State private var stretchX: CGFloat = 1.0
+    @State private var rubberBandDragY: CGFloat = 0.0
+    @State private var lastNoticeEvent: NotchEvent?
+    @State private var lastNoticeLevel: Double?
+    @State private var stretchResetTask: Task<Void, Never>?
     @ObservedObject private var launcher = QuickLauncherService.shared
     @ObservedObject private var updates = UpdateService.shared
     @AppStorage(DefaultsKey.notchLiquidGlassEnabled) private var glass = false
@@ -54,14 +59,24 @@ struct NotchView: View {
             // new strip where it stood, so the swap under it is left
             // unanimated: two of it crossfading in one place would dim it.
             .transaction(value: service.compactActivity) { transaction in
-                guard !reduceMotion, !service.mascotLingers else { return }
+                if reduceMotion || service.mascotLingers {
+                    transaction.animation = nil
+                    return
+                }
                 let arrives = service.compactActivity != nil && service.mascotJustRested
                 let leaves = service.compactActivity == nil && service.mascotAtRest
                     && service.departingMusic == nil && service.lingeringMusic == nil
-                guard arrives || leaves else { return }
-                transaction.animation = .easeInOut(duration: NotchMascotMotion.restCrossfade)
+                if arrives || leaves {
+                    transaction.animation = .easeInOut(duration: NotchMascotMotion.restCrossfade)
+                } else {
+                    transaction.animation = nil
+                }
             }
+            .scaleEffect(x: reduceMotion ? 1.0 : stretchX, y: 1.0, anchor: .top)
             .frame(width: service.surfaceSize.width, height: service.surfaceSize.height, alignment: .top)
+            .animation(DesignMotion.resolve(DesignMotion.fluidX, reduceMotion: reduceMotion), value: service.surfaceSize.width)
+            .animation(DesignMotion.resolve(DesignMotion.fluidY, reduceMotion: reduceMotion), value: service.surfaceSize.height)
+            .animation(DesignMotion.resolve(DesignMotion.fluidX, reduceMotion: reduceMotion), value: stretchX)
             .foregroundStyle(.white)
             // The window server leaves SwiftUI content that ignores hit tests
             // out of its own hit test unless it is fully opaque. The backdrop
@@ -83,6 +98,29 @@ struct NotchView: View {
             }
             .onChange(of: contrast) {
                 DispatchQueue.main.async { service.refreshPresentation(animated: false) }
+            }
+            .onReceive(service.$notice) { incoming in
+                handleNoticeFluidPulse(incoming)
+            }
+            .onChange(of: service.expanded) { _, isExpanded in
+                if !isExpanded {
+                    rubberBandDragY = 0
+                    if !reduceMotion, stretchX != 1.0 {
+                        withAnimation(DesignMotion.fluidX) { stretchX = 1.0 }
+                    } else {
+                        stretchX = 1.0
+                    }
+                }
+            }
+            .onChange(of: reduceMotion) { _, isReduced in
+                if isReduced {
+                    stretchResetTask?.cancel()
+                    stretchX = 1.0
+                    rubberBandDragY = 0
+                }
+            }
+            .onDisappear {
+                stretchResetTask?.cancel()
             }
             .onReceive(NotchMusicService.shared.$playback.map { $0 != nil }.removeDuplicates()) { hasPlayback in
                 let next: Bool? = hasPlayback ? true : nil
@@ -368,6 +406,7 @@ struct NotchView: View {
             .padding(.horizontal, NotchLayout.horizontalInset)
             .padding(.top, geometry.headerTopInset)
             .padding(.bottom, NotchLayout.bottomInset)
+            .offset(y: reduceMotion ? 0 : rubberBandDragY)
             .frame(width: service.expandedSize.width, height: service.expandedSize.height, alignment: .top)
             .background {
                 if let bloom = expandedAmbientGlowColor, music.playback != nil, !reduceTransparency {
@@ -401,11 +440,103 @@ struct NotchView: View {
                 }
             }
             .contentShape(Rectangle())
+            .gesture(expandedRubberBandGesture)
             .contextMenu { islandMenu }
             // Opening the island makes its panel key, so Keyboard navigation would ring
             // the first control. Show the ring once keyboard input begins.
             .focusEffectDisabled(!service.showsKeyboardFocus)
             .onAppear { UpdateService.shared.checkIfStale() }
+    }
+
+    private var expandedRubberBandGesture: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .onChanged { value in
+                guard service.expanded, !service.showingCommandBar, !reduceMotion else { return }
+                let dy = value.translation.height
+                let dx = value.translation.width
+                guard abs(dy) > abs(dx) * 1.2 else { return }
+                let dampedY = NotchFluidKinematics.rubberBand(overshoot: dy, dimension: 14)
+                withAnimation(DesignMotion.fluidY) {
+                    rubberBandDragY = dampedY
+                }
+                withAnimation(DesignMotion.fluidX) {
+                    if dampedY >= 0 {
+                        stretchX = max(0.975, 1.0 - (dampedY / 14.0) * 0.02)
+                    } else {
+                        stretchX = min(1.02, 1.0 + (abs(dampedY) / 14.0) * 0.015)
+                    }
+                }
+            }
+            .onEnded { value in
+                let dy = value.translation.height
+                let dx = value.translation.width
+                let isVertical = abs(dy) > abs(dx) * 1.2
+                let projected = Double(dy) + NotchFluidKinematics.project(velocity: Double(value.velocity.height))
+                let shouldCollapse = service.expanded && !service.showingCommandBar && isVertical
+                    && (dy < -28 || projected < -64)
+                if reduceMotion {
+                    rubberBandDragY = 0
+                    stretchX = 1.0
+                } else {
+                    withAnimation(DesignMotion.fluidY) {
+                        rubberBandDragY = 0
+                    }
+                    withAnimation(DesignMotion.fluidX) {
+                        stretchX = 1.0
+                    }
+                }
+                if shouldCollapse {
+                    service.collapse()
+                }
+            }
+    }
+
+    private func handleNoticeFluidPulse(_ incoming: NotchNotice?) {
+        guard let incoming, let level = incoming.level else {
+            lastNoticeEvent = incoming?.event
+            lastNoticeLevel = nil
+            if !reduceMotion, stretchX != 1.0, rubberBandDragY == 0 {
+                withAnimation(DesignMotion.fluidX) {
+                    stretchX = 1.0
+                }
+            } else if reduceMotion {
+                stretchX = 1.0
+            }
+            return
+        }
+        let delta: Double
+        if lastNoticeEvent == incoming.event, let previous = lastNoticeLevel {
+            if abs(level - previous) > 0.0001 {
+                delta = level - previous
+            } else if level > 0.99 {
+                delta = 0.06
+            } else if level < 0.01 {
+                delta = -0.06
+            } else {
+                delta = 0
+            }
+        } else {
+            delta = 0
+        }
+        lastNoticeEvent = incoming.event
+        lastNoticeLevel = level
+        guard !reduceMotion else {
+            stretchX = 1.0
+            return
+        }
+        let overshoot = NotchFluidKinematics.hudOvershootScale(normalizedLevel: level, delta: delta)
+        guard overshoot > 1.0001 else { return }
+        stretchResetTask?.cancel()
+        withAnimation(DesignMotion.fluidX) {
+            stretchX = overshoot
+        }
+        stretchResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled else { return }
+            withAnimation(DesignMotion.fluidX) {
+                stretchX = 1.0
+            }
+        }
     }
 
     private var pageName: String {
@@ -931,29 +1062,46 @@ struct NotchShape: Shape {
     func path(in rect: CGRect) -> Path {
         guard attached else { return Path(roundedRect: rect, cornerRadius: radius) }
         if let floatingGap { return Path(NotchLayout.capsulePath(in: rect, gap: floatingGap)) }
+        guard rect.width.isFinite, rect.height.isFinite,
+              rect.minX.isFinite, rect.minY.isFinite,
+              rect.width > 0, rect.height > 0 else {
+            return rect.width > 0 && rect.width.isFinite
+                ? Path {
+                    $0.move(to: CGPoint(x: rect.minX, y: rect.minY))
+                    $0.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+                }
+                : Path()
+        }
+        // Keep shoulder and bottom corner math self-contained (matching NotchConcaveEarGeometry)
+        // so extracted test targets compile standalone.
         let baseShoulder = NotchLayout.shoulder(height: rect.height)
-        let shoulder = max(3, min(rect.width * 0.25, baseShoulder + shoulderFit))
-        let baseBottom = min(radius + radiusFit, rect.height / 2, (rect.width - shoulder * 2) / 2)
-        let bottom = max(2, baseBottom)
+        let requestedShoulder = baseShoulder + shoulderFit
+        let shoulder = min(max(4, requestedShoulder), rect.width * 0.22, rect.height * 0.45)
+        let requestedBottom = radius + radiusFit
+        let clampedBottom = min(max(2, requestedBottom), rect.height * 0.48, max(2, (rect.width - shoulder * 2) * 0.5))
+        let bottom = min(clampedBottom, max(0, (rect.width - shoulder * 2) * 0.5))
         let tangent: CGFloat = 0.55228475
+        let topSpan = shoulder * tangent
+        let earInset = shoulder * (1 - tangent)
+        let bottomSpan = bottom * (1 - tangent)
         var path = Path()
-        path.move(to: CGPoint(x: 0, y: 0))
-        path.addLine(to: CGPoint(x: rect.width, y: 0))
-        path.addCurve(to: CGPoint(x: rect.width - shoulder, y: shoulder),
-                      control1: CGPoint(x: rect.width - shoulder * tangent, y: 0),
-                      control2: CGPoint(x: rect.width - shoulder, y: shoulder * (1 - tangent)))
-        path.addLine(to: CGPoint(x: rect.width - shoulder, y: rect.height - bottom))
-        path.addCurve(to: CGPoint(x: rect.width - shoulder - bottom, y: rect.height),
-                      control1: CGPoint(x: rect.width - shoulder, y: rect.height - bottom * (1 - tangent)),
-                      control2: CGPoint(x: rect.width - shoulder - bottom * (1 - tangent), y: rect.height))
-        path.addLine(to: CGPoint(x: shoulder + bottom, y: rect.height))
-        path.addCurve(to: CGPoint(x: shoulder, y: rect.height - bottom),
-                      control1: CGPoint(x: shoulder + bottom * (1 - tangent), y: rect.height),
-                      control2: CGPoint(x: shoulder, y: rect.height - bottom * (1 - tangent)))
-        path.addLine(to: CGPoint(x: shoulder, y: shoulder))
-        path.addCurve(to: .zero,
-                      control1: CGPoint(x: shoulder, y: shoulder * (1 - tangent)),
-                      control2: CGPoint(x: shoulder * tangent, y: 0))
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addCurve(to: CGPoint(x: rect.maxX - shoulder, y: rect.minY + shoulder),
+                      control1: CGPoint(x: rect.maxX - topSpan, y: rect.minY),
+                      control2: CGPoint(x: rect.maxX - shoulder, y: rect.minY + earInset))
+        path.addLine(to: CGPoint(x: rect.maxX - shoulder, y: rect.maxY - bottom))
+        path.addCurve(to: CGPoint(x: rect.maxX - shoulder - bottom, y: rect.maxY),
+                      control1: CGPoint(x: rect.maxX - shoulder, y: rect.maxY - bottomSpan),
+                      control2: CGPoint(x: rect.maxX - shoulder - bottomSpan, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + shoulder + bottom, y: rect.maxY))
+        path.addCurve(to: CGPoint(x: rect.minX + shoulder, y: rect.maxY - bottom),
+                      control1: CGPoint(x: rect.minX + shoulder + bottomSpan, y: rect.maxY),
+                      control2: CGPoint(x: rect.minX + shoulder, y: rect.maxY - bottomSpan))
+        path.addLine(to: CGPoint(x: rect.minX + shoulder, y: rect.minY + shoulder))
+        path.addCurve(to: CGPoint(x: rect.minX, y: rect.minY),
+                      control1: CGPoint(x: rect.minX + shoulder, y: rect.minY + earInset),
+                      control2: CGPoint(x: rect.minX + topSpan, y: rect.minY))
         path.closeSubpath()
         return path
     }
