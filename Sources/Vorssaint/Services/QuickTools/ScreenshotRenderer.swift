@@ -956,9 +956,35 @@ enum ScreenshotRenderer {
         let scale: CGFloat
     }
 
+    struct CanvasLayout: Equatable {
+        let canvasSize: CGSize
+        let imageOrigin: CGPoint
+    }
+
+    /// Computes outer canvas dimensions and top-left image origin for optional backdrop
+    /// padding and optional `SocialExportFramePreset` aspect framing.
+    static func canvasLayout(imageSize: CGSize,
+                             padding: CGFloat,
+                             hasBackdrop: Bool,
+                             socialFramePreset: SocialExportFramePreset?) -> CanvasLayout {
+        let basePadding = hasBackdrop ? padding : 0
+        let contentSize = CGSize(width: imageSize.width + basePadding * 2,
+                                 height: imageSize.height + basePadding * 2)
+        guard let socialFramePreset else {
+            return CanvasLayout(
+                canvasSize: contentSize,
+                imageOrigin: CGPoint(x: basePadding, y: basePadding)
+            )
+        }
+        let fitted = socialFramePreset.fittedCanvasSize(for: contentSize)
+        let originX = ((fitted.width - imageSize.width) / 2).rounded()
+        let originY = ((fitted.height - imageSize.height) / 2).rounded()
+        return CanvasLayout(canvasSize: fitted, imageOrigin: CGPoint(x: originX, y: originY))
+    }
+
     /// Flattens the base image, annotations and watermark, rounds the card's
     /// corners, optionally composes the padded backdrop fill behind it,
-    /// optionally downscaled to 1x.
+    /// optionally fits a social export frame, and optionally downscales to 1x.
     static func renderExport(baseImage: CGImage,
                              annotations: [ScreenshotSupport.Annotation],
                              blurSources: BlurSources,
@@ -969,7 +995,8 @@ enum ScreenshotRenderer {
                              style: ScreenshotSupport.BackdropStyle,
                              fill: BackdropFill,
                              downscaleTo1x: Bool,
-                             spotlightDimStrength: CGFloat = 0.5) -> Export? {
+                             spotlightDimStrength: CGFloat = 0.5,
+                             socialFramePreset: SocialExportFramePreset? = nil) -> Export? {
         let imageSize = CGSize(width: baseImage.width, height: baseImage.height)
         let corner = ScreenshotSupport.cardCornerRadius(for: imageSize,
                                                         factor: style.cornerRadius)
@@ -990,6 +1017,19 @@ enum ScreenshotRenderer {
             if corner > 0, let rounded = roundedAlpha(flattened, corner: corner) {
                 result = rounded
             }
+            if let socialFramePreset {
+                let layout = canvasLayout(imageSize: imageSize,
+                                          padding: 0,
+                                          hasBackdrop: false,
+                                          socialFramePreset: socialFramePreset)
+                if Int(layout.canvasSize.width) != result.width
+                    || Int(layout.canvasSize.height) != result.height,
+                   let framed = renderTransparentSocialFrame(result,
+                                                             imageSize: imageSize,
+                                                             layout: layout) {
+                    result = framed
+                }
+            }
         } else if let composed = renderBackdrop(fill,
                                                 behind: flattened,
                                                 imageSize: imageSize,
@@ -998,7 +1038,8 @@ enum ScreenshotRenderer {
                                                 outlineCorner: max(corner, ScreenshotSupport
                                                     .transparentCornerRadius(of: baseImage)),
                                                 blurFactor: CGFloat(style.blur),
-                                                scale: scale) {
+                                                scale: scale,
+                                                socialFramePreset: socialFramePreset) {
             result = composed
         }
         if downscaleTo1x, scale > 1 {
@@ -1009,6 +1050,28 @@ enum ScreenshotRenderer {
             }
         }
         return Export(image: result, scale: scale)
+    }
+
+    private static func renderTransparentSocialFrame(_ image: CGImage,
+                                                   imageSize: CGSize,
+                                                   layout: CanvasLayout) -> CGImage? {
+        let width = max(1, Int(layout.canvasSize.width))
+        let height = max(1, Int(layout.canvasSize.height))
+        guard let context = CGContext(data: nil,
+                                      width: width,
+                                      height: height,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        let cgOriginY = CGFloat(height) - layout.imageOrigin.y - imageSize.height
+        let targetRect = CGRect(x: layout.imageOrigin.x,
+                                y: cgOriginY,
+                                width: imageSize.width,
+                                height: imageSize.height)
+        context.draw(image, in: targetRect)
+        return context.makeImage()
     }
 
     private static func roundedAlpha(_ image: CGImage, corner: CGFloat) -> CGImage? {
@@ -1075,10 +1138,15 @@ enum ScreenshotRenderer {
                                        corner: CGFloat,
                                        outlineCorner: CGFloat,
                                        blurFactor: CGFloat,
-                                       scale: CGFloat) -> CGImage? {
+                                       scale: CGFloat,
+                                       socialFramePreset: SocialExportFramePreset? = nil) -> CGImage? {
         let padding = ScreenshotSupport.backdropPadding(for: imageSize, factor: paddingFactor)
-        let width = Int(imageSize.width + padding * 2)
-        let height = Int(imageSize.height + padding * 2)
+        let layout = canvasLayout(imageSize: imageSize,
+                                  padding: padding,
+                                  hasBackdrop: true,
+                                  socialFramePreset: socialFramePreset)
+        let width = max(1, Int(layout.canvasSize.width))
+        let height = max(1, Int(layout.canvasSize.height))
         guard let context = CGContext(data: nil,
                                       width: width,
                                       height: height,
@@ -1095,7 +1163,8 @@ enum ScreenshotRenderer {
             context.draw(blurred, in: CGRect(x: 0, y: 0, width: width, height: height))
         }
 
-        let imageRect = CGRect(x: padding, y: padding,
+        let cgOriginY = CGFloat(height) - layout.imageOrigin.y - imageSize.height
+        let imageRect = CGRect(x: layout.imageOrigin.x, y: cgOriginY,
                                width: imageSize.width, height: imageSize.height)
         context.saveGState()
         context.setShadow(offset: CGSize(width: 0, height: -6 * scale),

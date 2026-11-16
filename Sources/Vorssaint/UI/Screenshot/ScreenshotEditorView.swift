@@ -31,6 +31,11 @@ struct ScreenshotEditorView: View {
     @State private var cloudUploading = false
     @State private var sharedRecord: ScreenshotShareRecord?
     @State private var shareAnchor = ShelfSharePickerAnchor.Anchor()
+    @State private var socialFramePreset: SocialExportFramePreset?
+    @State private var activeSmartGuides: [SmartGuideLine] = []
+    @State private var dragStartAnnotationSize: CGSize?
+    @State private var dragStartLineLength: CGFloat = 0
+    @AppStorage("screenshotSmartGuidesEnabled") private var smartGuidesEnabled = true
     @AppStorage(DefaultsKey.screenshotToolOrder) private var toolOrderRaw =
         ScreenshotSupport.Tool.defaultOrderStorage
     @AppStorage(DefaultsKey.screenshotToolShortcuts) private var bindingsRaw = ""
@@ -41,6 +46,10 @@ struct ScreenshotEditorView: View {
 
     private var strings: ScreenshotFeatureStrings {
         FeatureStrings.screenshot(l10n.language)
+    }
+
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
     }
 
     private var recentCapturesTitle: String {
@@ -88,6 +97,10 @@ struct ScreenshotEditorView: View {
         .animation(.spring(response: 0.28, dampingFraction: 0.86), value: model.tool)
         .animation(.easeOut(duration: 0.16), value: model.annotationShadowsEnabled)
         .animation(.spring(response: 0.28, dampingFraction: 0.86), value: model.backdropStyle)
+        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: socialFramePreset)
+        .onChange(of: smartGuidesEnabled) { _, enabled in
+            if !enabled { activeSmartGuides = [] }
+        }
         .onChange(of: model.tool) { old, new in
             if old == .expandCanvas, new != .expandCanvas { expansionDragZoom = nil }
         }
@@ -165,10 +178,17 @@ struct ScreenshotEditorView: View {
 
     // MARK: - Canvas
 
+    private var canvasLayout: ScreenshotRenderer.CanvasLayout {
+        ScreenshotRenderer.canvasLayout(
+            imageSize: model.imageSize,
+            padding: model.backdropPaddingPixels,
+            hasBackdrop: model.showsBackdrop,
+            socialFramePreset: socialFramePreset
+        )
+    }
+
     private var contentPixelSize: CGSize {
-        let pad = model.backdropPaddingPixels
-        return CGSize(width: model.imageSize.width + pad * 2,
-                      height: model.imageSize.height + pad * 2)
+        canvasLayout.canvasSize
     }
 
     private var canvasArea: some View {
@@ -290,8 +310,8 @@ struct ScreenshotEditorView: View {
                                                      cardCornerRadius: model.showsBackdrop
                                                          ? model.cardCornerPixels * zoom
                                                          : outerRadius)
-                        .offset(x: (draft.minX + model.backdropPaddingPixels) * zoom,
-                                y: (draft.minY + model.backdropPaddingPixels) * zoom)
+                        .offset(x: (draft.minX + canvasLayout.imageOrigin.x) * zoom,
+                                y: (draft.minY + canvasLayout.imageOrigin.y) * zoom)
                 }
             }
         }
@@ -347,8 +367,9 @@ struct ScreenshotEditorView: View {
     }
 
     private func drawContent(_ cg: CGContext, size: CGSize, zoom: CGFloat) {
-        let pad = model.backdropPaddingPixels * zoom
-        let imageRect = CGRect(x: pad, y: pad,
+        let layout = canvasLayout
+        let imageRect = CGRect(x: layout.imageOrigin.x * zoom,
+                               y: layout.imageOrigin.y * zoom,
                                width: model.imageSize.width * zoom,
                                height: model.imageSize.height * zoom)
 
@@ -377,7 +398,7 @@ struct ScreenshotEditorView: View {
 
         func enterImageSpace() {
             cg.scaleBy(x: zoom, y: zoom)
-            cg.translateBy(x: model.backdropPaddingPixels, y: model.backdropPaddingPixels)
+            cg.translateBy(x: layout.imageOrigin.x, y: layout.imageOrigin.y)
             if model.showsBackdrop {
                 // The exporter composes annotations before the backdrop, so they
                 // never spill onto the margin; the live canvas must agree.
@@ -385,6 +406,10 @@ struct ScreenshotEditorView: View {
             }
         }
 
+        if !model.showsBackdrop, socialFramePreset != nil {
+            cg.setFillColor(ScreenshotCanvasExpansionPreview.checker)
+            cg.fill(CGRect(origin: .zero, size: size))
+        }
         // The checkerboard shows where the picture is transparent. With a
         // backdrop on, the export shows the backdrop there, and so does this.
         let showsChecker = !model.showsBackdrop
@@ -439,6 +464,30 @@ struct ScreenshotEditorView: View {
         drawTextSelection(cg)
         drawSelectionChrome(cg)
         drawCropChrome(cg, canvasSize: size, zoom: zoom)
+        drawSmartGuides(cg, zoom: zoom)
+        cg.restoreGState()
+    }
+
+    /// Draws crisp 1px magnetic alignment guide lines while dragging an annotation.
+    private func drawSmartGuides(_ cg: CGContext, zoom: CGFloat) {
+        guard smartGuidesEnabled, !activeSmartGuides.isEmpty else { return }
+        let pixelLine = 1.0 / max(zoom, 0.001)
+        cg.saveGState()
+        cg.setStrokeColor(CGColor(srgbRed: 1.0, green: 0.27, blue: 0.37, alpha: 0.92))
+        cg.setLineWidth(pixelLine)
+        cg.setLineDash(phase: 0, lengths: [4 * pixelLine, 3 * pixelLine])
+        for guide in activeSmartGuides {
+            cg.beginPath()
+            switch guide.axis {
+            case .vertical:
+                cg.move(to: CGPoint(x: guide.position, y: 0))
+                cg.addLine(to: CGPoint(x: guide.position, y: model.imageSize.height))
+            case .horizontal:
+                cg.move(to: CGPoint(x: 0, y: guide.position))
+                cg.addLine(to: CGPoint(x: model.imageSize.width, y: guide.position))
+            }
+            cg.strokePath()
+        }
         cg.restoreGState()
     }
 
@@ -482,16 +531,28 @@ struct ScreenshotEditorView: View {
                     dragCanvasArea = available
                     commitEditingTextIfNeeded()
                     model.beginDrag(at: imagePoint(from: value.startLocation, zoom: zoom))
+                    captureDragStartShape()
                     if value.location != value.startLocation {
                         model.continueDrag(to: point)
+                        if hypot(value.translation.width, value.translation.height) >= 2 {
+                            applySmartGuidesIfMoving(zoom: zoom)
+                        }
                     }
                 } else {
                     model.continueDrag(to: point)
+                    if hypot(value.translation.width, value.translation.height) >= 2 {
+                        applySmartGuidesIfMoving(zoom: zoom)
+                    }
                 }
                 drag.update(to: value.location)
             }
             .onEnded { value in
-                defer { expansionDragZoom = nil }
+                defer {
+                    expansionDragZoom = nil
+                    activeSmartGuides = []
+                    dragStartAnnotationSize = nil
+                    dragStartLineLength = 0
+                }
                 dragInFlight = false
                 dragCanvasArea = nil
                 let point = imagePoint(from: value.location, zoom: zoom)
@@ -512,9 +573,103 @@ struct ScreenshotEditorView: View {
             }
     }
 
+    private func captureDragStartShape() {
+        guard let selectedID = model.selectedID,
+              let annotation = model.annotations.first(where: { $0.id == selectedID }) else {
+            dragStartAnnotationSize = nil
+            dragStartLineLength = 0
+            return
+        }
+        dragStartAnnotationSize = annotationVisualRect(annotation).size
+        if annotation.points.count == 2 {
+            dragStartLineLength = hypot(annotation.points[1].x - annotation.points[0].x,
+                                        annotation.points[1].y - annotation.points[0].y)
+        } else {
+            dragStartLineLength = 0
+        }
+    }
+
+    private func applySmartGuidesIfMoving(zoom: CGFloat) {
+        guard smartGuidesEnabled,
+              model.tool != .crop,
+              model.tool != .expandCanvas,
+              model.draftID == nil,
+              let selectedID = model.selectedID,
+              let index = model.annotations.firstIndex(where: { $0.id == selectedID }),
+              let startSize = dragStartAnnotationSize
+        else {
+            if !activeSmartGuides.isEmpty { activeSmartGuides = [] }
+            return
+        }
+        let annotation = model.annotations[index]
+        let currentRect = annotationVisualRect(annotation)
+        let sameSize = abs(currentRect.width - startSize.width) < 0.5
+            && abs(currentRect.height - startSize.height) < 0.5
+        let sameLine = annotation.points.count != 2
+            || abs(hypot(annotation.points[1].x - annotation.points[0].x,
+                         annotation.points[1].y - annotation.points[0].y) - dragStartLineLength) < 0.5
+        guard sameSize, sameLine else {
+            if !activeSmartGuides.isEmpty { activeSmartGuides = [] }
+            return
+        }
+
+        let peers = model.annotations.compactMap { peer -> CGRect? in
+            guard peer.id != selectedID,
+                  peer.tool != .select, peer.tool != .crop, peer.tool != .expandCanvas
+            else { return nil }
+            return annotationVisualRect(peer)
+        }
+        let threshold = min(12.0, max(4.0, 4.0 / max(zoom, 0.25)))
+        let snapped = ScreenshotSmartGuides.snap(
+            moving: currentRect,
+            peers: peers,
+            canvas: CGRect(origin: .zero, size: model.imageSize),
+            threshold: threshold
+        )
+        let dx = snapped.rect.minX - currentRect.minX
+        let dy = snapped.rect.minY - currentRect.minY
+        if dx != 0 || dy != 0 {
+            if model.annotations[index].points.isEmpty {
+                model.annotations[index].rect = model.annotations[index].rect.offsetBy(dx: dx, dy: dy)
+            } else {
+                model.annotations[index].points = model.annotations[index].points.map {
+                    CGPoint(x: $0.x + dx, y: $0.y + dy)
+                }
+            }
+        }
+        activeSmartGuides = snapped.guides
+    }
+
+    private func annotationVisualRect(_ annotation: ScreenshotSupport.Annotation) -> CGRect {
+        switch annotation.tool {
+        case .counter:
+            let diameter = ScreenshotSupport.counterDiameter(
+                for: annotation.renderReferenceSize ?? model.imageSize, scale: 1)
+            return CGRect(x: annotation.rect.midX - diameter / 2,
+                          y: annotation.rect.midY - diameter / 2,
+                          width: diameter,
+                          height: diameter)
+        case .arrow, .line, .freehand:
+            guard let first = annotation.points.first else { return annotation.rect.standardized }
+            var minX = first.x
+            var maxX = first.x
+            var minY = first.y
+            var maxY = first.y
+            for pt in annotation.points.dropFirst() {
+                minX = min(minX, pt.x)
+                maxX = max(maxX, pt.x)
+                minY = min(minY, pt.y)
+                maxY = max(maxY, pt.y)
+            }
+            return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        default:
+            return annotation.rect.standardized
+        }
+    }
+
     private func imagePoint(from viewPoint: CGPoint, zoom: CGFloat) -> CGPoint {
-        let pad = model.backdropPaddingPixels
-        return CGPoint(x: viewPoint.x / zoom - pad, y: viewPoint.y / zoom - pad)
+        let origin = canvasLayout.imageOrigin
+        return CGPoint(x: viewPoint.x / zoom - origin.x, y: viewPoint.y / zoom - origin.y)
     }
 
     private func updateHoverCursor(at point: CGPoint) {
@@ -591,13 +746,13 @@ struct ScreenshotEditorView: View {
     @ViewBuilder
     private func pixelRulerOverlay(zoom: CGFloat) -> some View {
         if model.pixelRulerActive, let m = model.pixelRulerMeasurement {
-            let pad = model.backdropPaddingPixels
-            let leftPx = (CGFloat(m.leftEdgeX) + pad) * zoom
-            let rightPx = (CGFloat(m.rightEdgeX) + pad) * zoom
-            let topPx = (CGFloat(m.topEdgeY) + pad) * zoom
-            let bottomPx = (CGFloat(m.bottomEdgeY) + pad) * zoom
-            let ox = (m.origin.x + pad) * zoom
-            let oy = (m.origin.y + pad) * zoom
+            let origin = canvasLayout.imageOrigin
+            let leftPx = (CGFloat(m.leftEdgeX) + origin.x) * zoom
+            let rightPx = (CGFloat(m.rightEdgeX) + origin.x) * zoom
+            let topPx = (CGFloat(m.topEdgeY) + origin.y) * zoom
+            let bottomPx = (CGFloat(m.bottomEdgeY) + origin.y) * zoom
+            let ox = (m.origin.x + origin.x) * zoom
+            let oy = (m.origin.y + origin.y) * zoom
             ZStack(alignment: .topLeading) {
                 Path { path in
                     path.move(to: CGPoint(x: leftPx, y: oy))
@@ -628,9 +783,9 @@ struct ScreenshotEditorView: View {
         let size = Self.cropLoupeSize
         let half = size / 2
         let gap: CGFloat = 14
-        let pad = model.backdropPaddingPixels
-        let anchor = CGPoint(x: (point.x + pad) * zoom,
-                             y: (point.y + pad) * zoom)
+        let origin = canvasLayout.imageOrigin
+        let anchor = CGPoint(x: (point.x + origin.x) * zoom,
+                             y: (point.y + origin.y) * zoom)
         var x = anchor.x + half + gap
         var y = anchor.y - half - gap
         if x + half > canvasSize.width { x = anchor.x - half - gap }
@@ -696,10 +851,10 @@ struct ScreenshotEditorView: View {
     private func drawCropChrome(_ cg: CGContext, canvasSize: CGSize, zoom: CGFloat) {
         guard model.tool == .crop, let draft = model.cropDraft else { return }
         let scale = model.scale
-        let pad = model.backdropPaddingPixels
+        let origin = canvasLayout.imageOrigin
         cg.setFillColor(CGColor(gray: 0, alpha: 0.45))
         cg.beginPath()
-        cg.addRect(CGRect(x: -pad, y: -pad,
+        cg.addRect(CGRect(x: -origin.x, y: -origin.y,
                           width: canvasSize.width / zoom, height: canvasSize.height / zoom))
         cg.addRect(draft)
         cg.fillPath(using: .evenOdd)
@@ -726,7 +881,7 @@ struct ScreenshotEditorView: View {
            let annotation = model.annotations.first(where: { $0.id == editingID }) {
             let fontSize = max(11, ScreenshotRenderer.fontSize(for: annotation.textSize,
                                                                scale: model.scale) * zoom)
-            let pad = model.backdropPaddingPixels
+            let origin = canvasLayout.imageOrigin
             TextField(strings.textPlaceholder, text: $editingText)
                 .textFieldStyle(.plain)
                 .font(.system(size: fontSize, weight: .semibold))
@@ -741,8 +896,8 @@ struct ScreenshotEditorView: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1)
                 )
-                .offset(x: (annotation.rect.minX + pad) * zoom - 6,
-                        y: (annotation.rect.minY + pad) * zoom - 3)
+                .offset(x: (annotation.rect.minX + origin.x) * zoom - 6,
+                        y: (annotation.rect.minY + origin.y) * zoom - 3)
                 .onAppear {
                     editingText = annotation.text
                     DispatchQueue.main.async { textFieldFocused = true }
@@ -1017,7 +1172,7 @@ struct ScreenshotEditorView: View {
 
             Button {
                 commitEditingTextIfNeeded()
-                guard let url = controller.shareFile() else {
+                guard let url = performShareFile() else {
                     NSSound.beep()
                     return
                 }
@@ -1044,30 +1199,30 @@ struct ScreenshotEditorView: View {
             Menu {
                 Button(strings.saveButton) {
                     commitEditingTextIfNeeded()
-                    controller.save()
+                    performSave()
                 }
                 Button(strings.saveAsButton) {
                     commitEditingTextIfNeeded()
-                    controller.saveAs()
+                    performSaveAs()
                 }
                 if shelfEnabled, shelfAvailable {
                     Button(strings.addToShelfButton) {
                         commitEditingTextIfNeeded()
-                        controller.addToShelf()
+                        performAddToShelf()
                     }
                 }
             } label: {
                 Text(strings.saveButton)
             } primaryAction: {
                 commitEditingTextIfNeeded()
-                controller.save()
+                performSave()
             }
             .fixedSize()
             .screenshotSafeHelp("⌘S")
 
             Button(strings.copyButton) {
                 commitEditingTextIfNeeded()
-                controller.copyToClipboard()
+                performCopyToClipboard()
             }
             .buttonStyle(.borderedProminent)
             .screenshotSafeHelp("⏎")
@@ -1087,11 +1242,7 @@ struct ScreenshotEditorView: View {
             ForEach(ScreenshotShareDuration.allCases) { duration in
                 Button(duration.title(strings)) {
                     commitEditingTextIfNeeded()
-                    sharing = true
-                    controller.share(duration: duration) { record in
-                        sharing = false
-                        sharedRecord = record
-                    }
+                    performShare(duration: duration)
                 }
             }
         } label: {
@@ -1116,10 +1267,7 @@ struct ScreenshotEditorView: View {
         let title = OverhaulV2Strings.localized(l10n.language).cloudUploadButton
         return Button {
             commitEditingTextIfNeeded()
-            cloudUploading = true
-            controller.uploadToCloud { _ in
-                cloudUploading = false
-            }
+            performCloudUpload()
         } label: {
             Group {
                 if cloudUploading {
@@ -1376,6 +1524,10 @@ struct ScreenshotEditorView: View {
             backdropButton
             Divider().frame(height: 16)
             watermarkButton
+            Divider().frame(height: 16)
+            socialFrameMenu
+            Divider().frame(height: 16)
+            smartGuidesToggle
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -1385,6 +1537,67 @@ struct ScreenshotEditorView: View {
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.16), radius: 12, y: 3)
+    }
+
+    private var socialFrameMenu: some View {
+        let title = v3(\OverhaulV3Strings.screenshotSocialFramesTitle)
+        return Menu {
+            Button {
+                socialFramePreset = nil
+            } label: {
+                HStack {
+                    Text("Original")
+                    if socialFramePreset == nil {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
+            Divider()
+            ForEach(SocialExportFramePreset.allCases) { preset in
+                Button {
+                    socialFramePreset = preset
+                } label: {
+                    HStack {
+                        Text(preset.displayName)
+                        if socialFramePreset == preset {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: DesignSpace.xs) {
+                Image(systemName: "aspectratio")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(socialFramePreset != nil ? Color.accentColor : Color.primary.opacity(0.85))
+                Text(socialFramePreset?.displayName ?? title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(socialFramePreset != nil ? Color.accentColor : .secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 7)
+            .frame(height: 24)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .screenshotSafeHelp(title)
+        .accessibilityLabel(title)
+    }
+
+    private var smartGuidesToggle: some View {
+        let title = v3(\OverhaulV3Strings.screenshotSmartGuidesToggle)
+        return HStack(spacing: DesignSpace.xs + 2) {
+            Image(systemName: "align.horizontal.center")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(smartGuidesEnabled ? Color.accentColor : .secondary)
+            Toggle(title, isOn: $smartGuidesEnabled)
+                .labelsHidden()
+                .toggleStyle(VorssaintCompactSwitchStyle(tone: .tools))
+        }
+        .padding(.horizontal, DesignSpace.xs)
+        .frame(height: 24)
+        .screenshotSafeHelp(title)
+        .accessibilityLabel(title)
     }
 
     /// The same kind of menu as the sticker picker: an inline picker gives
@@ -1916,8 +2129,9 @@ struct ScreenshotEditorView: View {
     }
 
     private var dimensionsLabel: String {
-        let width = Int(model.imageSize.width)
-        let height = Int(model.imageSize.height)
+        let displaySize = socialFramePreset != nil ? contentPixelSize : model.imageSize
+        let width = Int(displaySize.width)
+        let height = Int(displaySize.height)
         let retina = model.scale > 1 ? "  @\(Int(model.scale))x" : ""
         return "\(width) × \(height) px\(retina)"
     }
@@ -1935,7 +2149,7 @@ struct ScreenshotEditorView: View {
             .contentShape(Rectangle())
             .onDrag {
                 commitEditingTextIfNeeded()
-                guard let export = model.exportImage(),
+                guard let export = exportEditorImage(),
                       let provider = ScreenshotService.dragItemProvider(
                           image: export.image,
                           scale: export.scale,
@@ -1947,6 +2161,210 @@ struct ScreenshotEditorView: View {
             }
             .screenshotSafeHelp(strings.dragOutHandleLabel)
             .accessibilityLabel(strings.dragOutHandleLabel)
+    }
+
+    // MARK: - Social Export Routing
+
+    private func exportEditorImage(withBackdrop: Bool = true) -> ScreenshotRenderer.Export? {
+        guard let preset = socialFramePreset else {
+            return model.exportImage(withBackdrop: withBackdrop)
+        }
+        var sources = model.blurSources
+        for level in ScreenshotSupport.mosaicLevels(for: model.annotations)
+        where sources.mosaics[level] == nil {
+            if let mosaic = ScreenshotRenderer.pixelatedImage(from: model.baseImage, level: level) {
+                sources.mosaics[level] = mosaic
+            }
+        }
+        for level in ScreenshotSupport.softBlurLevels(for: model.annotations)
+        where sources.softBlurs[level] == nil {
+            if let soft = ScreenshotRenderer.softBlurredImage(from: model.baseImage, level: level) {
+                sources.softBlurs[level] = soft
+            }
+        }
+        let downscale = UserDefaults.standard.bool(forKey: DefaultsKey.screenshotDownscale)
+        return ScreenshotRenderer.renderExport(
+            baseImage: model.baseImage,
+            annotations: model.annotations,
+            blurSources: sources,
+            scale: model.scale,
+            annotationShadowsEnabled: model.annotationShadowsEnabled,
+            watermark: model.watermarkStyle,
+            watermarkImage: model.watermarkImage,
+            style: model.backdropStyle.sanitized(),
+            fill: withBackdrop ? model.backdropFill : .none,
+            downscaleTo1x: downscale,
+            spotlightDimStrength: model.spotlightDimStrength,
+            socialFramePreset: preset
+        )
+    }
+
+    private func performShareFile() -> URL? {
+        guard socialFramePreset != nil else { return controller.shareFile() }
+        guard let export = exportEditorImage() else { return nil }
+        return ScreenshotService.temporaryExportFile(image: export.image, scale: export.scale, strings: strings)
+    }
+
+    private func performCopyToClipboard() {
+        guard socialFramePreset != nil else {
+            controller.copyToClipboard()
+            return
+        }
+        guard let export = exportEditorImage(),
+              ScreenshotEditorController.copyImage(export, fileNamePrefix: strings.fileNamePrefix) else {
+            NSSound.beep()
+            return
+        }
+        model.markExported()
+        QuickToolHUD.show(icon: "camera.viewfinder", message: strings.copiedHUD)
+        controller.close()
+    }
+
+    private func performSave() {
+        guard socialFramePreset != nil else {
+            controller.save()
+            return
+        }
+        guard let export = exportEditorImage(),
+              let data = ScreenshotRenderer.pngData(from: export.image, scale: export.scale) else {
+            return
+        }
+        let (url, consumedNumber) = ScreenshotService.saveDestination(strings: strings)
+        do {
+            try data.write(to: url, options: .atomic)
+            ScreenshotSupport.markAsScreenCapture(url)
+            model.markExported()
+            QuickToolHUD.show(icon: "camera.viewfinder",
+                              message: String(format: strings.savedHUDFormat,
+                                              url.deletingLastPathComponent().lastPathComponent))
+            controller.close()
+        } catch {
+            if let consumedNumber {
+                ScreenshotService.rewindNumberSequence(toReuse: consumedNumber)
+            }
+            NSSound.beep()
+        }
+    }
+
+    private func performSaveAs() {
+        guard socialFramePreset != nil else {
+            controller.saveAs()
+            return
+        }
+        guard let export = exportEditorImage(),
+              let data = ScreenshotRenderer.pngData(from: export.image, scale: export.scale) else {
+            return
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = ScreenshotSupport.fileName(prefix: strings.fileNamePrefix, date: Date())
+        let finishSave: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try data.write(to: url, options: .atomic)
+                model.markExported()
+                controller.close()
+            } catch {
+                NSSound.beep()
+            }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: finishSave)
+        } else {
+            finishSave(panel.runModal())
+        }
+    }
+
+    private func performAddToShelf() {
+        guard socialFramePreset != nil else {
+            controller.addToShelf()
+            return
+        }
+        guard let export = exportEditorImage(),
+              let data = ScreenshotRenderer.pngData(from: export.image, scale: export.scale) else {
+            return
+        }
+        let name = ScreenshotSupport.fileName(prefix: strings.fileNamePrefix, date: Date())
+        guard ShelfService.shared.shelveGeneratedFile(data, named: name) != nil else {
+            NSSound.beep()
+            return
+        }
+        model.markExported()
+        QuickToolHUD.show(icon: "tray.full", message: L10n.shared.s.shelfName)
+        controller.close()
+    }
+
+    private func performShare(duration: ScreenshotShareDuration) {
+        guard socialFramePreset != nil else {
+            sharing = true
+            controller.share(duration: duration) { record in
+                sharing = false
+                sharedRecord = record
+            }
+            return
+        }
+        guard let export = exportEditorImage() else {
+            QuickToolHUD.show(icon: "link", message: strings.shareFailedHUD)
+            return
+        }
+        sharing = true
+        Task { @MainActor in
+            let data = await Task.detached(priority: .userInitiated) {
+                ScreenshotRenderer.pngData(from: export.image, scale: export.scale)
+            }.value
+            guard let data else {
+                sharing = false
+                QuickToolHUD.show(icon: "link", message: strings.shareFailedHUD)
+                return
+            }
+            do {
+                let record = try await ScreenshotShareService.shared.createLink(pngData: data, duration: duration)
+                model.markExported()
+                sharing = false
+                sharedRecord = record
+            } catch {
+                sharing = false
+                QuickToolHUD.show(icon: "link", message: strings.shareFailedHUD)
+                NSSound.beep()
+            }
+        }
+    }
+
+    private func performCloudUpload() {
+        guard socialFramePreset != nil else {
+            cloudUploading = true
+            controller.uploadToCloud { _ in
+                cloudUploading = false
+            }
+            return
+        }
+        guard let export = exportEditorImage() else {
+            QuickToolHUD.show(icon: "icloud.and.arrow.up", message: strings.shareFailedHUD)
+            NSSound.beep()
+            return
+        }
+        let fileName = ScreenshotSupport.fileName(prefix: strings.fileNamePrefix, date: Date())
+        cloudUploading = true
+        Task { @MainActor in
+            let data = await Task.detached(priority: .userInitiated) {
+                ScreenshotRenderer.pngData(from: export.image, scale: export.scale)
+            }.value
+            guard let data else {
+                cloudUploading = false
+                QuickToolHUD.show(icon: "icloud.and.arrow.up", message: strings.shareFailedHUD)
+                NSSound.beep()
+                return
+            }
+            do {
+                _ = try await ScreenshotCloudUploadService.shared.upload(pngData: data, fileName: fileName)
+                model.markExported()
+                cloudUploading = false
+            } catch {
+                cloudUploading = false
+                QuickToolHUD.show(icon: "icloud.and.arrow.up", message: error.localizedDescription)
+                NSSound.beep()
+            }
+        }
     }
 }
 

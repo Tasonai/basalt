@@ -638,7 +638,7 @@ struct RecorderInspector: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.72))
                 Spacer()
-                Text(String(format: format, value * scale))
+                Text(String(format: format, locale: .autoupdatingCurrent, value * scale))
                     .font(.system(size: 11, weight: .medium))
                     .monospacedDigit()
                     .foregroundStyle(Color(white: 0.86))
@@ -817,10 +817,11 @@ struct RecorderInspector: View {
     }
 
     private var aspectBinding: Binding<String> {
-        Binding(get: { model.document.aspect },
+        Binding(get: { model.document.resolvedAspect.rawValue },
                 set: { newValue in
                     var next = model.document
                     next.aspect = newValue
+                    next.outputAspect = StudioOutputAspect(legacyAspect: RecorderSupport.sanitizedAspect(newValue))
                     model.document = next
                 })
     }
@@ -828,11 +829,45 @@ struct RecorderInspector: View {
     // MARK: - Studio
 
     private var studioSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSpace.sm) {
             sectionTitle(wave2.studioTabTitle)
 
-            Toggle(wave2.motionBlurTitle, isOn: boolBinding(\.motionBlurEnabled))
-                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+            HStack(spacing: DesignSpace.xs) {
+                Text(OverhaulV3Strings.recorderAspectTitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: DesignSpace.xs)
+                Menu {
+                    ForEach(StudioOutputAspect.allCases) { option in
+                        Button {
+                            VorssaintHaptics.generic()
+                            var next = model.document
+                            next.outputAspect = option
+                            next.aspect = option.legacyAspect.rawValue
+                            model.document = next
+                        } label: {
+                            Label(aspectOptionLabel(option), systemImage: aspectSymbol(option))
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(aspectOptionLabel(model.document.resolvedOutputAspect))
+                            .font(.system(size: 11, weight: .semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8.5, weight: .semibold))
+                    }
+                    .padding(.horizontal, DesignSpace.xs)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.08),
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+
+            compactSwitchRow(title: wave2.motionBlurTitle, isOn: boolBinding(\.motionBlurEnabled))
             if model.document.motionBlurEnabled {
                 backgroundSlider(
                     title: wave2.motionBlurTitle,
@@ -850,15 +885,23 @@ struct RecorderInspector: View {
                 )
             }
 
-            Toggle(v2.recorderTiltXLabel.replacingOccurrences(of: " X", with: ""),
-                   isOn: boolBinding(\.perspectiveTiltEnabled))
-                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+            compactSwitchRow(
+                title: OverhaulV3Strings.recorderTilt3DToggle,
+                isOn: Binding(
+                    get: { model.document.perspectiveTilt3DEnabled || model.document.perspectiveTiltEnabled },
+                    set: { enabled in
+                        var next = model.document
+                        next.perspectiveTilt3DEnabled = enabled
+                        next.perspectiveTiltEnabled = enabled
+                        model.document = next
+                    }
+                )
+            )
 
-            Toggle(v2.recorderGlowLabel, isOn: boolBinding(\.ambientGlowEnabled))
-                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
-
-            Toggle(v2.recorderProResAlphaLabel, isOn: boolBinding(\.exportsProRes4444))
-                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+            compactSwitchRow(title: v2.recorderGlowLabel, isOn: boolBinding(\.ambientGlowEnabled))
+            compactSwitchRow(title: v2.recorderProResAlphaLabel, isOn: boolBinding(\.exportsProRes4444))
+            compactSwitchRow(title: OverhaulV3Strings.recorderMicDuckingToggle,
+                             isOn: boolBinding(\.micAutoDuckingEnabled))
 
             Picker(wave2.clickSFXTitle, selection: Binding(
                 get: { model.document.clickSFXStyle },
@@ -876,44 +919,99 @@ struct RecorderInspector: View {
             }
             .pickerStyle(.menu)
 
-            Toggle(wave2.keystrokeHUDTitle, isOn: boolBinding(\.keystrokesEnabled))
-                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+            compactSwitchRow(title: wave2.keystrokeHUDTitle, isOn: boolBinding(\.keystrokesEnabled))
 
             Divider().opacity(0.35)
             sectionTitle(wave2.cameraBubbleTitle)
-            Toggle(wave2.cameraBubbleTitle, isOn: Binding(
-                get: { model.document.cameraBubble.isEnabled },
-                set: { enabled in
-                    UserDefaults.standard.set(enabled,
-                                              forKey: RecorderCameraCapture.defaultPreferenceKey)
-                    var next = model.document
-                    next.cameraBubble.isEnabled = enabled
-                    model.document = next
-                }
-            ))
-            .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+            compactSwitchRow(
+                title: wave2.cameraBubbleTitle,
+                isOn: Binding(
+                    get: { model.document.cameraBubble.isEnabled },
+                    set: { enabled in
+                        UserDefaults.standard.set(enabled,
+                                                  forKey: RecorderCameraCapture.defaultPreferenceKey)
+                        var next = model.document
+                        next.cameraBubble.isEnabled = enabled
+                        model.document = next
+                    }
+                )
+            )
 
             if model.document.cameraBubble.isEnabled {
                 Text(v2.recorderCameraLiveNote)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Toggle(wave2.cameraAutoShrinkLabel, isOn: Binding(
-                    get: { model.document.cameraBubble.autoShrinkOnPointerNear },
-                    set: { shrink in
-                        var next = model.document
-                        next.cameraBubble.autoShrinkOnPointerNear = shrink
-                        model.document = next
+
+                HStack(spacing: DesignSpace.xs) {
+                    Text(OverhaulV3Strings.recorderCameraShapeTitle)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: DesignSpace.xs)
+                    Menu {
+                        ForEach(CameraBubbleShape.allCases) { shape in
+                            Button {
+                                VorssaintHaptics.generic()
+                                var next = model.document
+                                next.cameraShape = shape
+                                next.cameraBubble.shape = shape
+                                model.document = next
+                            } label: {
+                                Label(cameraShapeLabel(shape), systemImage: cameraShapeSymbol(shape))
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: cameraShapeSymbol(model.document.cameraShape))
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(cameraShapeLabel(model.document.cameraShape))
+                                .font(.system(size: 11, weight: .semibold))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8.5, weight: .semibold))
+                        }
+                        .padding(.horizontal, DesignSpace.xs)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.08),
+                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
-                ))
-                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+
+                compactSwitchRow(
+                    title: OverhaulV3Strings.recorderPersonBlurToggle,
+                    isOn: Binding(
+                        get: { model.document.personSegmentationBlurEnabled },
+                        set: { enabled in
+                            var next = model.document
+                            next.personSegmentationBlurEnabled = enabled
+                            next.cameraBubble.personSegmentationBlurEnabled = enabled
+                            model.document = next
+                        }
+                    )
+                )
+
+                compactSwitchRow(
+                    title: wave2.cameraAutoShrinkLabel,
+                    isOn: Binding(
+                        get: { model.document.cameraBubble.autoShrinkOnPointerNear },
+                        set: { shrink in
+                            var next = model.document
+                            next.cameraBubble.autoShrinkOnPointerNear = shrink
+                            model.document = next
+                        }
+                    )
+                )
+
+                sceneKeyframesControls
             }
 
             Divider().opacity(0.35)
             sectionTitle(wave2.captionsTrackTitle)
-            Toggle(wave2.captionsTrackTitle, isOn: boolBinding(\.captionsEnabled))
-                .toggleStyle(VorssaintPillToggleStyle(tone: .tools))
-            HStack(spacing: 8) {
+            compactSwitchRow(title: wave2.captionsTrackTitle, isOn: boolBinding(\.captionsEnabled))
+            HStack(spacing: DesignSpace.xs) {
                 if model.isTranscribingCaptions {
                     ProgressView().controlSize(.small)
                 } else {
@@ -961,10 +1059,125 @@ struct RecorderInspector: View {
                         .padding(.vertical, 3)
                     }
                 }
-                .padding(8)
+                .padding(DesignSpace.xs)
                 .background(Color.white.opacity(0.035),
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
+        }
+    }
+
+    private var sceneKeyframesControls: some View {
+        VStack(alignment: .leading, spacing: DesignSpace.xs) {
+            HStack(spacing: DesignSpace.xs) {
+                VorssaintActionChip(title: "Keyframe",
+                                    symbol: "plus",
+                                    tone: .tools) {
+                    model.addOrUpdateSceneKeyframe()
+                }
+                Spacer(minLength: 0)
+                if let kfID = model.selectedSceneKeyframeID {
+                    VorssaintActionChip(title: strings.removeZoom,
+                                        symbol: "trash",
+                                        tone: .tools,
+                                        destructive: true) {
+                        model.removeSceneKeyframe(kfID)
+                    }
+                }
+            }
+
+            if !model.document.sceneKeyframes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(model.document.sceneKeyframes) { keyframe in
+                        let selected = model.selectedSceneKeyframeID == keyframe.id
+                        HStack(spacing: 6) {
+                            Button {
+                                VorssaintHaptics.alignment()
+                                model.selectSceneKeyframeAndSeek(keyframe.id)
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: selected ? "diamond.fill" : "diamond")
+                                        .font(.system(size: 9.5, weight: .semibold))
+                                        .foregroundStyle(selected ? Color.teal : Color.secondary)
+                                    Text(String(format: "%.1fs", locale: .autoupdatingCurrent, keyframe.timeSeconds))
+                                        .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                                    Text(cameraShapeLabel(keyframe.shape))
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            Spacer(minLength: 4)
+                            Button {
+                                model.removeSceneKeyframe(keyframe.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(selected ? Color.teal.opacity(0.16) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                }
+                .padding(6)
+                .background(Color.white.opacity(0.035),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+    }
+
+    private func compactSwitchRow(title: String, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: DesignSpace.xs) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            Spacer(minLength: DesignSpace.xs)
+            Toggle(title, isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(VorssaintCompactSwitchStyle(tone: .tools))
+        }
+    }
+
+    private func cameraShapeLabel(_ shape: CameraBubbleShape) -> String {
+        switch shape {
+        case .circle: return "Circle"
+        case .squircle: return "Squircle"
+        case .verticalPortrait: return "9:16"
+        case .hidden: return "Hidden"
+        }
+    }
+
+    private func cameraShapeSymbol(_ shape: CameraBubbleShape) -> String {
+        switch shape {
+        case .circle: return "circle"
+        case .squircle: return "square"
+        case .verticalPortrait: return "rectangle.portrait"
+        case .hidden: return "eye.slash"
+        }
+    }
+
+    private func aspectOptionLabel(_ aspect: StudioOutputAspect) -> String {
+        switch aspect {
+        case .native: return strings.shapeOriginal
+        case .vertical9x16: return "9:16"
+        case .square1x1: return "1:1"
+        case .cinema16x9: return "16:9"
+        }
+    }
+
+    private func aspectSymbol(_ aspect: StudioOutputAspect) -> String {
+        switch aspect {
+        case .native: return "aspectratio"
+        case .vertical9x16: return "rectangle.portrait"
+        case .square1x1: return "square"
+        case .cinema16x9: return "aspectratio"
         }
     }
 
@@ -979,4 +1192,12 @@ struct RecorderInspector: View {
         }
     }
 
+}
+
+private extension OverhaulV3Strings {
+    static var recorderCameraShapeTitle: String { localized(L10n.shared.language).recorderCameraShapeTitle }
+    static var recorderPersonBlurToggle: String { localized(L10n.shared.language).recorderPersonBlurToggle }
+    static var recorderTilt3DToggle: String { localized(L10n.shared.language).recorderTilt3DToggle }
+    static var recorderAspectTitle: String { localized(L10n.shared.language).recorderAspectTitle }
+    static var recorderMicDuckingToggle: String { localized(L10n.shared.language).recorderMicDuckingToggle }
 }

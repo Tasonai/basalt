@@ -5,6 +5,7 @@ import AVFoundation
 import AppKit
 import Carbon.HIToolbox
 import Combine
+import Speech
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -182,8 +183,12 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
             else { return }
             let item = AVPlayerItem(asset: result.asset)
             self.audioTrackIDs = result.audioTrackIDs
-            item.audioMix = RecorderComposition.audioMix(trackIDs: result.audioTrackIDs,
-                                                         document: self.document)
+            item.audioMix = RecorderComposer.audioMix(
+                trackIDs: result.audioTrackIDs,
+                document: self.document,
+                micWaveform: self.audioWaveforms[.microphone] ?? [],
+                duration: self.duration
+            )
             self.player.replaceCurrentItem(with: item)
             self.player.isMuted = false
             self.outputDuration = CMTimeGetSeconds(result.duration)
@@ -206,7 +211,11 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
             }
             guard !Task.isCancelled else { return }
             let result = waveforms
-            await MainActor.run { [weak self] in self?.audioWaveforms = result }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.audioWaveforms = result
+                self.applyAudioMix()
+            }
         }
     }
 
@@ -366,8 +375,12 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
     }
 
     private func applyAudioMix() {
-        player.currentItem?.audioMix = RecorderComposition.audioMix(trackIDs: audioTrackIDs,
-                                                                    document: document)
+        player.currentItem?.audioMix = RecorderComposer.audioMix(
+            trackIDs: audioTrackIDs,
+            document: document,
+            micWaveform: audioWaveforms[.microphone] ?? [],
+            duration: duration
+        )
     }
 
     private func documentDidChange(from previous: RecorderEditDocument) {
@@ -410,12 +423,12 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
             try? await Task.sleep(nanoseconds: 120_000_000)
             guard !Task.isCancelled, let self, let item = self.player.currentItem else { return }
             let cameraURL = self.hasCameraSidecar ? self.take.cameraURL : nil
-            guard let plan = RecorderComposer.makePlan(document: document,
-                                                       track: track,
-                                                       sourceSize: sourceSize,
-                                                       frameRate: frameRate,
-                                                       duration: duration,
-                                                       cameraURL: cameraURL) else {
+            guard let plan = RecorderComposer.makeStudioPlan(document: document,
+                                                             track: track,
+                                                             sourceSize: sourceSize,
+                                                             frameRate: frameRate,
+                                                             duration: duration,
+                                                             cameraURL: cameraURL) else {
                 item.videoComposition = nil
                 return
             }
@@ -594,7 +607,11 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
     /// The size the current preset will write, for THIS recording.
     var exportSize: CGSize {
         guard sourceSize.width > 0 else { return .zero }
-        let canvas = RecorderSupport.canvasSize(source: sourceSize,
+        let outputAspect = document.resolvedOutputAspect
+        let effectiveSource = outputAspect != .native
+            ? outputAspect.targetCanvasSize(sourceSize: sourceSize)
+            : sourceSize
+        let canvas = RecorderSupport.canvasSize(source: effectiveSource,
                                                 padding: document.effectiveCanvasPadding,
                                                 aspect: document.resolvedAspect,
                                                 cropsToAspect: document.cropsToAspectWithoutStage)
@@ -899,6 +916,12 @@ final class RecorderEditorModel: ObservableObject, BackdropEditing {
     @Published var selectedTextID: UUID?
     @Published var selectedImageID: UUID?
     @Published var selectedBlurID: UUID?
+    @Published var selectedSceneKeyframeID: UUID?
+
+    var selectedSceneKeyframe: SceneLayoutKeyframe? {
+        guard let selectedSceneKeyframeID else { return nil }
+        return document.sceneKeyframes.first { $0.id == selectedSceneKeyframeID }
+    }
 
     var selectedText: RecorderTextOverlay? {
         guard let selectedTextID else { return nil }
@@ -1808,6 +1831,10 @@ final class RecorderEditorController: NSObject, NSWindowDelegate {
                     self.model.removeSelectedBlur()
                     return nil
                 }
+                if let kfID = self.model.selectedSceneKeyframeID {
+                    self.model.removeSceneKeyframe(kfID)
+                    return nil
+                }
                 self.discard()
                 return nil
             case kVK_Escape:
@@ -1839,6 +1866,10 @@ final class RecorderEditorController: NSObject, NSWindowDelegate {
                     self.model.selectLaneItem(.blur, id: nil)
                     return nil
                 }
+                if self.model.selectedSceneKeyframeID != nil {
+                    self.model.selectedSceneKeyframeID = nil
+                    return nil
+                }
                 return event
             default:
                 return event
@@ -1855,10 +1886,13 @@ extension RecorderEditorModel {
         guard !isTranscribingCaptions else { return }
         isTranscribingCaptions = true
         defer { isTranscribingCaptions = false }
-        let segments = await RecorderSpeechTranscriber.transcribeAudio(at: take.videoURL)
-        guard !segments.isEmpty else { return }
+        let result = await RecorderSpeechTranscriber.transcribeWithWords(at: take.videoURL)
+        guard !result.segments.isEmpty || !result.words.isEmpty else { return }
         var next = document
-        next.captions = segments
+        next.captions = result.segments.isEmpty
+            ? RecorderSpeechTranscriber.groupWordTokens(result.words)
+            : result.segments
+        next.whisperWords = result.words
         next.captionsEnabled = true
         document = next
     }
@@ -1887,5 +1921,328 @@ extension RecorderEditorModel {
         if let id, let segment = zoom(id) {
             seek(to: segment.start)
         }
+    }
+
+    // MARK: - Scene Keyframes
+
+    func addOrUpdateSceneKeyframe(at time: Double? = nil,
+                                  shape: CameraBubbleShape? = nil,
+                                  cornerIndex: Int? = nil,
+                                  scale: Double? = nil) {
+        let maxTime = max(0, duration)
+        let rawTime = time ?? sourceTime
+        let targetTime = maxTime > 0 ? min(maxTime, max(0, rawTime)) : max(0, rawTime)
+        var next = document
+        if let existingIdx = next.sceneKeyframes.firstIndex(where: { abs($0.timeSeconds - targetTime) <= 0.2 }) {
+            var updated = next.sceneKeyframes[existingIdx]
+            if let shape { updated.shape = shape }
+            if let cornerIndex { updated.cornerIndex = min(3, max(0, cornerIndex)) }
+            if let scale { updated.scale = scale.isFinite ? min(2.5, max(0.35, scale)) : updated.scale }
+            next.sceneKeyframes[existingIdx] = updated
+            selectedSceneKeyframeID = updated.id
+        } else {
+            let keyframe = SceneLayoutKeyframe(
+                timeSeconds: targetTime,
+                shape: shape ?? next.cameraShape,
+                cornerIndex: cornerIndex ?? next.cameraBubble.corner.cornerIndex,
+                scale: scale ?? 1.0
+            )
+            next.sceneKeyframes.append(keyframe)
+            selectedSceneKeyframeID = keyframe.id
+        }
+        next.sceneKeyframes.sort { $0.timeSeconds < $1.timeSeconds }
+        next.cameraBubble.sceneKeyframes = next.sceneKeyframes
+        document = next
+    }
+
+    func updateSceneKeyframe(_ id: UUID,
+                             shape: CameraBubbleShape? = nil,
+                             cornerIndex: Int? = nil,
+                             scale: Double? = nil,
+                             timeSeconds: Double? = nil) {
+        guard let idx = document.sceneKeyframes.firstIndex(where: { $0.id == id }) else { return }
+        var next = document
+        var kf = next.sceneKeyframes[idx]
+        if let shape { kf.shape = shape }
+        if let cornerIndex { kf.cornerIndex = min(3, max(0, cornerIndex)) }
+        if let scale, scale.isFinite { kf.scale = min(2.5, max(0.35, scale)) }
+        if let timeSeconds, timeSeconds.isFinite {
+            kf.timeSeconds = duration > 0 ? min(duration, max(0, timeSeconds)) : max(0, timeSeconds)
+        }
+        next.sceneKeyframes[idx] = kf
+        next.sceneKeyframes.sort { $0.timeSeconds < $1.timeSeconds }
+        next.cameraBubble.sceneKeyframes = next.sceneKeyframes
+        document = next
+    }
+
+    func removeSceneKeyframe(_ id: UUID) {
+        var next = document
+        next.sceneKeyframes.removeAll { $0.id == id }
+        next.cameraBubble.sceneKeyframes = next.sceneKeyframes
+        if selectedSceneKeyframeID == id {
+            selectedSceneKeyframeID = nil
+        }
+        document = next
+    }
+
+    func selectSceneKeyframeAndSeek(_ id: UUID?) {
+        selectedSceneKeyframeID = id
+        if let id, let keyframe = document.sceneKeyframes.first(where: { $0.id == id }) {
+            seek(to: keyframe.timeSeconds)
+        }
+    }
+}
+
+/// Offline / on-device speech transcription supporting `whisper-cli -ojf` word
+/// timestamps with `SFSpeechRecognizer` fallback when `whisper-cli` is absent.
+enum RecorderSpeechTranscriber {
+    static func whisperCLIPath() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/whisper-cli",
+            "/usr/local/bin/whisper-cli",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    static func whisperModelPath() -> String? {
+        let fm = FileManager.default
+        if let configured = UserDefaults.standard.string(forKey: "whisperModelPath"),
+           !configured.isEmpty,
+           fm.isReadableFile(atPath: configured) {
+            return configured
+        }
+        let home = fm.homeDirectoryForCurrentUser.path
+        let directories = [
+            home + "/Library/Application Support/Vorssaint/Models",
+            home + "/.cache/whisper",
+            "/opt/homebrew/share/whisper-cpp",
+            "/usr/local/share/whisper-cpp",
+        ]
+        for dir in directories {
+            guard let files = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            if let model = files.sorted().first(where: { $0.hasSuffix(".bin") && $0.contains("ggml") }) {
+                let full = (dir as NSString).appendingPathComponent(model)
+                if fm.isReadableFile(atPath: full) { return full }
+            }
+        }
+        return nil
+    }
+
+    static func transcribeAudio(at mediaURL: URL,
+                                locale: Locale = .current) async -> [RecorderCaptionSegment] {
+        await transcribeWithWords(at: mediaURL, locale: locale).segments
+    }
+
+    static func transcribeWithWords(at mediaURL: URL,
+                                    locale: Locale = .current) async -> (segments: [RecorderCaptionSegment],
+                                                                         words: [WhisperWordToken]) {
+        if let cliPath = whisperCLIPath(), let modelPath = whisperModelPath() {
+            let cliWords = await runWhisperCLI(cliPath: cliPath, modelPath: modelPath, mediaURL: mediaURL)
+            if !cliWords.isEmpty {
+                return (groupWordTokens(cliWords), cliWords)
+            }
+        }
+        return await transcribeWithAppleSpeech(at: mediaURL, locale: locale)
+    }
+
+    private static func runWhisperCLI(cliPath: String,
+                                      modelPath: String,
+                                      mediaURL: URL) async -> [WhisperWordToken] {
+        let token = UUID().uuidString
+        let tempDir = FileManager.default.temporaryDirectory
+        let wavURL = tempDir.appendingPathComponent("vorssaint-whisper-\(token).wav")
+        let outBase = tempDir.appendingPathComponent("vorssaint-whisper-out-\(token)")
+        let jsonURL = outBase.appendingPathExtension("json")
+        defer {
+            try? FileManager.default.removeItem(at: wavURL)
+            try? FileManager.default.removeItem(at: jsonURL)
+        }
+
+        guard await extractMono16kWAV(from: mediaURL, to: wavURL) else { return [] }
+        return await Task.detached(priority: .utility) {
+            let result = BoundedProcessRunner.run(
+                cliPath,
+                ["-m", modelPath, "-f", wavURL.path, "-ojf", "-of", outBase.path],
+                timeout: 120,
+                maxOutputBytes: 1_048_576
+            )
+            guard result.status == 0,
+                  !result.timedOut,
+                  let data = try? Data(contentsOf: jsonURL)
+            else { return [] }
+            return WhisperCLITranscriptParser.parseWhisperJSON(data)
+        }.value
+    }
+
+    private static func extractMono16kWAV(from mediaURL: URL, to wavURL: URL) async -> Bool {
+        let asset = AVURLAsset(url: mediaURL)
+        let tracks = await RecorderAudioSource.tracks(in: asset)
+        let resolvedTrack: AVAssetTrack?
+        if let preferred = tracks[.microphone] ?? tracks[.system] {
+            resolvedTrack = preferred
+        } else {
+            resolvedTrack = (try? await asset.loadTracks(withMediaType: .audio))?.first
+        }
+        guard let track = resolvedTrack else { return false }
+
+        return await Task.detached(priority: .utility) {
+            guard let reader = try? AVAssetReader(asset: asset) else { return false }
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 16_000,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ])
+            output.alwaysCopiesSampleData = false
+            guard reader.canAdd(output) else { return false }
+            reader.add(output)
+            guard reader.startReading() else { return false }
+
+            var pcm = Data()
+            while let sample = output.copyNextSampleBuffer() {
+                if Task.isCancelled {
+                    reader.cancelReading()
+                    return false
+                }
+                guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
+                var lengthAtOffset = 0
+                var totalLength = 0
+                var bytes: UnsafeMutablePointer<Int8>?
+                guard CMBlockBufferGetDataPointer(block,
+                                                  atOffset: 0,
+                                                  lengthAtOffsetOut: &lengthAtOffset,
+                                                  totalLengthOut: &totalLength,
+                                                  dataPointerOut: &bytes) == kCMBlockBufferNoErr,
+                      let bytes, totalLength > 0
+                else { continue }
+                pcm.append(Data(bytes: bytes, count: totalLength))
+            }
+            guard !pcm.isEmpty, pcm.count <= Int(UInt32.max - 36) else { return false }
+
+            let dataSize = UInt32(pcm.count)
+            let riffSize = UInt32(36) + dataSize
+            var wav = Data(capacity: 44 + pcm.count)
+            func appendLE32(_ v: UInt32) {
+                var le = v.littleEndian
+                wav.append(Data(bytes: &le, count: 4))
+            }
+            func appendLE16(_ v: UInt16) {
+                var le = v.littleEndian
+                wav.append(Data(bytes: &le, count: 2))
+            }
+            wav.append(contentsOf: "RIFF".utf8)
+            appendLE32(riffSize)
+            wav.append(contentsOf: "WAVE".utf8)
+            wav.append(contentsOf: "fmt ".utf8)
+            appendLE32(16)
+            appendLE16(1)
+            appendLE16(1)
+            appendLE32(16_000)
+            appendLE32(32_000)
+            appendLE16(2)
+            appendLE16(16)
+            wav.append(contentsOf: "data".utf8)
+            appendLE32(dataSize)
+            wav.append(pcm)
+            return (try? wav.write(to: wavURL, options: .atomic)) != nil
+        }.value
+    }
+
+    private static func transcribeWithAppleSpeech(at mediaURL: URL,
+                                                  locale: Locale) async -> (segments: [RecorderCaptionSegment],
+                                                                            words: [WhisperWordToken]) {
+        let auth = await withCheckedContinuation { cont in
+            SFSpeechRecognizer.requestAuthorization { status in
+                cont.resume(returning: status == .authorized)
+            }
+        }
+        guard auth else { return ([], []) }
+        let recognizer = SFSpeechRecognizer(locale: locale)
+            ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        guard let recognizer, recognizer.isAvailable else { return ([], []) }
+
+        let request = SFSpeechURLRecognitionRequest(url: mediaURL)
+        request.shouldReportPartialResults = false
+        if recognizer.supportsOnDeviceRecognition {
+            request.requiresOnDeviceRecognition = true
+        }
+
+        return await withCheckedContinuation { cont in
+            var resumed = false
+            recognizer.recognitionTask(with: request) { result, error in
+                guard !resumed else { return }
+                if error != nil {
+                    resumed = true
+                    cont.resume(returning: ([], []))
+                    return
+                }
+                guard let result, result.isFinal else { return }
+                resumed = true
+                let rawSegments = result.bestTranscription.segments
+                let words = rawSegments.compactMap { seg -> WhisperWordToken? in
+                    let trimmed = seg.substring.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return nil }
+                    let start = max(0, seg.timestamp)
+                    let end = max(start + 0.08, start + seg.duration)
+                    return WhisperWordToken(word: trimmed, startSeconds: start, endSeconds: end)
+                }
+                let segments = groupSegments(from: rawSegments)
+                cont.resume(returning: (segments, words))
+            }
+        }
+    }
+
+    /// Groups word-level recognition segments into readable ~6-word caption lines.
+    static func groupSegments(from words: [SFTranscriptionSegment]) -> [RecorderCaptionSegment] {
+        guard !words.isEmpty else { return [] }
+        var result: [RecorderCaptionSegment] = []
+        var bucket: [SFTranscriptionSegment] = []
+        for word in words {
+            if let prev = bucket.last,
+               (word.timestamp - (prev.timestamp + prev.duration) > 0.85 || bucket.count >= 6) {
+                result.append(makeSegment(from: bucket))
+                bucket = []
+            }
+            bucket.append(word)
+        }
+        if !bucket.isEmpty {
+            result.append(makeSegment(from: bucket))
+        }
+        return result
+    }
+
+    static func groupWordTokens(_ words: [WhisperWordToken]) -> [RecorderCaptionSegment] {
+        guard !words.isEmpty else { return [] }
+        var result: [RecorderCaptionSegment] = []
+        var bucket: [WhisperWordToken] = []
+        for word in words {
+            if let prev = bucket.last,
+               (word.startSeconds - prev.endSeconds > 0.85 || bucket.count >= 6) {
+                result.append(makeTokenSegment(from: bucket))
+                bucket = []
+            }
+            bucket.append(word)
+        }
+        if !bucket.isEmpty {
+            result.append(makeTokenSegment(from: bucket))
+        }
+        return result
+    }
+
+    private static func makeSegment(from bucket: [SFTranscriptionSegment]) -> RecorderCaptionSegment {
+        let start = bucket.first?.timestamp ?? 0
+        let lastEnd = (bucket.last?.timestamp ?? start) + (bucket.last?.duration ?? 0.5)
+        let text = bucket.map(\.substring).joined(separator: " ")
+        return RecorderCaptionSegment(start: start, end: max(start + 0.3, lastEnd), text: text)
+    }
+
+    private static func makeTokenSegment(from bucket: [WhisperWordToken]) -> RecorderCaptionSegment {
+        let start = bucket.first?.startSeconds ?? 0
+        let lastEnd = bucket.last?.endSeconds ?? (start + 0.5)
+        let text = bucket.map(\.word).joined(separator: " ")
+        return RecorderCaptionSegment(start: start, end: max(start + 0.3, lastEnd), text: text)
     }
 }

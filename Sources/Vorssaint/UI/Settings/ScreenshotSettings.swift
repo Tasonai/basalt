@@ -55,6 +55,8 @@ struct ScreenshotCaptureSettings: View {
     @State private var showingSharePrivacy = false
     @State private var cloudExpanded = ScreenshotCloudUploadService.shared.config.provider != .disabled
     @State private var cloudSecretInput = ""
+    @State private var deletingUploadID: UUID?
+    @State private var cloudDeleteError: String?
 
     private var strings: ScreenshotFeatureStrings {
         FeatureStrings.screenshot(l10n.language)
@@ -62,6 +64,10 @@ struct ScreenshotCaptureSettings: View {
 
     private var v2Strings: OverhaulV2Strings {
         OverhaulV2Strings.localized(l10n.language)
+    }
+
+    private func v3(_ keyPath: KeyPath<OverhaulV3Strings, String>) -> String {
+        OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
     }
 
     var body: some View {
@@ -357,7 +363,7 @@ struct ScreenshotCaptureSettings: View {
         .onAppear {
             sharing.refresh()
             cloudUpload.refreshSecretStatus()
-            if cloudUpload.config.provider != .disabled {
+            if cloudUpload.config.provider != .disabled || !cloudUpload.recentUploads.isEmpty {
                 cloudExpanded = true
             }
         }
@@ -447,6 +453,124 @@ struct ScreenshotCaptureSettings: View {
                         .frame(width: 180)
                 }
             }
+
+            if !cloudUpload.recentUploads.isEmpty {
+                Divider()
+                cloudUploadHistorySection
+            }
+        }
+    }
+
+    private var cloudUploadHistorySection: some View {
+        VStack(alignment: .leading, spacing: DesignSpace.sm) {
+            HStack(spacing: DesignSpace.sm) {
+                Label(v3(\OverhaulV3Strings.screenshotCloudHistoryTitle), systemImage: "clock.arrow.circlepath")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(cloudUpload.recentUploads.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, DesignSpace.xs)
+
+            if cloudUpload.recentUploads.count > 4 {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: DesignSpace.xs) {
+                        ForEach(cloudUpload.recentUploads) { entry in
+                            cloudUploadHistoryRow(entry)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            } else {
+                ForEach(cloudUpload.recentUploads) { entry in
+                    cloudUploadHistoryRow(entry)
+                }
+            }
+
+            if let cloudDeleteError {
+                Text(cloudDeleteError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func cloudUploadHistoryRow(_ entry: CloudUploadHistoryEntry) -> some View {
+        HStack(spacing: DesignSpace.sm) {
+            VStack(alignment: .leading, spacing: DesignSpace.xxs) {
+                Text(entry.filename)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .strikethrough(entry.isDeletedRemotely)
+                    .foregroundStyle(entry.isDeletedRemotely ? .secondary : .primary)
+                HStack(spacing: DesignSpace.xs) {
+                    Text(entry.publicURL)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text("·")
+                    Text(entry.uploadedAt, style: .relative)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: DesignSpace.sm)
+            if !entry.isDeletedRemotely {
+                VorssaintActionChip(title: strings.copyLink, symbol: "doc.on.doc", tone: .tools) {
+                    copyCloudURL(entry.publicURL)
+                }
+                if cloudUpload.config.provider == .s3Compatible {
+                    VorssaintActionChip(
+                        title: v3(\OverhaulV3Strings.screenshotCloudDeleteAction),
+                        symbol: "trash",
+                        tone: .tools,
+                        destructive: true
+                    ) {
+                        deleteCloudEntry(entry)
+                    }
+                    .disabled(deletingUploadID != nil)
+                }
+            } else {
+                Text(strings.linkDeletedHUD)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, DesignSpace.xs)
+        .padding(.horizontal, DesignSpace.sm)
+        .background(
+            RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
+        )
+    }
+
+    private func copyCloudURL(_ urlString: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.declareVorssaintSource()
+        if pasteboard.setString(urlString, forType: .string) {
+            VorssaintHaptics.alignment()
+            QuickToolHUD.show(icon: "link", message: v2Strings.cloudCopiedBadge)
+        } else {
+            NSSound.beep()
+        }
+    }
+
+    private func deleteCloudEntry(_ entry: CloudUploadHistoryEntry) {
+        deletingUploadID = entry.id
+        cloudDeleteError = nil
+        Task {
+            do {
+                try await cloudUpload.deleteRemoteUpload(entry)
+                VorssaintHaptics.alignment()
+                QuickToolHUD.show(icon: "trash", message: strings.linkDeletedHUD)
+            } catch {
+                cloudDeleteError = error.localizedDescription
+                NSSound.beep()
+            }
+            deletingUploadID = nil
         }
     }
 

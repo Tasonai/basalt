@@ -207,7 +207,7 @@ final class InMemoryScreenshotCloudSecretStore: ScreenshotCloudSecretStore, @unc
     }
 }
 
-/// Pure CryptoKit AWS Signature Version 4 signer for S3-compatible PUT uploads
+/// Pure CryptoKit AWS Signature Version 4 signer for S3-compatible PUT & DELETE requests
 /// (AWS S3, Cloudflare R2, MinIO, Backblaze B2 S3, etc.).
 enum S3SigV4Signer {
     static let signedHeaders = "host;x-amz-content-sha256;x-amz-date"
@@ -359,8 +359,43 @@ enum S3SigV4Signer {
                                  region: String,
                                  service: String = "s3",
                                  date: Date = Date()) -> URLRequest {
-        let payloadHash = sha256Hex(payload)
-        let signed = authorizationHeader(method: "PUT",
+        var request = signedRequest(method: "PUT",
+                                    url: url,
+                                    payloadHash: sha256Hex(payload),
+                                    accessKeyID: accessKeyID,
+                                    secretAccessKey: secretAccessKey,
+                                    region: region,
+                                    service: service,
+                                    date: date)
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        return request
+    }
+
+    static func signedDeleteRequest(url: URL,
+                                    accessKeyID: String,
+                                    secretAccessKey: String,
+                                    region: String,
+                                    service: String = "s3",
+                                    date: Date = Date()) -> URLRequest {
+        signedRequest(method: "DELETE",
+                      url: url,
+                      payloadHash: sha256Hex(Data()),
+                      accessKeyID: accessKeyID,
+                      secretAccessKey: secretAccessKey,
+                      region: region,
+                      service: service,
+                      date: date)
+    }
+
+    private static func signedRequest(method: String,
+                                      url: URL,
+                                      payloadHash: String,
+                                      accessKeyID: String,
+                                      secretAccessKey: String,
+                                      region: String,
+                                      service: String,
+                                      date: Date) -> URLRequest {
+        let signed = authorizationHeader(method: method,
                                          url: url,
                                          payloadHash: payloadHash,
                                          accessKeyID: accessKeyID,
@@ -369,8 +404,7 @@ enum S3SigV4Signer {
                                          service: service,
                                          date: date)
         var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.httpMethod = method
         request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
         request.setValue(signed.amzDate, forHTTPHeaderField: "x-amz-date")
         request.setValue(payloadHash, forHTTPHeaderField: "x-amz-content-sha256")
@@ -412,9 +446,12 @@ enum ScreenshotCloudUploadError: Error, LocalizedError, Equatable, Sendable {
 /// (AWS S3, Cloudflare R2) and custom HTTP webhooks with Keychain-backed secrets.
 final class ScreenshotCloudUploadService: ObservableObject {
     typealias UploadTransport = @Sendable (URLRequest, Data) async throws -> (Data, URLResponse)
+    typealias DeleteTransport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     static let s3SecretAccount = "s3SecretAccessKey"
     static let webhookTokenAccount = "webhookBearerToken"
+    static let historyDefaultsKey = "screenshotCloudUploadHistoryJSON"
+    static let maxHistoryEntries = 50
 
     @MainActor static let shared = ScreenshotCloudUploadService()
 
@@ -427,29 +464,43 @@ final class ScreenshotCloudUploadService: ObservableObject {
     @MainActor @Published private(set) var lastUploadedURL: URL?
     @MainActor @Published private(set) var lastErrorMessage: String?
     @MainActor @Published private(set) var hasStoredSecret: Bool
+    @MainActor @Published private(set) var recentUploads: [CloudUploadHistoryEntry] = [] {
+        didSet {
+            persistHistory()
+        }
+    }
 
     private let defaults: UserDefaults
     private let defaultsKey: String
+    private let historyKey: String
     private let secretStore: any ScreenshotCloudSecretStore
     private let transport: UploadTransport
+    private let deleteTransport: DeleteTransport
     private let pasteboardWriter: @MainActor (URL) -> Bool
     private let feedbackHandler: @MainActor (URL) -> Void
 
     @MainActor
     init(defaults: UserDefaults = .standard,
          defaultsKey: String = ScreenshotCloudConfig.defaultsKey,
+         historyKey: String = ScreenshotCloudUploadService.historyDefaultsKey,
          secretStore: any ScreenshotCloudSecretStore = KeychainScreenshotCloudSecretStore(),
          transport: UploadTransport? = nil,
+         deleteTransport: DeleteTransport? = nil,
          pasteboardWriter: (@MainActor (URL) -> Bool)? = nil,
          feedbackHandler: (@MainActor (URL) -> Void)? = nil) {
         self.defaults = defaults
         self.defaultsKey = defaultsKey
+        self.historyKey = historyKey
         self.secretStore = secretStore
         let loaded = ScreenshotCloudConfig.load(from: defaults, key: defaultsKey)
         self.config = loaded
         self.hasStoredSecret = Self.hasSecret(for: loaded.provider, in: secretStore)
+        self.recentUploads = Self.loadHistory(from: defaults, key: historyKey)
         if let transport {
             self.transport = transport
+            self.deleteTransport = deleteTransport ?? { request in
+                try await transport(request, Data())
+            }
         } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.urlCache = nil
@@ -462,6 +513,9 @@ final class ScreenshotCloudUploadService: ObservableObject {
             let session = URLSession(configuration: configuration)
             self.transport = { request, body in
                 try await session.upload(for: request, from: body)
+            }
+            self.deleteTransport = deleteTransport ?? { request in
+                try await session.data(for: request)
             }
         }
         self.pasteboardWriter = pasteboardWriter ?? { url in
@@ -628,6 +682,34 @@ final class ScreenshotCloudUploadService: ObservableObject {
         return ScreenshotCloudConfig.validatedHTTPURL(rawURL)
     }
 
+    static func buildSignedDeleteRequest(endpointURLString: String,
+                                         bucket: String,
+                                         region: String,
+                                         accessKeyID: String,
+                                         secretAccessKey: String,
+                                         objectKey: String,
+                                         date: Date = Date()) -> URLRequest? {
+        let cleanKey = objectKey.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        let cleanAccessKey = accessKeyID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanSecret = secretAccessKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanKey.isEmpty, !cleanAccessKey.isEmpty, !cleanSecret.isEmpty else { return nil }
+        let tempConfig = ScreenshotCloudConfig(
+            provider: .s3Compatible,
+            endpointURLString: endpointURLString,
+            region: region,
+            bucket: bucket,
+            accessKeyID: cleanAccessKey
+        )
+        guard let deleteURL = s3PutURL(config: tempConfig, objectKey: cleanKey) else { return nil }
+        return S3SigV4Signer.signedDeleteRequest(
+            url: deleteURL,
+            accessKeyID: cleanAccessKey,
+            secretAccessKey: cleanSecret,
+            region: tempConfig.normalizedRegion,
+            date: date
+        )
+    }
+
     // MARK: - Upload Entry
 
     @MainActor
@@ -641,6 +723,7 @@ final class ScreenshotCloudUploadService: ObservableObject {
         let request: URLRequest
         let resolvedFallbackURL: URL
         let webhookKeyPath: String
+        let uploadedObjectKey: String
 
         switch snapshot.provider {
         case .disabled:
@@ -665,6 +748,7 @@ final class ScreenshotCloudUploadService: ObservableObject {
             )
             resolvedFallbackURL = Self.resolvedS3PublicURL(config: snapshot, objectKey: key, putURL: putURL)
             webhookKeyPath = ""
+            uploadedObjectKey = key
         case .customWebhook:
             guard let endpoint = snapshot.normalizedEndpointURL else {
                 throw ScreenshotCloudUploadError.invalidEndpoint
@@ -680,6 +764,7 @@ final class ScreenshotCloudUploadService: ObservableObject {
             resolvedFallbackURL = endpoint
             let configuredPath = snapshot.webhookResponseURLKeyPath.trimmingCharacters(in: .whitespacesAndNewlines)
             webhookKeyPath = configuredPath.isEmpty ? "url" : configuredPath
+            uploadedObjectKey = Self.objectKey(prefix: snapshot.keyPrefix, fileName: fileName)
         }
 
         isUploading = true
@@ -727,9 +812,83 @@ final class ScreenshotCloudUploadService: ObservableObject {
             }
         }
 
+        let rawFileName = (fileName as NSString).lastPathComponent
+        let cleanFileName = rawFileName.isEmpty ? "screenshot.png" : rawFileName
+        let entry = CloudUploadHistoryEntry(
+            id: UUID(),
+            filename: cleanFileName,
+            publicURL: publicURL.absoluteString,
+            objectKey: uploadedObjectKey,
+            uploadedAt: Date(),
+            isDeletedRemotely: false
+        )
+        recentUploads = Array(([entry] + recentUploads).prefix(Self.maxHistoryEntries))
+
         _ = pasteboardWriter(publicURL)
         lastUploadedURL = publicURL
         feedbackHandler(publicURL)
         return publicURL
+    }
+
+    /// Executes an AWS SigV4 signed `DELETE` request against S3/R2 and marks matching history entries as deleted.
+    @MainActor
+    func deleteRemoteUpload(_ entry: CloudUploadHistoryEntry) async throws {
+        let snapshot = config
+        guard snapshot.provider == .s3Compatible, snapshot.hasRequiredFields else {
+            throw ScreenshotCloudUploadError.notConfigured
+        }
+        guard let secret = secretStore.loadSecret(account: Self.s3SecretAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !secret.isEmpty else {
+            throw ScreenshotCloudUploadError.missingSecret
+        }
+        guard let request = Self.buildSignedDeleteRequest(
+            endpointURLString: snapshot.endpointURLString,
+            bucket: snapshot.bucket,
+            region: snapshot.normalizedRegion,
+            accessKeyID: snapshot.accessKeyID,
+            secretAccessKey: secret,
+            objectKey: entry.objectKey
+        ) else {
+            throw ScreenshotCloudUploadError.invalidEndpoint
+        }
+
+        lastErrorMessage = nil
+        let response: URLResponse
+        do {
+            (_, response) = try await deleteTransport(request)
+        } catch {
+            let err = ScreenshotCloudUploadError.networkFailure(error.localizedDescription)
+            lastErrorMessage = err.localizedDescription
+            throw err
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            lastErrorMessage = ScreenshotCloudUploadError.invalidResponse.localizedDescription
+            throw ScreenshotCloudUploadError.invalidResponse
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let err = ScreenshotCloudUploadError.httpStatus(http.statusCode)
+            lastErrorMessage = err.localizedDescription
+            throw err
+        }
+
+        if let index = recentUploads.firstIndex(where: { $0.id == entry.id }) {
+            recentUploads[index].isDeletedRemotely = true
+        }
+    }
+
+    private static func loadHistory(from defaults: UserDefaults, key: String) -> [CloudUploadHistoryEntry] {
+        guard let data = defaults.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([CloudUploadHistoryEntry].self, from: data)
+        else { return [] }
+        return Array(decoded.prefix(maxHistoryEntries))
+    }
+
+    @MainActor
+    private func persistHistory() {
+        let trimmed = Array(recentUploads.prefix(Self.maxHistoryEntries))
+        guard let data = try? JSONEncoder().encode(trimmed) else { return }
+        defaults.set(data, forKey: historyKey)
     }
 }

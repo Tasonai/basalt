@@ -63,6 +63,13 @@ struct RecorderEditDocument: Codable, Equatable {
     var perspectiveTiltEnabled: Bool
     var ambientGlowEnabled: Bool
     var exportsProRes4444: Bool
+    var cameraShape: CameraBubbleShape
+    var personSegmentationBlurEnabled: Bool
+    var perspectiveTilt3DEnabled: Bool
+    var outputAspect: StudioOutputAspect
+    var micAutoDuckingEnabled: Bool
+    var sceneKeyframes: [SceneLayoutKeyframe]
+    var whisperWords: [WhisperWordToken]
 
     init(trimStart: Double = 0,
          trimEnd: Double = 0,
@@ -99,7 +106,14 @@ struct RecorderEditDocument: Codable, Equatable {
          captions: [RecorderCaptionSegment] = [],
          perspectiveTiltEnabled: Bool = false,
          ambientGlowEnabled: Bool = false,
-         exportsProRes4444: Bool = false) {
+         exportsProRes4444: Bool = false,
+         cameraShape: CameraBubbleShape = .circle,
+         personSegmentationBlurEnabled: Bool = false,
+         perspectiveTilt3DEnabled: Bool = false,
+         outputAspect: StudioOutputAspect = .native,
+         micAutoDuckingEnabled: Bool = false,
+         sceneKeyframes: [SceneLayoutKeyframe] = [],
+         whisperWords: [WhisperWordToken] = []) {
         self.trimStart = trimStart
         self.trimEnd = trimEnd
         self.quality = quality
@@ -128,7 +142,17 @@ struct RecorderEditDocument: Codable, Equatable {
         self.motionBlurEnabled = motionBlurEnabled
         self.motionBlurStrength = min(1, max(0, motionBlurStrength))
         self.clickSFXStyle = RecorderClickSFXStyle.sanitized(clickSFXStyle).rawValue
-        self.cameraBubble = cameraBubble
+        var syncedBubble = cameraBubble
+        if cameraShape != .circle, syncedBubble.shape == .circle {
+            syncedBubble.shape = cameraShape
+        }
+        if personSegmentationBlurEnabled, !syncedBubble.personSegmentationBlurEnabled {
+            syncedBubble.personSegmentationBlurEnabled = true
+        }
+        if !sceneKeyframes.isEmpty, syncedBubble.sceneKeyframes.isEmpty {
+            syncedBubble.sceneKeyframes = sceneKeyframes
+        }
+        self.cameraBubble = syncedBubble
         self.keystrokesEnabled = keystrokesEnabled
         self.keystrokes = keystrokes
         self.captionsEnabled = captionsEnabled
@@ -136,6 +160,13 @@ struct RecorderEditDocument: Codable, Equatable {
         self.perspectiveTiltEnabled = perspectiveTiltEnabled
         self.ambientGlowEnabled = ambientGlowEnabled
         self.exportsProRes4444 = exportsProRes4444
+        self.cameraShape = cameraShape
+        self.personSegmentationBlurEnabled = personSegmentationBlurEnabled
+        self.perspectiveTilt3DEnabled = perspectiveTilt3DEnabled
+        self.outputAspect = outputAspect
+        self.micAutoDuckingEnabled = micAutoDuckingEnabled
+        self.sceneKeyframes = sceneKeyframes
+        self.whisperWords = whisperWords
     }
 
     /// A document written before these fields existed still opens: every one
@@ -192,6 +223,20 @@ struct RecorderEditDocument: Codable, Equatable {
                                                            forKey: .ambientGlowEnabled) ?? false
         exportsProRes4444 = try container.decodeIfPresent(Bool.self,
                                                           forKey: .exportsProRes4444) ?? false
+        cameraShape = try container.decodeIfPresent(CameraBubbleShape.self,
+                                                    forKey: .cameraShape) ?? .circle
+        personSegmentationBlurEnabled = try container.decodeIfPresent(
+            Bool.self, forKey: .personSegmentationBlurEnabled) ?? false
+        perspectiveTilt3DEnabled = try container.decodeIfPresent(
+            Bool.self, forKey: .perspectiveTilt3DEnabled) ?? false
+        outputAspect = try container.decodeIfPresent(StudioOutputAspect.self,
+                                                     forKey: .outputAspect) ?? .native
+        micAutoDuckingEnabled = try container.decodeIfPresent(
+            Bool.self, forKey: .micAutoDuckingEnabled) ?? false
+        sceneKeyframes = try container.decodeIfPresent([SceneLayoutKeyframe].self,
+                                                       forKey: .sceneKeyframes) ?? []
+        whisperWords = try container.decodeIfPresent([WhisperWordToken].self,
+                                                     forKey: .whisperWords) ?? []
     }
 
     // MARK: - Timeline
@@ -254,16 +299,25 @@ struct RecorderEditDocument: Codable, Equatable {
     var effectiveCanvasPadding: Double {
         let style = resolvedBackdrop
         if style.kind != .none { return style.padding * 0.18 }
-        if ambientGlowEnabled || perspectiveTiltEnabled { return 0.075 }
+        if ambientGlowEnabled || perspectiveTiltEnabled || perspectiveTilt3DEnabled { return 0.075 }
         return 0
     }
 
     var cropsToAspectWithoutStage: Bool {
-        resolvedBackdrop.kind == .none && !ambientGlowEnabled && !perspectiveTiltEnabled
+        resolvedBackdrop.kind == .none && !ambientGlowEnabled
+            && !perspectiveTiltEnabled && !perspectiveTilt3DEnabled
     }
 
     var resolvedAspect: RecorderSupport.Aspect {
-        RecorderSupport.sanitizedAspect(aspect)
+        if outputAspect != .native {
+            return outputAspect.legacyAspect
+        }
+        return RecorderSupport.sanitizedAspect(aspect)
+    }
+
+    var resolvedOutputAspect: StudioOutputAspect {
+        if outputAspect != .native { return outputAspect }
+        return StudioOutputAspect(legacyAspect: RecorderSupport.sanitizedAspect(aspect))
     }
 
     var resolvedSmoothing: RecorderMotion.Smoothing {
@@ -286,6 +340,7 @@ struct RecorderEditDocument: Codable, Equatable {
             // smoothed and nothing is added.
             next.backdrop = ""
             next.aspect = RecorderSupport.Aspect.original.rawValue
+            next.outputAspect = .native
             next.showsPointer = true
             next.pointerSmoothing = RecorderMotion.Smoothing.off.rawValue
             next.showsClickRing = false
@@ -293,6 +348,7 @@ struct RecorderEditDocument: Codable, Equatable {
         case .clean:
             next.backdrop = ""
             next.aspect = RecorderSupport.Aspect.original.rawValue
+            next.outputAspect = .native
             next.showsPointer = true
             next.pointerSmoothing = RecorderMotion.Smoothing.smooth.rawValue
             next.showsClickRing = true
@@ -315,6 +371,7 @@ struct RecorderEditDocument: Codable, Equatable {
         let expected = applying(look)
         return backdrop == expected.backdrop
             && aspect == expected.aspect
+            && outputAspect == expected.outputAspect
             && showsPointer == expected.showsPointer
             && pointerSmoothing == expected.pointerSmoothing
             && showsClickRing == expected.showsClickRing
@@ -342,6 +399,7 @@ struct RecorderEditDocument: Codable, Equatable {
     func affectsPicture(_ other: RecorderEditDocument) -> Bool {
         backdrop != other.backdrop
             || aspect != other.aspect
+            || outputAspect != other.outputAspect
             || showsPointer != other.showsPointer
             || pointerSmoothing != other.pointerSmoothing
             || pointerSize != other.pointerSize
@@ -356,11 +414,16 @@ struct RecorderEditDocument: Codable, Equatable {
             || motionBlurEnabled != other.motionBlurEnabled
             || motionBlurStrength != other.motionBlurStrength
             || cameraBubble != other.cameraBubble
+            || cameraShape != other.cameraShape
+            || personSegmentationBlurEnabled != other.personSegmentationBlurEnabled
+            || sceneKeyframes != other.sceneKeyframes
             || keystrokesEnabled != other.keystrokesEnabled
             || keystrokes != other.keystrokes
             || captionsEnabled != other.captionsEnabled
             || captions != other.captions
+            || whisperWords != other.whisperWords
             || perspectiveTiltEnabled != other.perspectiveTiltEnabled
+            || perspectiveTilt3DEnabled != other.perspectiveTilt3DEnabled
             || ambientGlowEnabled != other.ambientGlowEnabled
     }
 
@@ -377,6 +440,7 @@ struct RecorderEditDocument: Codable, Equatable {
             || systemAudioGain != other.systemAudioGain
             || microphoneGain != other.microphoneGain
             || clickSFXStyle != other.clickSFXStyle
+            || micAutoDuckingEnabled != other.micAutoDuckingEnabled
     }
 
     /// True once the person has actually changed something worth warning about
@@ -388,9 +452,12 @@ struct RecorderEditDocument: Codable, Equatable {
             || !cuts.isEmpty || !zoomSegments.isEmpty || !texts.isEmpty || !blurs.isEmpty
             || !images.isEmpty || exportTiming.speed != 1
             || motionBlurEnabled || cameraBubble.isEnabled
+            || cameraShape != .circle || personSegmentationBlurEnabled
+            || !sceneKeyframes.isEmpty || outputAspect != .native
+            || micAutoDuckingEnabled || !whisperWords.isEmpty
             || clickSFXStyle != RecorderClickSFXStyle.off.rawValue
             || !captions.isEmpty
-            || perspectiveTiltEnabled
+            || perspectiveTiltEnabled || perspectiveTilt3DEnabled
             || ambientGlowEnabled
             || exportsProRes4444
     }
@@ -422,6 +489,31 @@ struct RecorderEditDocument: Codable, Equatable {
         document.texts = RecorderTextOverlay.normalized(texts, duration: duration)
         document.images = RecorderImageOverlay.normalized(images, duration: duration)
         document.blurs = RecorderBlurRegion.normalized(blurs, duration: duration)
+        let maxTime = duration.isFinite && duration > 0 ? duration : 0
+        if !sceneKeyframes.isEmpty {
+            document.sceneKeyframes = sceneKeyframes
+                .map { kf in
+                    SceneLayoutKeyframe(
+                        id: kf.id,
+                        timeSeconds: maxTime > 0 ? min(maxTime, kf.timeSeconds) : kf.timeSeconds,
+                        shape: kf.shape,
+                        cornerIndex: kf.cornerIndex,
+                        scale: kf.scale
+                    )
+                }
+                .sorted { $0.timeSeconds < $1.timeSeconds }
+            document.cameraBubble.sceneKeyframes = document.sceneKeyframes
+        }
+        if !whisperWords.isEmpty {
+            document.whisperWords = whisperWords
+                .filter { !$0.word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .map { tok in
+                    let s = maxTime > 0 ? min(maxTime, tok.startSeconds) : tok.startSeconds
+                    let e = maxTime > 0 ? min(maxTime, max(s, tok.endSeconds)) : max(s, tok.endSeconds)
+                    return WhisperWordToken(word: tok.word, startSeconds: s, endSeconds: e)
+                }
+                .sorted { $0.startSeconds < $1.startSeconds }
+        }
         return document
     }
 
@@ -492,6 +584,7 @@ struct RecorderEditPreset: Codable, Equatable, Identifiable {
         var next = document
         next.backdrop = backdrop
         next.aspect = aspect
+        next.outputAspect = StudioOutputAspect(legacyAspect: RecorderSupport.sanitizedAspect(aspect))
         next.showsPointer = showsPointer
         next.pointerSmoothing = pointerSmoothing
         next.pointerSize = pointerSize
@@ -500,5 +593,25 @@ struct RecorderEditPreset: Codable, Equatable, Identifiable {
         next.zoomAmount = zoomAmount
         if let images { next.images = images }
         return next
+    }
+}
+
+extension StudioOutputAspect {
+    init(legacyAspect: RecorderSupport.Aspect) {
+        switch legacyAspect {
+        case .original: self = .native
+        case .wide: self = .cinema16x9
+        case .square: self = .square1x1
+        case .vertical: self = .vertical9x16
+        }
+    }
+
+    var legacyAspect: RecorderSupport.Aspect {
+        switch self {
+        case .native: return .original
+        case .cinema16x9: return .wide
+        case .square1x1: return .square
+        case .vertical9x16: return .vertical
+        }
     }
 }

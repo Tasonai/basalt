@@ -241,3 +241,204 @@ enum ScreenshotCounterBadgeStyle: String, CaseIterable, Codable, Sendable {
         }
     }
 }
+
+/// Social media and presentation canvas aspect ratio presets for Screenshot Pro 3.0 export.
+enum SocialExportFramePreset: String, Codable, CaseIterable, Identifiable, Sendable {
+    case widescreen16x9
+    case classic4x3
+    case square1x1
+    case story9x16
+    case xPost1600x900
+    case linkedIn1200x627
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .widescreen16x9: return "16:9 Widescreen"
+        case .classic4x3: return "4:3 Classic"
+        case .square1x1: return "1:1 Square"
+        case .story9x16: return "9:16 Story"
+        case .xPost1600x900: return "X Post (1600×900)"
+        case .linkedIn1200x627: return "LinkedIn (1200×627)"
+        }
+    }
+
+    var aspectRatio: CGFloat {
+        switch self {
+        case .widescreen16x9: return 16.0 / 9.0
+        case .classic4x3: return 4.0 / 3.0
+        case .square1x1: return 1.0
+        case .story9x16: return 9.0 / 16.0
+        case .xPost1600x900: return 1600.0 / 900.0
+        case .linkedIn1200x627: return 1200.0 / 627.0
+        }
+    }
+
+    /// Computes finite, integral pixel dimensions for the given base width.
+    func targetPixelSize(for baseWidth: CGFloat) -> CGSize {
+        let defaultWidth: CGFloat = switch self {
+        case .xPost1600x900: 1600
+        case .linkedIn1200x627: 1200
+        default: 1200
+        }
+        let safeWidth = (baseWidth.isFinite && baseWidth > 0) ? max(1, baseWidth.rounded()) : defaultWidth
+        switch self {
+        case .xPost1600x900 where Int(safeWidth) == 1600:
+            return CGSize(width: 1600, height: 900)
+        case .linkedIn1200x627 where Int(safeWidth) == 1200:
+            return CGSize(width: 1200, height: 627)
+        default:
+            let safeHeight = max(1, (safeWidth / aspectRatio).rounded())
+            return CGSize(width: safeWidth, height: safeHeight)
+        }
+    }
+
+    /// Computes the smallest integral canvas size matching `aspectRatio` that fully encloses `contentSize`.
+    func fittedCanvasSize(for contentSize: CGSize) -> CGSize {
+        let width = contentSize.width.isFinite ? max(1, contentSize.width.rounded()) : 1
+        let height = contentSize.height.isFinite ? max(1, contentSize.height.rounded()) : 1
+        let ratio = aspectRatio
+        guard ratio.isFinite, ratio > 0 else {
+            return CGSize(width: width, height: height)
+        }
+        if width / height < ratio {
+            return CGSize(width: max(width, (height * ratio).rounded()), height: height)
+        } else {
+            return CGSize(width: width, height: max(height, (width / ratio).rounded()))
+        }
+    }
+}
+
+/// Alignment guide emitted by magnetic Smart Guides during annotation drags.
+struct SmartGuideLine: Equatable, Sendable {
+    enum Axis: String, Sendable {
+        case vertical
+        case horizontal
+    }
+
+    let axis: Axis
+    let position: CGFloat
+}
+
+/// Resulting snapped rectangle and active guide lines from `ScreenshotSmartGuides.snap`.
+struct SmartSnapResult: Equatable, Sendable {
+    let rect: CGRect
+    let guides: [SmartGuideLine]
+}
+
+/// Magnetic edge and center snapping against peer annotations and canvas centerlines.
+enum ScreenshotSmartGuides {
+    static func snap(moving: CGRect,
+                     peers: [CGRect],
+                     canvas: CGRect,
+                     threshold: CGFloat = 4.0) -> SmartSnapResult {
+        let m = moving.standardized
+        let c = canvas.standardized
+        guard threshold.isFinite, threshold > 0,
+              m.origin.x.isFinite, m.origin.y.isFinite,
+              m.width.isFinite, m.height.isFinite else {
+            return SmartSnapResult(rect: m, guides: [])
+        }
+
+        var xTargets: [CGFloat] = []
+        var yTargets: [CGFloat] = []
+        if c.width > 0, c.midX.isFinite {
+            xTargets.append(c.midX)
+        }
+        if c.height > 0, c.midY.isFinite {
+            yTargets.append(c.midY)
+        }
+        for peer in peers {
+            let p = peer.standardized
+            guard p.origin.x.isFinite, p.origin.y.isFinite,
+                  p.width.isFinite, p.height.isFinite else { continue }
+            xTargets.append(contentsOf: [p.minX, p.midX, p.maxX])
+            yTargets.append(contentsOf: [p.minY, p.midY, p.maxY])
+        }
+
+        let snappedX = bestSnapOffset(
+            anchors: [m.minX, m.midX, m.maxX],
+            targets: xTargets,
+            threshold: threshold
+        )
+        let snappedY = bestSnapOffset(
+            anchors: [m.minY, m.midY, m.maxY],
+            targets: yTargets,
+            threshold: threshold
+        )
+
+        let resultRect = CGRect(
+            x: m.origin.x + (snappedX ?? 0),
+            y: m.origin.y + (snappedY ?? 0),
+            width: m.width,
+            height: m.height
+        )
+
+        var guides: [SmartGuideLine] = []
+        if snappedX != nil {
+            let finalXAnchors = [resultRect.minX, resultRect.midX, resultRect.maxX]
+            for target in xTargets where finalXAnchors.contains(where: { abs($0 - target) < 0.01 }) {
+                appendUniqueGuide(SmartGuideLine(axis: .vertical, position: target), to: &guides)
+            }
+        }
+        if snappedY != nil {
+            let finalYAnchors = [resultRect.minY, resultRect.midY, resultRect.maxY]
+            for target in yTargets where finalYAnchors.contains(where: { abs($0 - target) < 0.01 }) {
+                appendUniqueGuide(SmartGuideLine(axis: .horizontal, position: target), to: &guides)
+            }
+        }
+        return SmartSnapResult(rect: resultRect, guides: guides)
+    }
+
+    private static func bestSnapOffset(anchors: [CGFloat],
+                                       targets: [CGFloat],
+                                       threshold: CGFloat) -> CGFloat? {
+        var bestDelta: CGFloat?
+        var bestDistance = threshold + .ulpOfOne
+        for anchor in anchors {
+            for target in targets {
+                let delta = target - anchor
+                let distance = abs(delta)
+                if distance <= threshold, distance < bestDistance {
+                    bestDistance = distance
+                    bestDelta = delta
+                }
+            }
+        }
+        return bestDelta
+    }
+
+    private static func appendUniqueGuide(_ guide: SmartGuideLine, to guides: inout [SmartGuideLine]) {
+        let alreadyPresent = guides.contains {
+            $0.axis == guide.axis && abs($0.position - guide.position) < 0.01
+        }
+        if !alreadyPresent {
+            guides.append(guide)
+        }
+    }
+}
+
+/// Persisted record for a cloud-uploaded screenshot supporting 1-click copy and remote deletion.
+struct CloudUploadHistoryEntry: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let filename: String
+    let publicURL: String
+    let objectKey: String
+    let uploadedAt: Date
+    var isDeletedRemotely: Bool
+
+    init(id: UUID = UUID(),
+         filename: String,
+         publicURL: String,
+         objectKey: String,
+         uploadedAt: Date = Date(),
+         isDeletedRemotely: Bool = false) {
+        self.id = id
+        self.filename = filename
+        self.publicURL = publicURL
+        self.objectKey = objectKey
+        self.uploadedAt = uploadedAt
+        self.isDeletedRemotely = isDeletedRemotely
+    }
+}

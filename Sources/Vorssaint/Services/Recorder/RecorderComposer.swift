@@ -4,6 +4,7 @@
 import AVFoundation
 import AppKit
 import CoreImage
+import Vision
 
 /// Turns a recording plus an edit into the picture the person sees, for both
 /// the editor preview and the export. One function decides what a frame looks
@@ -79,6 +80,112 @@ final class RecorderComposer {
         let tiltY: [Double]
         let ambientGlowEnabled: Bool
         let preservesTransparentBackdrop: Bool
+        let cameraShape: CameraBubbleShape
+        let personSegmentationBlurEnabled: Bool
+        let perspectiveTilt3DEnabled: Bool
+        let outputAspect: StudioOutputAspect
+        let micAutoDuckingEnabled: Bool
+        let sceneKeyframes: [SceneLayoutKeyframe]
+        let whisperWords: [WhisperWordToken]
+
+        init(sourceSize: CGSize,
+             canvasSize: CGSize,
+             cardRect: CGRect,
+             frameRate: Int,
+             positions: [CGPoint],
+             zoom: [Double],
+             travel: [CGPoint],
+             pressScale: [Double],
+             ring: [Double],
+             showsPointer: Bool,
+             pointerShapes: [RecorderPointerTrack.CursorShape],
+             pointerShapeIndex: [Int],
+             pointerVisible: [Bool],
+             pointerOpacity: [Double],
+             pointerScale: CGFloat,
+             pointerPixelSize: CGFloat,
+             showsClickRing: Bool,
+             plate: CIImage?,
+             mask: CIImage?,
+             texts: [RecorderTextOverlay],
+             textOpacity: [[Double]],
+             images: [RecorderImageOverlay],
+             imageSprites: [CGImage?],
+             imageOpacity: [[Double]],
+             blurs: [RecorderBlurRegion],
+             blurCovers: [[Bool]],
+             motionBlurEnabled: Bool,
+             motionBlurStrength: Double,
+             cameraBubble: RecorderCameraBubbleConfig,
+             keystrokesEnabled: Bool,
+             keystrokes: [RecorderKeystrokeEvent],
+             captionsEnabled: Bool,
+             captions: [RecorderCaptionSegment],
+             sourceTimes: [Double],
+             cameraURL: URL?,
+             cameraBubbleScale: [Double],
+             perspectiveTiltEnabled: Bool,
+             tiltX: [Double],
+             tiltY: [Double],
+             ambientGlowEnabled: Bool,
+             preservesTransparentBackdrop: Bool,
+             cameraShape: CameraBubbleShape? = nil,
+             personSegmentationBlurEnabled: Bool? = nil,
+             perspectiveTilt3DEnabled: Bool? = nil,
+             outputAspect: StudioOutputAspect = .native,
+             micAutoDuckingEnabled: Bool = false,
+             sceneKeyframes: [SceneLayoutKeyframe]? = nil,
+             whisperWords: [WhisperWordToken] = []) {
+            self.sourceSize = sourceSize
+            self.canvasSize = canvasSize
+            self.cardRect = cardRect
+            self.frameRate = frameRate
+            self.positions = positions
+            self.zoom = zoom
+            self.travel = travel
+            self.pressScale = pressScale
+            self.ring = ring
+            self.showsPointer = showsPointer
+            self.pointerShapes = pointerShapes
+            self.pointerShapeIndex = pointerShapeIndex
+            self.pointerVisible = pointerVisible
+            self.pointerOpacity = pointerOpacity
+            self.pointerScale = pointerScale
+            self.pointerPixelSize = pointerPixelSize
+            self.showsClickRing = showsClickRing
+            self.plate = plate
+            self.mask = mask
+            self.texts = texts
+            self.textOpacity = textOpacity
+            self.images = images
+            self.imageSprites = imageSprites
+            self.imageOpacity = imageOpacity
+            self.blurs = blurs
+            self.blurCovers = blurCovers
+            self.motionBlurEnabled = motionBlurEnabled
+            self.motionBlurStrength = motionBlurStrength
+            self.cameraBubble = cameraBubble
+            self.keystrokesEnabled = keystrokesEnabled
+            self.keystrokes = keystrokes
+            self.captionsEnabled = captionsEnabled
+            self.captions = captions
+            self.sourceTimes = sourceTimes
+            self.cameraURL = cameraURL
+            self.cameraBubbleScale = cameraBubbleScale
+            self.perspectiveTiltEnabled = perspectiveTiltEnabled
+            self.tiltX = tiltX
+            self.tiltY = tiltY
+            self.ambientGlowEnabled = ambientGlowEnabled
+            self.preservesTransparentBackdrop = preservesTransparentBackdrop
+            self.cameraShape = cameraShape ?? cameraBubble.shape
+            self.personSegmentationBlurEnabled = personSegmentationBlurEnabled
+                ?? cameraBubble.personSegmentationBlurEnabled
+            self.perspectiveTilt3DEnabled = perspectiveTilt3DEnabled ?? perspectiveTiltEnabled
+            self.outputAspect = outputAspect
+            self.micAutoDuckingEnabled = micAutoDuckingEnabled
+            self.sceneKeyframes = sceneKeyframes ?? cameraBubble.sceneKeyframes
+            self.whisperWords = whisperWords
+        }
     }
 
     private let plan: Plan
@@ -87,6 +194,7 @@ final class RecorderComposer {
     private let decodedShapes: [CGImage?]
     private let fallbackArrow: CGImage?
     private let cameraSampler: CameraFrameSampler?
+    private let personSegmentationBlur: PersonSegmentationBlurProcessor?
 
     init(plan: Plan) {
         self.plan = plan
@@ -100,6 +208,110 @@ final class RecorderComposer {
         cameraSampler = (plan.cameraBubble.isEnabled && plan.cameraURL != nil)
             ? plan.cameraURL.flatMap(CameraFrameSampler.init(url:))
             : nil
+        personSegmentationBlur = (plan.cameraBubble.isEnabled && plan.personSegmentationBlurEnabled)
+            ? PersonSegmentationBlurProcessor()
+            : nil
+    }
+
+    static func makeStudioPlan(document: RecorderEditDocument,
+                               track: RecorderPointerTrack,
+                               sourceSize: CGSize,
+                               frameRate: Int,
+                               duration: Double,
+                               outputScale: CGFloat = 1,
+                               cameraURL: URL? = nil,
+                               preservesTransparentBackdrop: Bool = false) -> Plan? {
+        var adapted = document
+        adapted.perspectiveTiltEnabled = document.perspectiveTiltEnabled || document.perspectiveTilt3DEnabled
+        let resolvedOutput = document.resolvedOutputAspect
+        adapted.aspect = resolvedOutput.legacyAspect.rawValue
+        if adapted.captionsEnabled, adapted.captions.isEmpty, !adapted.whisperWords.isEmpty {
+            let start = adapted.whisperWords.first?.startSeconds ?? 0
+            let end = adapted.whisperWords.last?.endSeconds ?? start + 0.5
+            let joined = adapted.whisperWords.map(\.word).joined(separator: " ")
+            adapted.captions = [RecorderCaptionSegment(start: start, end: max(start + 0.3, end), text: joined)]
+        }
+
+        guard let base = makePlan(document: adapted,
+                                  track: track,
+                                  sourceSize: sourceSize,
+                                  frameRate: frameRate,
+                                  duration: duration,
+                                  outputScale: outputScale,
+                                  cameraURL: cameraURL,
+                                  preservesTransparentBackdrop: preservesTransparentBackdrop)
+        else { return nil }
+
+        var stageCanvas = base.canvasSize
+        var stageCard = base.cardRect
+        var stagePlate = base.plate
+        var stageMask = base.mask
+
+        if resolvedOutput != .native {
+            let croppedTarget = resolvedOutput.targetCanvasSize(sourceSize: sourceSize)
+            if let stage = makePlan(document: adapted,
+                                    track: track,
+                                    sourceSize: croppedTarget,
+                                    frameRate: frameRate,
+                                    duration: duration,
+                                    outputScale: outputScale,
+                                    cameraURL: nil,
+                                    preservesTransparentBackdrop: preservesTransparentBackdrop) {
+                stageCanvas = stage.canvasSize
+                stageCard = stage.cardRect
+                stagePlate = stage.plate
+                stageMask = stage.mask
+            }
+        }
+
+        return Plan(sourceSize: base.sourceSize,
+                    canvasSize: stageCanvas,
+                    cardRect: stageCard,
+                    frameRate: base.frameRate,
+                    positions: base.positions,
+                    zoom: base.zoom,
+                    travel: base.travel,
+                    pressScale: base.pressScale,
+                    ring: base.ring,
+                    showsPointer: base.showsPointer,
+                    pointerShapes: base.pointerShapes,
+                    pointerShapeIndex: base.pointerShapeIndex,
+                    pointerVisible: base.pointerVisible,
+                    pointerOpacity: base.pointerOpacity,
+                    pointerScale: base.pointerScale,
+                    pointerPixelSize: base.pointerPixelSize,
+                    showsClickRing: base.showsClickRing,
+                    plate: stagePlate,
+                    mask: stageMask,
+                    texts: base.texts,
+                    textOpacity: base.textOpacity,
+                    images: base.images,
+                    imageSprites: base.imageSprites,
+                    imageOpacity: base.imageOpacity,
+                    blurs: base.blurs,
+                    blurCovers: base.blurCovers,
+                    motionBlurEnabled: base.motionBlurEnabled,
+                    motionBlurStrength: base.motionBlurStrength,
+                    cameraBubble: base.cameraBubble,
+                    keystrokesEnabled: base.keystrokesEnabled,
+                    keystrokes: base.keystrokes,
+                    captionsEnabled: base.captionsEnabled,
+                    captions: base.captions,
+                    sourceTimes: base.sourceTimes,
+                    cameraURL: base.cameraURL,
+                    cameraBubbleScale: base.cameraBubbleScale,
+                    perspectiveTiltEnabled: base.perspectiveTiltEnabled,
+                    tiltX: base.tiltX,
+                    tiltY: base.tiltY,
+                    ambientGlowEnabled: base.ambientGlowEnabled,
+                    preservesTransparentBackdrop: base.preservesTransparentBackdrop,
+                    cameraShape: document.cameraShape,
+                    personSegmentationBlurEnabled: document.personSegmentationBlurEnabled,
+                    perspectiveTilt3DEnabled: document.perspectiveTilt3DEnabled,
+                    outputAspect: resolvedOutput,
+                    micAutoDuckingEnabled: document.micAutoDuckingEnabled,
+                    sceneKeyframes: document.sceneKeyframes,
+                    whisperWords: document.whisperWords)
     }
 
     var canvasSize: CGSize { plan.canvasSize }
@@ -141,7 +353,25 @@ final class RecorderComposer {
                 )
             }
         }
-        let fittedContent = fitted(content)
+        var contentSize = plan.sourceSize
+        if plan.outputAspect != .native {
+            let cursor = plan.positions.indices.contains(index) ? plan.positions[index] : CGPoint(x: 0.5, y: 0.5)
+            let cropTopLeft = plan.outputAspect.cursorReframeCropRect(sourceSize: plan.sourceSize,
+                                                                      normalizedCursor: cursor)
+            if cropTopLeft.width > 1, cropTopLeft.height > 1 {
+                let ciCrop = CGRect(
+                    x: cropTopLeft.minX,
+                    y: max(0, plan.sourceSize.height - cropTopLeft.maxY),
+                    width: cropTopLeft.width,
+                    height: cropTopLeft.height
+                )
+                content = content
+                    .cropped(to: ciCrop)
+                    .transformed(by: CGAffineTransform(translationX: -ciCrop.minX, y: -ciCrop.minY))
+                contentSize = cropTopLeft.size
+            }
+        }
+        let fittedContent = fitted(content, contentSize: contentSize)
         let canvasBounds = CGRect(origin: .zero, size: plan.canvasSize)
 
         var stageCard = fittedContent
@@ -151,7 +381,7 @@ final class RecorderComposer {
                 kCIInputMaskImageKey: mask,
             ])
         }
-        if plan.perspectiveTiltEnabled {
+        if plan.perspectiveTiltEnabled || plan.perspectiveTilt3DEnabled {
             stageCard = perspectiveTilted(stageCard, index: index)
         }
 
@@ -169,7 +399,8 @@ final class RecorderComposer {
         }
 
         if plan.mask != nil || plan.plate != nil || plan.ambientGlowEnabled
-            || plan.perspectiveTiltEnabled || plan.preservesTransparentBackdrop {
+            || plan.perspectiveTiltEnabled || plan.perspectiveTilt3DEnabled
+            || plan.preservesTransparentBackdrop {
             content = stageCard.composited(over: background)
         } else {
             content = fittedContent
@@ -185,11 +416,22 @@ final class RecorderComposer {
     }
 
     private func perspectiveTilted(_ image: CIImage, index: Int) -> CIImage {
-        let tx = plan.tiltX.indices.contains(index) ? plan.tiltX[index] : 0
-        let ty = plan.tiltY.indices.contains(index) ? plan.tiltY[index] : 0
+        let velX = plan.tiltX.indices.contains(index) ? plan.tiltX[index] : 0
+        let velY = plan.tiltY.indices.contains(index) ? plan.tiltY[index] : 0
+        let cursor = plan.positions.indices.contains(index) ? plan.positions[index] : CGPoint(x: 0.5, y: 0.5)
+        let cursorTilt = PerspectiveTiltSample.cursorPerspectiveTilt(
+            normalizedCursor: cursor,
+            maxAngleDegrees: 8.0,
+            enabled: plan.perspectiveTilt3DEnabled || plan.perspectiveTiltEnabled
+        )
+        let tx = min(1.0, max(-1.0, velX + (cursorTilt.yawDegrees / 8.0) * 0.75))
+        let ty = min(1.0, max(-1.0, velY - (cursorTilt.pitchDegrees / 8.0) * 0.75))
         guard abs(tx) > 0.002 || abs(ty) > 0.002 else { return image }
 
-        let rect = plan.cardRect
+        let canvasBounds = CGRect(origin: .zero, size: plan.canvasSize)
+        let rect = plan.cardRect.width > plan.canvasSize.width + 1 || plan.cardRect.height > plan.canvasSize.height + 1
+            ? canvasBounds
+            : plan.cardRect
         guard rect.width > 4, rect.height > 4,
               let filter = CIFilter(name: "CIPerspectiveTransform") else { return image }
 
@@ -274,21 +516,58 @@ final class RecorderComposer {
     private func drawCameraBubble(on content: CIImage, index: Int, sourceSeconds: Double) -> CIImage {
         let cfg = plan.cameraBubble
         guard cfg.isEnabled else { return content }
-        let scale: CGFloat
+        let activeKeyframe = SceneLayoutKeyframe.activeKeyframe(at: sourceSeconds,
+                                                                keyframes: plan.sceneKeyframes)
+        let activeShape = SceneLayoutKeyframe.activeShape(at: sourceSeconds,
+                                                          keyframes: plan.sceneKeyframes,
+                                                          defaultShape: plan.cameraShape)
+        guard activeShape != .hidden else { return content }
+
+        let baseScale: CGFloat
         if plan.cameraBubbleScale.indices.contains(index) {
-            scale = CGFloat(plan.cameraBubbleScale[index])
+            baseScale = CGFloat(plan.cameraBubbleScale[index])
         } else {
             let pointerNorm: CGPoint? = plan.positions.indices.contains(index) ? plan.positions[index] : nil
-            scale = cfg.effectiveScale(pointerNormalized: pointerNorm)
+            baseScale = cfg.effectiveScale(pointerNormalized: pointerNorm)
         }
+        let scale = baseScale * CGFloat(activeKeyframe?.scale ?? 1.0)
         let minor = min(plan.canvasSize.width, plan.canvasSize.height)
         let diameter = max(44, minor * CGFloat(cfg.diameterFraction) * scale)
-        let center = CGPoint(
-            x: cfg.normalizedCenter.x * plan.canvasSize.width,
-            y: (1.0 - cfg.normalizedCenter.y) * plan.canvasSize.height
-        )
+
+        let bubbleWidth: CGFloat
+        let bubbleHeight: CGFloat
+        let cornerRadius: CGFloat
+        switch activeShape {
+        case .circle:
+            bubbleWidth = diameter
+            bubbleHeight = diameter
+            cornerRadius = diameter * 0.5
+        case .squircle:
+            bubbleWidth = diameter
+            bubbleHeight = diameter
+            cornerRadius = diameter * 0.24
+        case .verticalPortrait:
+            bubbleWidth = diameter * 0.78
+            bubbleHeight = diameter * 1.18
+            cornerRadius = bubbleWidth * 0.20
+        case .hidden:
+            return content
+        }
+
+        let corner = activeKeyframe?.corner ?? cfg.corner
+        let normCenter = RecorderCameraBubbleConfig.normalizedCenter(for: corner)
         let pad: CGFloat = 14
-        let size = CGSize(width: ceil(diameter + pad * 2), height: ceil(diameter + pad * 2))
+        let halfW = bubbleWidth * 0.5 + 8
+        let halfH = bubbleHeight * 0.5 + 8
+        let rawCenter = CGPoint(
+            x: normCenter.x * plan.canvasSize.width,
+            y: (1.0 - normCenter.y) * plan.canvasSize.height
+        )
+        let center = CGPoint(
+            x: min(max(halfW, rawCenter.x), max(halfW, plan.canvasSize.width - halfW)),
+            y: min(max(halfH, rawCenter.y), max(halfH, plan.canvasSize.height - halfH))
+        )
+        let size = CGSize(width: ceil(bubbleWidth + pad * 2), height: ceil(bubbleHeight + pad * 2))
         guard let ctx = CGContext(data: nil,
                                   width: Int(size.width),
                                   height: Int(size.height),
@@ -297,29 +576,43 @@ final class RecorderComposer {
                                   space: CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return content }
-        let circleRect = CGRect(x: pad, y: pad, width: diameter, height: diameter)
+
+        let bubbleRect = CGRect(x: pad, y: pad, width: bubbleWidth, height: bubbleHeight)
+        let bubblePath: CGPath
+        if activeShape == .circle {
+            bubblePath = CGPath(ellipseIn: bubbleRect, transform: nil)
+        } else {
+            bubblePath = CGPath(roundedRect: bubbleRect,
+                                cornerWidth: cornerRadius,
+                                cornerHeight: cornerRadius,
+                                transform: nil)
+        }
 
         ctx.saveGState()
         ctx.setShadow(offset: CGSize(width: 0, height: -4),
                       blur: 10,
                       color: CGColor(gray: 0, alpha: 0.45))
         ctx.setFillColor(CGColor(srgbRed: 0.10, green: 0.11, blue: 0.14, alpha: 1))
-        ctx.fillEllipse(in: circleRect)
+        ctx.addPath(bubblePath)
+        ctx.fillPath()
         ctx.restoreGState()
 
         ctx.saveGState()
-        ctx.addEllipse(in: circleRect)
+        ctx.addPath(bubblePath)
         ctx.clip()
-        if let cameraFrame = cameraSampler?.frame(at: sourceSeconds),
-           cameraFrame.width > 0, cameraFrame.height > 0 {
+        if let rawFrame = cameraSampler?.frame(at: sourceSeconds),
+           rawFrame.width > 0, rawFrame.height > 0 {
+            let cameraFrame = (plan.personSegmentationBlurEnabled
+                               ? personSegmentationBlur?.process(rawFrame)
+                               : nil) ?? rawFrame
             let srcW = CGFloat(cameraFrame.width)
             let srcH = CGFloat(cameraFrame.height)
-            let fill = max(circleRect.width / srcW, circleRect.height / srcH)
+            let fill = max(bubbleRect.width / srcW, bubbleRect.height / srcH)
             let drawW = srcW * fill
             let drawH = srcH * fill
             let drawRect = CGRect(
-                x: circleRect.midX - drawW / 2,
-                y: circleRect.midY - drawH / 2,
+                x: bubbleRect.midX - drawW / 2,
+                y: bubbleRect.midY - drawH / 2,
                 width: drawW,
                 height: drawH
             )
@@ -327,21 +620,21 @@ final class RecorderComposer {
             ctx.draw(cameraFrame, in: drawRect)
         } else {
             ctx.setFillColor(CGColor(srgbRed: 0.12, green: 0.13, blue: 0.16, alpha: 0.94))
-            ctx.fill(circleRect)
+            ctx.fill(bubbleRect)
             ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.34))
-            let headSize = diameter * 0.28
+            let headSize = min(bubbleWidth, bubbleHeight) * 0.28
             let headRect = CGRect(
-                x: circleRect.midX - headSize / 2,
-                y: circleRect.midY + diameter * 0.04,
+                x: bubbleRect.midX - headSize / 2,
+                y: bubbleRect.midY + bubbleHeight * 0.04,
                 width: headSize,
                 height: headSize
             )
             ctx.fillEllipse(in: headRect)
-            let shouldersW = diameter * 0.56
-            let shouldersH = diameter * 0.36
+            let shouldersW = min(bubbleWidth, bubbleHeight) * 0.56
+            let shouldersH = min(bubbleWidth, bubbleHeight) * 0.36
             let shouldersRect = CGRect(
-                x: circleRect.midX - shouldersW / 2,
-                y: circleRect.minY - shouldersH * 0.22,
+                x: bubbleRect.midX - shouldersW / 2,
+                y: bubbleRect.minY - shouldersH * 0.22,
                 width: shouldersW,
                 height: shouldersH
             )
@@ -349,9 +642,10 @@ final class RecorderComposer {
         }
         ctx.restoreGState()
 
+        ctx.addPath(bubblePath)
         ctx.setStrokeColor(Self.borderCGColor(hex: cfg.borderHex))
-        ctx.setLineWidth(max(2.0, diameter * 0.025))
-        ctx.strokeEllipse(in: circleRect)
+        ctx.setLineWidth(max(2.0, min(bubbleWidth, bubbleHeight) * 0.025))
+        ctx.strokePath()
 
         guard let cg = ctx.makeImage() else { return content }
         let ox = center.x - size.width / 2
@@ -380,25 +674,88 @@ final class RecorderComposer {
         guard let pill = renderStudioPill(text: text, fontSize: max(18, plan.canvasSize.height * 0.026)) else {
             return content
         }
+        let hasActiveCaption = plan.captionsEnabled && (
+            RecorderCaptionSegment.activeCaption(in: plan.captions, at: seconds) != nil
+                || WhisperCLITranscriptParser.activeWordIndex(at: seconds, tokens: plan.whisperWords) != nil
+        )
         let ox = (plan.canvasSize.width - CGFloat(pill.width)) / 2
-        let oy = plan.captionsEnabled && RecorderCaptionSegment.activeCaption(in: plan.captions, at: seconds) != nil
-            ? plan.canvasSize.height * 0.13
-            : plan.canvasSize.height * 0.06
+        let oy = hasActiveCaption ? plan.canvasSize.height * 0.13 : plan.canvasSize.height * 0.06
         return CIImage(cgImage: pill)
             .transformed(by: CGAffineTransform(translationX: ox, y: oy))
             .composited(over: content)
     }
 
     private func drawCaptions(on content: CIImage, at seconds: Double) -> CIImage {
-        guard plan.captionsEnabled,
-              let segment = RecorderCaptionSegment.activeCaption(in: plan.captions, at: seconds),
-              let pill = renderStudioPill(text: segment.text, fontSize: max(18, plan.canvasSize.height * 0.028))
-        else { return content }
+        guard plan.captionsEnabled else { return content }
+        let fontSize = max(18, plan.canvasSize.height * 0.028)
+        let activeSegment = RecorderCaptionSegment.activeCaption(in: plan.captions, at: seconds)
+
+        let pill: CGImage?
+        if !plan.whisperWords.isEmpty {
+            let activeIdx = WhisperCLITranscriptParser.activeWordIndex(at: seconds,
+                                                                       tokens: plan.whisperWords)
+            if let activeSegment {
+                let slice = plan.whisperWords.enumerated().filter { _, token in
+                    let mid = (token.startSeconds + token.endSeconds) * 0.5
+                    return mid >= activeSegment.start - 0.12 && mid <= activeSegment.end + 0.12
+                }
+                if !slice.isEmpty {
+                    pill = renderKaraokePill(words: slice, activeGlobalIndex: activeIdx, fontSize: fontSize)
+                } else {
+                    pill = renderStudioPill(text: activeSegment.text, fontSize: fontSize)
+                }
+            } else if let activeIdx {
+                let start = (activeIdx / 6) * 6
+                let end = min(plan.whisperWords.count, start + 6)
+                let slice = Array(plan.whisperWords.enumerated())[start..<end]
+                pill = renderKaraokePill(words: Array(slice), activeGlobalIndex: activeIdx, fontSize: fontSize)
+            } else {
+                pill = nil
+            }
+        } else if let activeSegment {
+            pill = renderStudioPill(text: activeSegment.text, fontSize: fontSize)
+        } else {
+            pill = nil
+        }
+
+        guard let pill else { return content }
         let ox = (plan.canvasSize.width - CGFloat(pill.width)) / 2
         let oy = plan.canvasSize.height * 0.055
         return CIImage(cgImage: pill)
             .transformed(by: CGAffineTransform(translationX: ox, y: oy))
             .composited(over: content)
+    }
+
+    private func renderKaraokePill(words: [(offset: Int, element: WhisperWordToken)],
+                                   activeGlobalIndex: Int?,
+                                   fontSize: CGFloat) -> CGImage? {
+        guard !words.isEmpty else { return nil }
+        let result = NSMutableAttributedString()
+        let baseFont = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+        let activeFont = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+        let activeColor = NSColor(calibratedRed: 0.25, green: 0.93, blue: 0.82, alpha: 1.0)
+        let spokenColor = NSColor.white.withAlphaComponent(0.95)
+        let upcomingColor = NSColor.white.withAlphaComponent(0.62)
+
+        for (position, item) in words.enumerated() {
+            let isActive = activeGlobalIndex == item.offset
+            let isSpoken = activeGlobalIndex.map { item.offset < $0 } ?? false
+            let color: NSColor
+            if isActive {
+                color = activeColor
+            } else if isSpoken {
+                color = spokenColor
+            } else {
+                color = upcomingColor
+            }
+            let prefix = position == 0 ? "" : " "
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: isActive ? activeFont : baseFont,
+                .foregroundColor: color,
+            ]
+            result.append(NSAttributedString(string: prefix + item.element.word, attributes: attrs))
+        }
+        return renderPill(attributed: result, fontSize: fontSize)
     }
 
     private func renderStudioPill(text: String, fontSize: CGFloat) -> CGImage? {
@@ -408,7 +765,11 @@ final class RecorderComposer {
             .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
             .foregroundColor: NSColor.white,
         ]
-        let attr = NSAttributedString(string: trimmed, attributes: attrs)
+        return renderPill(attributed: NSAttributedString(string: trimmed, attributes: attrs), fontSize: fontSize)
+    }
+
+    private func renderPill(attributed attr: NSAttributedString, fontSize: CGFloat) -> CGImage? {
+        guard attr.length > 0 else { return nil }
         let maxW = max(120, plan.canvasSize.width * 0.78)
         let measured = attr.boundingRect(with: CGSize(width: maxW, height: 200),
                                          options: [.usesLineFragmentOrigin, .usesFontLeading])
@@ -588,14 +949,154 @@ final class RecorderComposer {
             .cropped(to: CGRect(origin: .zero, size: plan.sourceSize))
     }
 
-    private func fitted(_ content: CIImage) -> CIImage {
-        guard plan.sourceSize.width > 0, plan.sourceSize.height > 0 else { return content }
-        let scaleX = plan.cardRect.width / plan.sourceSize.width
-        let scaleY = plan.cardRect.height / plan.sourceSize.height
+    private func fitted(_ content: CIImage, contentSize: CGSize) -> CIImage {
+        guard contentSize.width > 0, contentSize.height > 0 else { return content }
+        let targetRect: CGRect
+        if plan.outputAspect != .native,
+           (plan.cardRect.width > plan.canvasSize.width + 1 || plan.cardRect.height > plan.canvasSize.height + 1) {
+            targetRect = CGRect(origin: .zero, size: plan.canvasSize)
+        } else {
+            targetRect = plan.cardRect
+        }
+        guard targetRect.width > 0, targetRect.height > 0 else { return content }
+        let scaleX = targetRect.width / contentSize.width
+        let scaleY = targetRect.height / contentSize.height
         return content
             .transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
-            .transformed(by: CGAffineTransform(translationX: plan.cardRect.origin.x,
-                                               y: plan.cardRect.origin.y))
+            .transformed(by: CGAffineTransform(translationX: targetRect.origin.x,
+                                               y: targetRect.origin.y))
+    }
+
+    // MARK: - Audio Auto-Ducking
+
+    static func audioMix(trackIDs: [RecorderAudioSource: CMPersistentTrackID],
+                         clickSFXTrackID: CMPersistentTrackID? = nil,
+                         document: RecorderEditDocument,
+                         micWaveform: [Float] = [],
+                         duration: Double = 0) -> AVAudioMix? {
+        guard !trackIDs.isEmpty || clickSFXTrackID != nil else { return nil }
+        let mix = AVMutableAudioMix()
+        var inputs: [AVMutableAudioMixInputParameters] = RecorderAudioSource.allCases.compactMap { source in
+            guard let trackID = trackIDs[source] else { return nil }
+            let parameters = AVMutableAudioMixInputParameters()
+            parameters.trackID = trackID
+            switch source {
+            case .microphone:
+                let gain = document.keepsMicrophone
+                    ? Float(RecorderSupport.sanitizedAudioGain(document.microphoneGain))
+                    : 0
+                parameters.setVolume(gain, at: .zero)
+            case .system:
+                let baseGain = document.keepsSystemAudio
+                    ? Float(RecorderSupport.sanitizedAudioGain(document.systemAudioGain))
+                    : 0
+                guard baseGain > 0,
+                      document.micAutoDuckingEnabled,
+                      document.keepsMicrophone,
+                      !micWaveform.isEmpty,
+                      duration > 0
+                else {
+                    parameters.setVolume(baseGain, at: .zero)
+                    return parameters
+                }
+                applyAutoDucking(to: parameters,
+                                 baseGain: baseGain,
+                                 micWaveform: micWaveform,
+                                 duration: duration,
+                                 document: document)
+            }
+            return parameters
+        }
+        if let clickSFXTrackID {
+            let sfx = AVMutableAudioMixInputParameters()
+            sfx.trackID = clickSFXTrackID
+            sfx.setVolume(1.0, at: .zero)
+            inputs.append(sfx)
+        }
+        mix.inputParameters = inputs
+        return mix
+    }
+
+    private static func applyAutoDucking(to parameters: AVMutableAudioMixInputParameters,
+                                         baseGain: Float,
+                                         micWaveform: [Float],
+                                         duration: Double,
+                                         document: RecorderEditDocument) {
+        let keptRanges = document.keptRanges(duration: duration)
+        guard !keptRanges.isEmpty else {
+            parameters.setVolume(baseGain, at: .zero)
+            return
+        }
+        let speed = max(0.25, document.exportTiming.speed)
+        let bucketDuration = duration / Double(micWaveform.count)
+        guard bucketDuration > 0 else {
+            parameters.setVolume(baseGain, at: .zero)
+            return
+        }
+
+        struct Segment {
+            var start: Double
+            var end: Double
+            var gain: Float
+        }
+
+        var segments: [Segment] = []
+        var outCursor = 0.0
+        for range in keptRanges {
+            let firstIdx = max(0, min(micWaveform.count - 1, Int(floor(range.lowerBound / bucketDuration))))
+            let lastIdx = max(0, min(micWaveform.count - 1, Int(floor(range.upperBound / bucketDuration))))
+            for idx in firstIdx...lastIdx {
+                let bStart = Double(idx) * bucketDuration
+                let bEnd = Double(idx + 1) * bucketDuration
+                let overlapStart = max(range.lowerBound, bStart)
+                let overlapEnd = min(range.upperBound, bEnd)
+                let span = (overlapEnd - overlapStart) / speed
+                guard span > 0.002 else { continue }
+                let duckLinear = AudioAutoDuckingMath.systemGainLinear(
+                    micRMS: micWaveform[idx],
+                    enabled: document.micAutoDuckingEnabled
+                )
+                let gain = baseGain * duckLinear
+                if let last = segments.last, abs(last.gain - gain) < 0.01 {
+                    segments[segments.count - 1].end = outCursor + span
+                } else {
+                    segments.append(Segment(start: outCursor, end: outCursor + span, gain: gain))
+                }
+                outCursor += span
+            }
+        }
+
+        guard !segments.isEmpty else {
+            parameters.setVolume(baseGain, at: .zero)
+            return
+        }
+        if segments.count == 1 {
+            parameters.setVolume(segments[0].gain, at: .zero)
+            return
+        }
+
+        var prevGain = segments[0].gain
+        var lastEndTime = CMTime.zero
+        for seg in segments {
+            let tStart = CMTimeMaximum(lastEndTime, CMTime(seconds: seg.start, preferredTimescale: 600))
+            let tEnd = CMTime(seconds: seg.end, preferredTimescale: 600)
+            guard tEnd > tStart else { continue }
+            let rampDuration = CMTimeMinimum(CMTime(seconds: 0.08, preferredTimescale: 600),
+                                             CMTimeSubtract(tEnd, tStart))
+            if abs(prevGain - seg.gain) > 0.01, rampDuration > .zero {
+                parameters.setVolumeRamp(fromStartVolume: prevGain,
+                                         toEndVolume: seg.gain,
+                                         timeRange: CMTimeRange(start: tStart, duration: rampDuration))
+                let holdStart = CMTimeAdd(tStart, rampDuration)
+                if tEnd > holdStart {
+                    parameters.setVolume(seg.gain, at: holdStart)
+                }
+            } else {
+                parameters.setVolume(seg.gain, at: tStart)
+            }
+            prevGain = seg.gain
+            lastEndTime = tEnd
+        }
     }
 
     // MARK: - Composition
@@ -793,5 +1294,67 @@ private final class CameraImageBox: @unchecked Sendable {
 
     func get() -> CGImage? {
         lock.withLock { stored }
+    }
+}
+
+/// Segments the speaker foreground from a webcam frame using Vision and softly
+/// blurs the background behind the speaker.
+private final class PersonSegmentationBlurProcessor: @unchecked Sendable {
+    private let lock = NSLock()
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    private var lastSourceID: ObjectIdentifier?
+    private var lastOutput: CGImage?
+
+    func process(_ image: CGImage) -> CGImage? {
+        let sourceID = ObjectIdentifier(image)
+        if let cached = lock.withLock({ lastSourceID == sourceID ? lastOutput : nil }) {
+            return cached
+        }
+
+        return autoreleasepool { () -> CGImage? in
+            let request = VNGeneratePersonSegmentationRequest()
+            request.qualityLevel = .balanced
+            request.outputPixelFormat = kCVPixelFormatType_OneComponent8
+
+            let handler = VNImageRequestHandler(cgImage: image, options: [:])
+            do {
+                try handler.perform([request])
+            } catch {
+                return nil
+            }
+            guard let maskBuffer = request.results?.first?.pixelBuffer else { return nil }
+
+            let foreground = CIImage(cgImage: image)
+            let extent = foreground.extent
+            guard extent.width > 1, extent.height > 1 else { return nil }
+
+            let rawMask = CIImage(cvPixelBuffer: maskBuffer)
+            guard rawMask.extent.width > 0, rawMask.extent.height > 0 else { return nil }
+            let scaleX = extent.width / rawMask.extent.width
+            let scaleY = extent.height / rawMask.extent.height
+            let mask = rawMask.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+
+            let blurRadius = max(8.0, min(extent.width, extent.height) * 0.04)
+            let blurredBackground = foreground
+                .clampedToExtent()
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: blurRadius])
+                .cropped(to: extent)
+
+            let composited = foreground
+                .applyingFilter("CIBlendWithMask", parameters: [
+                    kCIInputBackgroundImageKey: blurredBackground,
+                    kCIInputMaskImageKey: mask,
+                ])
+                .cropped(to: extent)
+
+            guard let rendered = ciContext.createCGImage(composited, from: extent) else {
+                return nil
+            }
+            lock.withLock {
+                lastSourceID = sourceID
+                lastOutput = rendered
+            }
+            return rendered
+        }
     }
 }

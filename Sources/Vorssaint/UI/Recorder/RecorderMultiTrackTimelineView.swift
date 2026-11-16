@@ -25,8 +25,20 @@ struct RecorderMultiTrackTimelineView: View {
         OverhaulV2Strings.localized(l10n.language)
     }
 
+    private var v3: OverhaulV3Strings {
+        OverhaulV3Strings.localized(l10n.language)
+    }
+
     private var clickStyle: RecorderClickSFXStyle {
         RecorderClickSFXStyle.sanitized(model.document.clickSFXStyle)
+    }
+
+    private var showsSceneKeyframesLane: Bool {
+        model.document.cameraBubble.isEnabled || !model.document.sceneKeyframes.isEmpty
+    }
+
+    private var showsKaraokeWordsLane: Bool {
+        model.document.captionsEnabled && !model.document.whisperWords.isEmpty
     }
 
     private var showsKeystrokesLane: Bool {
@@ -46,8 +58,10 @@ struct RecorderMultiTrackTimelineView: View {
         if !model.document.texts.isEmpty { count += 1 }
         if !model.document.images.isEmpty { count += 1 }
         if !model.document.blurs.isEmpty { count += 1 }
+        if showsSceneKeyframesLane { count += 1 }
         if showsKeystrokesLane { count += 1 }
         if showsCaptionsLane { count += 1 }
+        if showsKaraokeWordsLane { count += 1 }
         if showsClickSFXLane { count += 1 }
         if model.hasAudio(.system) { count += 1 }
         if model.hasAudio(.microphone) { count += 1 }
@@ -108,7 +122,17 @@ struct RecorderMultiTrackTimelineView: View {
                             text: model.hasCameraSidecar ? "PiP" : nil,
                             tint: .teal)
             }
-            if model.document.perspectiveTiltEnabled {
+            if !model.document.sceneKeyframes.isEmpty {
+                headerBadge(symbol: "diamond.fill",
+                            text: "\(model.document.sceneKeyframes.count)",
+                            tint: .cyan)
+            }
+            if model.document.resolvedOutputAspect != .native {
+                headerBadge(symbol: "aspectratio",
+                            text: aspectBadgeText(model.document.resolvedOutputAspect),
+                            tint: .mint)
+            }
+            if model.document.perspectiveTiltEnabled || model.document.perspectiveTilt3DEnabled {
                 headerBadge(symbol: "view.3d",
                             text: nil,
                             tint: .indigo)
@@ -118,6 +142,11 @@ struct RecorderMultiTrackTimelineView: View {
                             text: nil,
                             tint: .orange)
             }
+            if model.document.micAutoDuckingEnabled {
+                headerBadge(symbol: "waveform",
+                            text: "Duck",
+                            tint: .blue)
+            }
             if model.document.exportsProRes4444 {
                 headerBadge(symbol: "film",
                             text: "4444",
@@ -126,6 +155,15 @@ struct RecorderMultiTrackTimelineView: View {
             if !isExpanded {
                 collapsedSummaryBadges
             }
+        }
+    }
+
+    private func aspectBadgeText(_ aspect: StudioOutputAspect) -> String {
+        switch aspect {
+        case .native: return "Native"
+        case .vertical9x16: return "9:16"
+        case .square1x1: return "1:1"
+        case .cinema16x9: return "16:9"
         }
     }
 
@@ -145,6 +183,11 @@ struct RecorderMultiTrackTimelineView: View {
                 headerBadge(symbol: "captions.bubble",
                             text: "\(model.document.captions.filter { !$0.isCut }.count)",
                             tint: .accentColor)
+            }
+            if showsKaraokeWordsLane {
+                headerBadge(symbol: "text.word.spacing",
+                            text: "\(model.document.whisperWords.count)",
+                            tint: .cyan)
             }
             if showsClickSFXLane {
                 headerBadge(symbol: "cursorarrow.click.2",
@@ -265,6 +308,12 @@ struct RecorderMultiTrackTimelineView: View {
                         .frame(height: 26)
                 }
             }
+            if showsSceneKeyframesLane {
+                timelineRow(v3.recorderCameraShapeTitle, symbol: "diamond") {
+                    SceneKeyframeTimelineLane(model: model)
+                        .frame(height: 24)
+                }
+            }
             if showsKeystrokesLane {
                 timelineRow(wave2.keystrokeHUDTitle, symbol: "keyboard") {
                     KeystrokeTimelineLane(model: model)
@@ -274,6 +323,12 @@ struct RecorderMultiTrackTimelineView: View {
             if showsCaptionsLane {
                 timelineRow(wave2.captionsTrackTitle, symbol: "captions.bubble") {
                     CaptionTimelineLane(model: model)
+                        .frame(height: 24)
+                }
+            }
+            if showsKaraokeWordsLane {
+                timelineRow("Karaoke", symbol: "text.word.spacing") {
+                    KaraokeWordTimelineLane(model: model)
                         .frame(height: 24)
                 }
             }
@@ -553,6 +608,162 @@ private struct ClickSFXTimelineLane: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+}
+
+private struct SceneKeyframeTimelineLane: View {
+    @ObservedObject var model: RecorderEditorModel
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(1, proxy.size.width)
+            let height = proxy.size.height
+            let duration = max(0.001, model.duration)
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.teal.opacity(0.08))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Color.teal.opacity(0.24), lineWidth: 0.75)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { location in
+                        let ratio = Double(min(1, max(0, location.x / width)))
+                        VorssaintHaptics.alignment()
+                        model.seek(to: ratio * duration)
+                    }
+
+                ForEach(model.document.sceneKeyframes) { keyframe in
+                    let rawX = CGFloat(min(1, max(0, keyframe.timeSeconds / duration))) * width
+                    let clampedX = min(max(10, rawX), max(10, width - 26))
+                    let isSelected = model.selectedSceneKeyframeID == keyframe.id
+                    let tint = markerTint(for: keyframe.shape)
+
+                    Button {
+                        VorssaintHaptics.alignment()
+                        model.selectSceneKeyframeAndSeek(isSelected ? nil : keyframe.id)
+                    } label: {
+                        Image(systemName: isSelected ? "diamond.fill" : "diamond")
+                            .font(.system(size: isSelected ? 12 : 10.5, weight: .bold))
+                            .foregroundStyle(isSelected ? Color.white : tint)
+                            .padding(3)
+                            .background(tint.opacity(isSelected ? 0.85 : 0.25), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .position(x: clampedX, y: height / 2)
+                }
+
+                HStack {
+                    Spacer()
+                    Button {
+                        VorssaintHaptics.generic()
+                        model.addOrUpdateSceneKeyframe()
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundStyle(.teal)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.black.opacity(0.45), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 4)
+                }
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.85))
+                    .frame(width: 1.5, height: height)
+                    .offset(x: CGFloat(min(1, max(0, model.sourceTime / duration))) * width - 0.75)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func markerTint(for shape: CameraBubbleShape) -> Color {
+        switch shape {
+        case .circle: return .teal
+        case .squircle: return .cyan
+        case .verticalPortrait: return .purple
+        case .hidden: return .orange
+        }
+    }
+}
+
+private struct KaraokeWordTimelineLane: View {
+    @ObservedObject var model: RecorderEditorModel
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(1, proxy.size.width)
+            let height = proxy.size.height
+            let duration = max(0.001, model.duration)
+            let tokens = model.document.whisperWords
+            let activeIdx = WhisperCLITranscriptParser.activeWordIndex(at: model.sourceTime, tokens: tokens)
+            let visible = visibleWordIndices(tokens: tokens, activeIdx: activeIdx, width: width, duration: duration)
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.cyan.opacity(0.07))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Color.cyan.opacity(0.22), lineWidth: 0.75)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { location in
+                        let ratio = Double(min(1, max(0, location.x / width)))
+                        model.seek(to: ratio * duration)
+                    }
+
+                ForEach(visible, id: \.self) { idx in
+                    let token = tokens[idx]
+                    let isActive = activeIdx == idx
+                    let rawX = CGFloat(min(1, max(0, token.startSeconds / duration))) * width
+                    let clampedX = min(max(16, rawX), max(16, width - 24))
+                    Button {
+                        VorssaintHaptics.alignment()
+                        model.seek(to: token.startSeconds)
+                    } label: {
+                        Text(token.word)
+                            .font(.system(size: 9, weight: isActive ? .bold : .medium))
+                            .foregroundStyle(isActive ? Color.black : Color.white.opacity(0.88))
+                            .lineLimit(1)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(
+                                isActive ? Color.teal : Color.cyan.opacity(0.26),
+                                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .position(x: clampedX, y: height / 2)
+                }
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.85))
+                    .frame(width: 1.5, height: height)
+                    .offset(x: CGFloat(min(1, max(0, model.sourceTime / duration))) * width - 0.75)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func visibleWordIndices(tokens: [WhisperWordToken],
+                                    activeIdx: Int?,
+                                    width: CGFloat,
+                                    duration: Double) -> [Int] {
+        var accepted: [Int] = []
+        var lastX: CGFloat = -.greatestFiniteMagnitude
+        let minSpacing: CGFloat = 28
+        for (idx, token) in tokens.enumerated() {
+            let x = CGFloat(min(1, max(0, token.startSeconds / duration))) * width
+            if idx == activeIdx || x - lastX >= minSpacing {
+                accepted.append(idx)
+                lastX = x
+                if accepted.count >= 48 { break }
+            }
+        }
+        return accepted
     }
 }
 
