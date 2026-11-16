@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import AppKit
+import ApplicationServices
 import Combine
 import Foundation
 import Security
@@ -179,26 +181,383 @@ final class InMemoryQuickAISecretStore: QuickAISecretStore {
     }
 }
 
+/// Context injection tokens supported in Command Bar 2.0 Quick AI prompts.
+enum QuickAIContextToken: String, CaseIterable, Identifiable, Equatable, Sendable {
+    case clipboard
+    case frontApp
+    case selection
+    case browser
+
+    var id: String { rawValue }
+
+    var token: String {
+        switch self {
+        case .clipboard: return "@clipboard"
+        case .frontApp: return "@frontApp"
+        case .selection: return "@selection"
+        case .browser: return "@browser"
+        }
+    }
+
+    var displayTitle: String {
+        switch self {
+        case .clipboard: return "Clipboard"
+        case .frontApp: return "Front App"
+        case .selection: return "Selection"
+        case .browser: return "Browser"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .clipboard: return "doc.on.clipboard"
+        case .frontApp: return "app.dashed"
+        case .selection: return "text.cursor"
+        case .browser: return "globe"
+        }
+    }
+}
+
+/// Snapshot of live desktop context captured for Quick AI token expansion.
+struct QuickAIContextSnapshot: Equatable, Sendable {
+    let clipboard: String?
+    let frontAppName: String?
+    let selectedText: String?
+    let browserInfo: String?
+
+    init(clipboard: String? = nil,
+         frontAppName: String? = nil,
+         selectedText: String? = nil,
+         browserInfo: String? = nil) {
+        self.clipboard = clipboard
+        self.frontAppName = frontAppName
+        self.selectedText = selectedText
+        self.browserInfo = browserInfo
+    }
+}
+
+/// Pure prompt token expander plus live desktop context reader for Quick AI.
+enum QuickAIContextResolver {
+    private static let maxInlineSnippetChars = 6000
+    private static let maxShortTokenChars = 2000
+
+    private static let safariBundleIDs: Set<String> = [
+        "com.apple.Safari",
+        "com.apple.SafariTechnologyPreview",
+    ]
+
+    private static let chromiumBundleIDs: Set<String> = [
+        "com.google.Chrome",
+        "com.google.Chrome.canary",
+        "company.thebrowser.Browser",
+        "com.brave.Browser",
+        "com.microsoft.edgemac",
+        "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera",
+        "org.chromium.Chromium",
+    ]
+
+    private static let axFallbackBrowserBundleIDs: Set<String> = [
+        "org.mozilla.firefox",
+        "org.mozilla.firefoxdeveloperedition",
+        "app.zen-browser.zen",
+        "com.kagi.kagimacOS",
+    ]
+
+    static func tokensPresent(in prompt: String) -> [QuickAIContextToken] {
+        var found: [QuickAIContextToken] = []
+        let lowered = prompt.lowercased()
+        for token in QuickAIContextToken.allCases {
+            if lowered.contains(token.token.lowercased()), !found.contains(token) {
+                found.append(token)
+            }
+        }
+        return found
+    }
+
+    /// Expands `@clipboard`, `@frontApp`, `@selection`, and `@browser` tokens deterministically.
+    static func resolvePrompt(
+        _ prompt: String,
+        clipboard: String? = nil,
+        frontAppName: String? = nil,
+        selectedText: String? = nil,
+        browserInfo: String? = nil
+    ) -> String {
+        guard prompt.contains("@"),
+              let regex = try? NSRegularExpression(
+                pattern: #"@(clipboard|frontApp|frontapp|selection|browser)(?![A-Za-z0-9_])"#
+              ) else {
+            return prompt
+        }
+
+        let cleanClip = sanitize(clipboard, limit: maxInlineSnippetChars)
+        let cleanApp = sanitize(frontAppName, limit: maxShortTokenChars)
+        let cleanSelection = sanitize(selectedText, limit: maxInlineSnippetChars)
+        let cleanBrowser = sanitize(browserInfo, limit: maxShortTokenChars)
+
+        var output = prompt
+        let nsRange = NSRange(output.startIndex..<output.endIndex, in: output)
+        for match in regex.matches(in: output, range: nsRange).reversed() {
+            guard match.numberOfRanges >= 2,
+                  let fullRange = Range(match.range(at: 0), in: output),
+                  let nameRange = Range(match.range(at: 1), in: output) else { continue }
+            let key = String(output[nameRange]).lowercased()
+            let replacement: String
+            switch key {
+            case "clipboard": replacement = cleanClip ?? ""
+            case "frontapp": replacement = cleanApp ?? ""
+            case "selection": replacement = cleanSelection ?? ""
+            case "browser": replacement = cleanBrowser ?? ""
+            default: replacement = ""
+            }
+            output.replaceSubrange(fullRange, with: replacement)
+        }
+        return output
+            .replacingOccurrences(of: #" {2,}"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Resolves inline `@tokens` and prepends a compact `[Context]` block for any
+    /// attached chips not explicitly referenced inline in `prompt`.
+    static func resolvePrompt(
+        _ prompt: String,
+        attachedTokens: Set<QuickAIContextToken>,
+        snapshot: QuickAIContextSnapshot
+    ) -> String {
+        let inlineTokens = Set(tokensPresent(in: prompt))
+        let expandedPrompt = resolvePrompt(
+            prompt,
+            clipboard: snapshot.clipboard,
+            frontAppName: snapshot.frontAppName,
+            selectedText: snapshot.selectedText,
+            browserInfo: snapshot.browserInfo
+        )
+        let extraTokens = QuickAIContextToken.allCases.filter {
+            attachedTokens.contains($0) && !inlineTokens.contains($0)
+        }
+        guard !extraTokens.isEmpty else { return expandedPrompt }
+
+        var contextLines: [String] = []
+        for token in extraTokens {
+            let value: String?
+            switch token {
+            case .clipboard: value = sanitize(snapshot.clipboard, limit: maxInlineSnippetChars)
+            case .frontApp: value = sanitize(snapshot.frontAppName, limit: maxShortTokenChars)
+            case .selection: value = sanitize(snapshot.selectedText, limit: maxInlineSnippetChars)
+            case .browser: value = sanitize(snapshot.browserInfo, limit: maxShortTokenChars)
+            }
+            if let value, !value.isEmpty {
+                contextLines.append("\(token.displayTitle): \(value)")
+            }
+        }
+        guard !contextLines.isEmpty else { return expandedPrompt }
+        return "[Context]\n" + contextLines.joined(separator: "\n") + "\n\n" + expandedPrompt
+    }
+
+    static func captureLiveContext(
+        includeClipboard: Bool = true,
+        includeFrontApp: Bool = true,
+        includeSelection: Bool = true,
+        includeBrowser: Bool = true
+    ) async -> QuickAIContextSnapshot {
+        let captured = await MainActor.run { () -> (
+            clipboard: String?,
+            frontAppName: String?,
+            frontPID: pid_t?,
+            frontBundleID: String?,
+            runningBrowsers: [(pid: pid_t, bundleID: String)]
+        ) in
+            let ownPID = ProcessInfo.processInfo.processIdentifier
+            let front = NSWorkspace.shared.frontmostApplication
+            let usableFront = (front?.processIdentifier != ownPID) ? front : nil
+            let clip = includeClipboard ? NSPasteboard.general.string(forType: .string) : nil
+            let knownBrowsers = safariBundleIDs.union(chromiumBundleIDs).union(axFallbackBrowserBundleIDs)
+            let browsers = NSWorkspace.shared.runningApplications.compactMap { app -> (pid_t, String)? in
+                guard !app.isTerminated,
+                      let bid = app.bundleIdentifier,
+                      knownBrowsers.contains(bid) else { return nil }
+                return (app.processIdentifier, bid)
+            }
+            return (
+                clip,
+                includeFrontApp ? (usableFront?.localizedName ?? front?.localizedName) : nil,
+                usableFront?.processIdentifier,
+                usableFront?.bundleIdentifier,
+                browsers
+            )
+        }
+
+        return await Task.detached(priority: .userInitiated) {
+            let selected = includeSelection
+                ? captured.frontPID.flatMap { readSelectedText(processID: $0) }
+                : nil
+            let browser = includeBrowser
+                ? readBrowserInfo(
+                    preferredPID: captured.frontPID,
+                    preferredBundleID: captured.frontBundleID,
+                    runningBrowsers: captured.runningBrowsers
+                )
+                : nil
+            return QuickAIContextSnapshot(
+                clipboard: captured.clipboard,
+                frontAppName: captured.frontAppName,
+                selectedText: selected,
+                browserInfo: browser
+            )
+        }.value
+    }
+
+    private static func sanitize(_ raw: String?, limit: Int) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        if trimmed.count <= limit { return trimmed }
+        return String(trimmed.prefix(limit)) + "…"
+    }
+
+    private static func readSelectedText(processID: pid_t) -> String? {
+        guard AXIsProcessTrusted(),
+              processID != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let appElement = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(appElement, 0.35)
+        var focusedRaw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedRaw) == .success,
+              let focusedRaw,
+              CFGetTypeID(focusedRaw) == AXUIElementGetTypeID() else { return nil }
+        let focused = focusedRaw as! AXUIElement
+        AXUIElementSetMessagingTimeout(focused, 0.35)
+
+        if let text = copyAXString(focused, attribute: kAXSelectedTextAttribute as CFString),
+           !text.isEmpty {
+            return String(text.prefix(maxInlineSnippetChars))
+        }
+        var markerRaw: CFTypeRef?
+        if AXUIElementCopyAttributeValue(focused, "AXSelectedTextMarkerRange" as CFString, &markerRaw) == .success,
+           let markerRaw {
+            var strRaw: CFTypeRef?
+            if AXUIElementCopyParameterizedAttributeValue(
+                focused,
+                "AXStringForTextMarkerRange" as CFString,
+                markerRaw,
+                &strRaw
+            ) == .success,
+               let str = strRaw as? String, !str.isEmpty {
+                return String(str.prefix(maxInlineSnippetChars))
+            }
+        }
+        return nil
+    }
+
+    private static func readBrowserInfo(
+        preferredPID: pid_t?,
+        preferredBundleID: String?,
+        runningBrowsers: [(pid: pid_t, bundleID: String)]
+    ) -> String? {
+        var candidates: [(pid: pid_t, bundleID: String)] = []
+        if let preferredPID, let preferredBundleID,
+           safariBundleIDs.contains(preferredBundleID)
+            || chromiumBundleIDs.contains(preferredBundleID)
+            || axFallbackBrowserBundleIDs.contains(preferredBundleID) {
+            candidates.append((preferredPID, preferredBundleID))
+        }
+        for browser in runningBrowsers where !candidates.contains(where: { $0.pid == browser.pid }) {
+            candidates.append(browser)
+        }
+        guard !candidates.isEmpty else { return nil }
+
+        for candidate in candidates {
+            if safariBundleIDs.contains(candidate.bundleID) {
+                let script = "tell application id \"\(candidate.bundleID)\" to if (count of windows) > 0 then return (name of current tab of front window) & \"\\n\" & (URL of current tab of front window)"
+                if let info = runBrowserAppleScript(script) { return info }
+            } else if chromiumBundleIDs.contains(candidate.bundleID) {
+                let script = "tell application id \"\(candidate.bundleID)\" to if (count of windows) > 0 then return (title of active tab of front window) & \"\\n\" & (URL of active tab of front window)"
+                if let info = runBrowserAppleScript(script) { return info }
+            }
+            if let title = readFocusedWindowTitle(processID: candidate.pid) {
+                return title
+            }
+        }
+        return nil
+    }
+
+    private static func runBrowserAppleScript(_ source: String) -> String? {
+        guard let script = NSAppleScript(source: source) else { return nil }
+        var error: NSDictionary?
+        let descriptor = script.executeAndReturnError(&error)
+        guard error == nil, let raw = descriptor.stringValue else { return nil }
+        let parts = raw
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return nil }
+        if parts.count >= 2 {
+            return "\(parts[0]) (\(parts[1]))"
+        }
+        return parts[0]
+    }
+
+    private static func readFocusedWindowTitle(processID: pid_t) -> String? {
+        guard AXIsProcessTrusted(),
+              processID != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let appElement = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(appElement, 0.3)
+        var winRaw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &winRaw) == .success,
+              let winRaw,
+              CFGetTypeID(winRaw) == AXUIElementGetTypeID() else { return nil }
+        let window = winRaw as! AXUIElement
+        AXUIElementSetMessagingTimeout(window, 0.3)
+        return copyAXString(window, attribute: kAXTitleAttribute as CFString)
+    }
+
+    private static func copyAXString(_ element: AXUIElement, attribute: CFString) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
+        return value as? String
+    }
+}
+
 /// Manages Quick AI sessions (`Tab` in Command Bar), Keychain BYOK keys, CLI probing, and droplet mood sync.
 final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
-    static let shared = CommandBarQuickAIService()
+    static let shared = CommandBarQuickAIService(defaults: .standard)
+
+    private static let providerStorageKey = "commandBarQuickAIProvider"
 
     @Published private(set) var isStreaming = false
     @Published private(set) var responseText = ""
     @Published private(set) var lastPrompt = ""
     @Published private(set) var errorText: String?
+    @Published private(set) var missingKeyProvider: QuickAIProvider?
     @Published private(set) var dropletState: CommandBarQuickAIDropletState = .idle
-    @Published var selectedProvider: QuickAIProvider = .ollama
+    @Published var selectedProvider: QuickAIProvider {
+        didSet {
+            guard oldValue != selectedProvider else { return }
+            defaults?.set(selectedProvider.rawValue, forKey: Self.providerStorageKey)
+        }
+    }
 
     private let secretStore: any QuickAISecretStore
+    private let defaults: UserDefaults?
     private var streamTask: Task<Void, Never>?
+    private let processLock = NSLock()
+    private var activeProcess: Process?
 
-    init(secretStore: any QuickAISecretStore = KeychainQuickAISecretStore()) {
+    init(secretStore: any QuickAISecretStore = KeychainQuickAISecretStore(),
+         defaults: UserDefaults? = nil) {
         self.secretStore = secretStore
+        self.defaults = defaults
+        if let raw = defaults?.string(forKey: Self.providerStorageKey),
+           let stored = QuickAIProvider(rawValue: raw) {
+            self.selectedProvider = stored
+        } else {
+            self.selectedProvider = .ollama
+        }
     }
 
     deinit {
         streamTask?.cancel()
+        terminateActiveProcess()
     }
 
     static func installedCLITools(
@@ -230,9 +589,12 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
 
     func beginThinking(prompt: String) {
         streamTask?.cancel()
+        streamTask = nil
+        terminateActiveProcess()
         lastPrompt = prompt
         responseText = ""
         errorText = nil
+        missingKeyProvider = nil
         isStreaming = true
         dropletState = .thinking
     }
@@ -256,10 +618,23 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
     func reset() {
         streamTask?.cancel()
         streamTask = nil
+        terminateActiveProcess()
         isStreaming = false
         responseText = ""
         errorText = nil
+        missingKeyProvider = nil
         dropletState = .idle
+    }
+
+    private func terminateActiveProcess() {
+        let process = processLock.withLock { () -> Process? in
+            let current = activeProcess
+            activeProcess = nil
+            return current
+        }
+        if let process, process.isRunning {
+            process.terminate()
+        }
     }
 
     /// Parses one NDJSON line emitted by Ollama's `/api/generate` endpoint.
@@ -275,7 +650,7 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
         return (token, done)
     }
 
-    /// Parses an SSE `data:` line in OpenAI/Anthropic chat completion streams.
+    /// Parses an SSE `data:` line in OpenAI chat completion streams.
     static func parseOpenAISSELine(_ line: String) -> (token: String?, done: Bool) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("data:") else { return (nil, false) }
@@ -298,9 +673,156 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
         return (nil, false)
     }
 
+    /// Parses an SSE `event:` / `data:` line emitted by Anthropic's `/v1/messages` stream.
+    static func parseAnthropicSSELine(_ line: String) -> (token: String?, done: Bool) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return (nil, false) }
+        if trimmed.hasPrefix("event:") {
+            let eventName = trimmed.dropFirst(6).trimmingCharacters(in: .whitespaces)
+            return (nil, eventName == "message_stop")
+        }
+        guard trimmed.hasPrefix("data:") else { return (nil, false) }
+        let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+        if payload == "[DONE]" { return (nil, true) }
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return (nil, false)
+        }
+        let eventType = object["type"] as? String
+        if eventType == "message_stop" {
+            return (nil, true)
+        }
+        if eventType == nil || eventType == "content_block_delta" {
+            if let delta = object["delta"] as? [String: Any],
+               let text = delta["text"] as? String {
+                return (text, false)
+            }
+        }
+        return (nil, false)
+    }
+
+    private static func parseSSEErrorMessage(from line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        let jsonText: String
+        if trimmed.hasPrefix("data:") {
+            jsonText = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+        } else {
+            jsonText = trimmed
+        }
+        guard let data = jsonText.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let error = object["error"] as? [String: Any],
+           let message = error["message"] as? String,
+           !message.isEmpty {
+            return message
+        }
+        return nil
+    }
+
     private final class WeakBox<T: AnyObject>: @unchecked Sendable {
         weak var value: T?
         init(_ value: T) { self.value = value }
+    }
+
+    private final class StreamBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var buffer = Data()
+
+        func appendAndDecodeUTF8(_ chunk: Data) -> String {
+            lock.withLock {
+                buffer.append(chunk)
+                return decodeAvailableUTF8()
+            }
+        }
+
+        func drainLossy() -> String {
+            lock.withLock {
+                guard !buffer.isEmpty else { return "" }
+                let str = String(decoding: buffer, as: UTF8.self)
+                buffer.removeAll()
+                return str
+            }
+        }
+
+        private func decodeAvailableUTF8() -> String {
+            guard !buffer.isEmpty else { return "" }
+            if let full = String(data: buffer, encoding: .utf8) {
+                buffer.removeAll()
+                return full
+            }
+            // Hold back up to 3 trailing incomplete UTF-8 continuation/lead bytes until the next chunk.
+            for drop in 1...min(3, buffer.count) {
+                let candidate = buffer.dropLast(drop)
+                if let decoded = String(data: candidate, encoding: .utf8) {
+                    buffer = Data(buffer.suffix(drop))
+                    return decoded
+                }
+            }
+            let decoded = String(decoding: buffer, as: UTF8.self)
+            buffer.removeAll()
+            return decoded
+        }
+    }
+
+    /// Resolves `@clipboard`, `@frontApp`, `@selection`, and `@browser` context tokens
+    /// asynchronously off the main thread before dispatching to the active provider.
+    func sendContextualPrompt(
+        _ rawPrompt: String,
+        attachedTokens: Set<QuickAIContextToken> = [],
+        rawModel: String? = nil
+    ) {
+        let cleanPrompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPrompt.isEmpty else { return }
+
+        let allTokens = attachedTokens.union(QuickAIContextResolver.tokensPresent(in: cleanPrompt))
+        if allTokens.isEmpty {
+            sendPrompt(cleanPrompt, rawModel: rawModel)
+            return
+        }
+
+        beginThinking(prompt: cleanPrompt)
+        let box = WeakBox(self)
+        streamTask = Task {
+            let snapshot = await QuickAIContextResolver.captureLiveContext(
+                includeClipboard: allTokens.contains(.clipboard),
+                includeFrontApp: allTokens.contains(.frontApp),
+                includeSelection: allTokens.contains(.selection),
+                includeBrowser: allTokens.contains(.browser)
+            )
+            if Task.isCancelled { return }
+            let resolved = QuickAIContextResolver.resolvePrompt(
+                cleanPrompt,
+                attachedTokens: attachedTokens,
+                snapshot: snapshot
+            )
+            await MainActor.run {
+                guard let service = box.value, service.isStreaming else { return }
+                service.streamTask = nil
+                service.sendPrompt(resolved, rawModel: rawModel)
+            }
+        }
+    }
+
+    func sendPrompt(_ prompt: String, rawModel: String? = nil) {
+        let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPrompt.isEmpty else { return }
+        let customModel = rawModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (customModel?.isEmpty == false) ? customModel : nil
+
+        switch selectedProvider {
+        case .ollama:
+            askLocalOllama(prompt: cleanPrompt, model: model ?? "llama3.2")
+        case .claudeCLI:
+            askCLI(provider: .claudeCLI, prompt: cleanPrompt)
+        case .codexCLI:
+            askCLI(provider: .codexCLI, prompt: cleanPrompt)
+        case .byokOpenAI:
+            askOpenAI(prompt: cleanPrompt, model: model ?? "gpt-4o-mini")
+        case .byokAnthropic:
+            askAnthropic(prompt: cleanPrompt, model: model ?? "claude-3-5-sonnet-latest")
+        }
     }
 
     func askLocalOllama(prompt: String, model: String = "llama3.2", endpoint: URL = URL(string: "http://127.0.0.1:11434/api/generate")!) {
@@ -338,6 +860,257 @@ final class CommandBarQuickAIService: ObservableObject, @unchecked Sendable {
                 if Task.isCancelled { return }
                 await MainActor.run {
                     box.value?.finishWithError(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    func askOpenAI(
+        prompt: String,
+        model: String = "gpt-4o-mini",
+        endpoint: URL = URL(string: "https://api.openai.com/v1/chat/completions")!
+    ) {
+        let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPrompt.isEmpty else { return }
+        beginThinking(prompt: cleanPrompt)
+        guard let key = apiKey(for: .byokOpenAI), !key.isEmpty else {
+            missingKeyProvider = .byokOpenAI
+            finishWithError("OpenAI API key is not configured in Keychain.")
+            return
+        }
+
+        let box = WeakBox(self)
+        streamTask = Task {
+            do {
+                var request = URLRequest(url: endpoint)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+                request.timeoutInterval = 60
+                let body: [String: Any] = [
+                    "model": model,
+                    "stream": true,
+                    "messages": [["role": "user", "content": cleanPrompt]],
+                ]
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    var errorDetail: String?
+                    for try await line in bytes.lines.prefix(8) {
+                        if let parsed = Self.parseSSEErrorMessage(from: line) {
+                            errorDetail = parsed
+                            break
+                        }
+                    }
+                    let message = errorDetail ?? "HTTP \(http.statusCode)"
+                    await MainActor.run { box.value?.finishWithError(message) }
+                    return
+                }
+                for try await line in bytes.lines {
+                    if Task.isCancelled { return }
+                    if let err = Self.parseSSEErrorMessage(from: line) {
+                        await MainActor.run { box.value?.finishWithError(err) }
+                        return
+                    }
+                    let parsed = Self.parseOpenAISSELine(line)
+                    await MainActor.run {
+                        if let token = parsed.token { box.value?.appendStreamChunk(token) }
+                        if parsed.done { box.value?.finishSuccess() }
+                    }
+                }
+                await MainActor.run {
+                    if box.value?.isStreaming == true { box.value?.finishSuccess() }
+                }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run { box.value?.finishWithError(error.localizedDescription) }
+            }
+        }
+    }
+
+    func askAnthropic(
+        prompt: String,
+        model: String = "claude-3-5-sonnet-latest",
+        endpoint: URL = URL(string: "https://api.anthropic.com/v1/messages")!
+    ) {
+        let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPrompt.isEmpty else { return }
+        beginThinking(prompt: cleanPrompt)
+        guard let key = apiKey(for: .byokAnthropic), !key.isEmpty else {
+            missingKeyProvider = .byokAnthropic
+            finishWithError("Anthropic API key is not configured in Keychain.")
+            return
+        }
+
+        let box = WeakBox(self)
+        streamTask = Task {
+            do {
+                var request = URLRequest(url: endpoint)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(key, forHTTPHeaderField: "x-api-key")
+                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                request.timeoutInterval = 60
+                let body: [String: Any] = [
+                    "model": model,
+                    "max_tokens": 2048,
+                    "stream": true,
+                    "messages": [["role": "user", "content": cleanPrompt]],
+                ]
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    var errorDetail: String?
+                    for try await line in bytes.lines.prefix(8) {
+                        if let parsed = Self.parseSSEErrorMessage(from: line) {
+                            errorDetail = parsed
+                            break
+                        }
+                    }
+                    let message = errorDetail ?? "HTTP \(http.statusCode)"
+                    await MainActor.run { box.value?.finishWithError(message) }
+                    return
+                }
+                for try await line in bytes.lines {
+                    if Task.isCancelled { return }
+                    if let err = Self.parseSSEErrorMessage(from: line) {
+                        await MainActor.run { box.value?.finishWithError(err) }
+                        return
+                    }
+                    let parsed = Self.parseAnthropicSSELine(line)
+                    await MainActor.run {
+                        if let token = parsed.token { box.value?.appendStreamChunk(token) }
+                        if parsed.done { box.value?.finishSuccess() }
+                    }
+                }
+                await MainActor.run {
+                    if box.value?.isStreaming == true { box.value?.finishSuccess() }
+                }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run { box.value?.finishWithError(error.localizedDescription) }
+            }
+        }
+    }
+
+    func askCLI(
+        provider: QuickAIProvider,
+        prompt: String,
+        searchPaths: [String] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+    ) {
+        let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPrompt.isEmpty else { return }
+
+        let binaryName: String
+        let args: [String]
+        switch provider {
+        case .claudeCLI:
+            binaryName = "claude"
+            args = ["-p", cleanPrompt]
+        case .codexCLI:
+            binaryName = "codex"
+            args = ["exec", cleanPrompt]
+        default:
+            beginThinking(prompt: cleanPrompt)
+            finishWithError("\(provider.displayName) is not a CLI provider.")
+            return
+        }
+
+        beginThinking(prompt: cleanPrompt)
+
+        let fileManager = FileManager.default
+        guard let executablePath = searchPaths
+            .map({ "\($0)/\(binaryName)" })
+            .first(where: { fileManager.isExecutableFile(atPath: $0) }) else {
+            finishWithError("\(binaryName) CLI was not found in \(searchPaths.joined(separator: ", ")).")
+            return
+        }
+
+        let box = WeakBox(self)
+        let outBuffer = StreamBuffer()
+        let errBuffer = StreamBuffer()
+
+        streamTask = Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executablePath)
+            process.arguments = args
+            var env = ProcessInfo.processInfo.environment
+            let existingPath = env["PATH"] ?? ""
+            let combinedPaths = (searchPaths + existingPath.split(separator: ":").map(String.init))
+            var seenPath = Set<String>()
+            env["PATH"] = combinedPaths.filter { seenPath.insert($0).inserted }.joined(separator: ":")
+            process.environment = env
+            process.standardInput = FileHandle.nullDevice
+
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
+
+            stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                    return
+                }
+                let text = outBuffer.appendAndDecodeUTF8(data)
+                if !text.isEmpty {
+                    DispatchQueue.main.async {
+                        guard let service = box.value, service.isStreaming else { return }
+                        service.appendStreamChunk(text)
+                    }
+                }
+            }
+
+            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                    return
+                }
+                _ = errBuffer.appendAndDecodeUTF8(data)
+            }
+
+            process.terminationHandler = { proc in
+                stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                stderrPipe.fileHandleForReading.readabilityHandler = nil
+                let trailingOut = outBuffer.drainLossy()
+                let errText = errBuffer.drainLossy().trimmingCharacters(in: .whitespacesAndNewlines)
+
+                DispatchQueue.main.async {
+                    guard let service = box.value else { return }
+                    service.processLock.withLock {
+                        if service.activeProcess === proc { service.activeProcess = nil }
+                    }
+                    guard service.isStreaming else { return }
+                    if !trailingOut.isEmpty {
+                        service.appendStreamChunk(trailingOut)
+                    }
+                    if proc.terminationStatus == 0 {
+                        service.finishSuccess()
+                    } else {
+                        let detail = !errText.isEmpty
+                            ? errText
+                            : "\(binaryName) exited with status \(proc.terminationStatus)."
+                        service.finishWithError(detail)
+                    }
+                }
+            }
+
+            do {
+                box.value?.processLock.withLock {
+                    box.value?.activeProcess = process
+                }
+                try process.run()
+            } catch {
+                stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                stderrPipe.fileHandleForReading.readabilityHandler = nil
+                box.value?.processLock.withLock {
+                    if box.value?.activeProcess === process { box.value?.activeProcess = nil }
+                }
+                await MainActor.run {
+                    guard let service = box.value, service.isStreaming else { return }
+                    service.finishWithError(error.localizedDescription)
                 }
             }
         }

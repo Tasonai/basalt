@@ -8,6 +8,7 @@ struct CommandBarSettings: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var service = CommandBarService.shared
     @ObservedObject private var secureInput = SecureInputMonitor.shared
+    @ObservedObject private var quickAI = CommandBarQuickAIService.shared
     @AppStorage(DefaultsKey.commandBarShortcutEnabled) private var shortcutEnabled = false
     @AppStorage(DefaultsKey.commandBarCompactMode) private var compactMode = false
     @AppStorage(DefaultsKey.commandBarEmojiSkinTone) private var emojiSkinTone = ""
@@ -25,12 +26,20 @@ struct CommandBarSettings: View {
     @State private var showsFileOptions = false
     @State private var showsLayoutOptions = false
     @State private var showsAppShortcuts = false
+    @State private var showsQuickAIOptions = true
+    @State private var openAIKeyDraft = ""
+    @State private var anthropicKeyDraft = ""
+    @State private var hasOpenAIKey = false
+    @State private var hasAnthropicKey = false
+    @State private var detectedCLITools: [QuickAIProvider] = []
 
     private var text: CommandBarFeatureStrings { FeatureStrings.commandBar(l10n.language) }
     /// The snippet library already says "save", "delete" and "name" in every
     /// language; saying them twice would only mean two things to keep.
     private var common: SnippetFeatureStrings { FeatureStrings.snippets(l10n.language) }
     private var editLabel: String { FeatureStrings.screenshot(l10n.language).editButton }
+    private var wave3Strings: OverhaulWave3Strings { OverhaulStrings.wave3(l10n.language) }
+    private var v2Strings: OverhaulV2Strings { OverhaulV2Strings.localized(l10n.language) }
 
     /// The examples do double duty: they say what the bar can do, which no
     /// list of toggles ever manages to.
@@ -159,6 +168,8 @@ struct CommandBarSettings: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            quickAICard
 
             SettingsCard(title: text.sourcesTitle) {
                 ForEach(CommandBarSource.allCases) { source in
@@ -384,6 +395,9 @@ struct CommandBarSettings: View {
             }
         }
         .observesSecureInput()
+        .onAppear {
+            refreshQuickAIState()
+        }
         .sheet(isPresented: $showsAppShortcuts) {
             CommandBarAppShortcutsView()
         }
@@ -562,6 +576,140 @@ struct CommandBarSettings: View {
         keys.remove(key)
         hiddenRaw = CommandBarPreferences.encodeHidden(keys)
         CommandBarService.shared.syncWithPreferences()
+    }
+
+    // MARK: - Quick AI (Command Bar 2.0)
+
+    private var quickAICard: some View {
+        SettingsDisclosureCard(
+            title: wave3Strings.quickAITitle,
+            symbol: "sparkles",
+            badge: quickAI.selectedProvider.displayName,
+            isExpanded: $showsQuickAIOptions
+        ) {
+            SettingsMenuRow(
+                symbol: "cpu",
+                title: v2Strings.quickAIProviderLabel,
+                selection: $quickAI.selectedProvider
+            ) {
+                ForEach(QuickAIProvider.allCases) { provider in
+                    Text(provider.displayName).tag(provider)
+                }
+            }
+            Text(v2Strings.quickAIContextHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, settingsRowTextInset)
+
+            Divider()
+
+            SettingsRow(
+                symbol: "terminal",
+                title: "CLI Tools",
+                caption: "Auto-detected in /opt/homebrew/bin, /usr/local/bin, /usr/bin"
+            ) {
+                HStack(spacing: 6) {
+                    cliAvailabilityPill(
+                        name: "claude",
+                        available: detectedCLITools.contains(.claudeCLI)
+                    )
+                    cliAvailabilityPill(
+                        name: "codex",
+                        available: detectedCLITools.contains(.codexCLI)
+                    )
+                }
+            }
+
+            Divider()
+
+            keychainAPIKeyRow(
+                provider: .byokOpenAI,
+                title: "OpenAI API Key",
+                placeholder: "sk-…",
+                draft: $openAIKeyDraft,
+                hasKey: hasOpenAIKey
+            )
+
+            keychainAPIKeyRow(
+                provider: .byokAnthropic,
+                title: "Anthropic API Key",
+                placeholder: "sk-ant-…",
+                draft: $anthropicKeyDraft,
+                hasKey: hasAnthropicKey
+            )
+
+            Text(v2Strings.quickAIKeychainLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, settingsRowTextInset)
+        }
+    }
+
+    private func cliAvailabilityPill(name: String, available: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: available ? "checkmark.circle.fill" : "circle.dashed")
+                .font(.system(size: 10, weight: .semibold))
+            Text(name)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+        }
+        .foregroundStyle(available ? Color.green : Color.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(available ? Color.green.opacity(0.14) : Color.primary.opacity(0.06))
+        )
+    }
+
+    private func keychainAPIKeyRow(
+        provider: QuickAIProvider,
+        title: String,
+        placeholder: String,
+        draft: Binding<String>,
+        hasKey: Bool
+    ) -> some View {
+        let trimmed = draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SettingsRow(
+            symbol: "key.fill",
+            title: title,
+            caption: hasKey ? "Stored in Keychain" : nil
+        ) {
+            HStack(spacing: 8) {
+                SecureField(
+                    hasKey ? "•••••••• (Keychain)" : placeholder,
+                    text: draft
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 170)
+                .onSubmit {
+                    saveAPIKey(draft.wrappedValue, for: provider, clearDraft: draft)
+                }
+                if !trimmed.isEmpty {
+                    VorssaintActionChip(title: common.saveButton, tone: .tools, prominent: true) {
+                        saveAPIKey(draft.wrappedValue, for: provider, clearDraft: draft)
+                    }
+                } else if hasKey {
+                    VorssaintActionChip(title: text.removeButton, destructive: true) {
+                        quickAI.removeAPIKey(for: provider)
+                        refreshQuickAIState()
+                    }
+                }
+            }
+        }
+    }
+
+    private func saveAPIKey(_ raw: String, for provider: QuickAIProvider, clearDraft: Binding<String>) {
+        guard quickAI.saveAPIKey(raw, for: provider) else { return }
+        clearDraft.wrappedValue = ""
+        refreshQuickAIState()
+    }
+
+    private func refreshQuickAIState() {
+        detectedCLITools = CommandBarQuickAIService.installedCLITools()
+        hasOpenAIKey = quickAI.apiKey(for: .byokOpenAI) != nil
+        hasAnthropicKey = quickAI.apiKey(for: .byokAnthropic) != nil
     }
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import AppKit
 import ImageIO
 import SwiftUI
 
@@ -16,9 +17,42 @@ struct ClipboardEntryPreviewSidebar: View {
     @State private var draft = ""
     @State private var editingEntryID: UUID?
     /// Laid out off the main thread for the entry it was made from.
-    @State private var prettyJSON: (entry: ClipboardHistoryEntry, text: String)?
+    @State private var renderedText: RenderedTextPreview?
+    @State private var linkMetadata: (entryID: UUID, url: URL, metadata: ClipboardLinkMetadata?)?
+    @State private var isLoadingLinkMetadata = false
+    @State private var appliedTransform: (entryID: UUID, kind: ClipboardTransformKind, output: String)?
     @FocusState private var editorFocused: Bool
     @State private var recognizingEntryID: UUID?
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
+    private struct RenderedTextPreview {
+        let entry: ClipboardHistoryEntry
+        let darkAppearance: Bool
+        let displayText: String
+        let language: ClipboardSyntaxHighlighter.Language
+        let highlighted: NSAttributedString?
+    }
+
+    private struct PreviewTaskKey: Equatable {
+        let entry: ClipboardHistoryEntry?
+        let isDark: Bool
+    }
+
+    private var v2Strings: OverhaulV2Strings {
+        OverhaulV2Strings.localized(l10n.language)
+    }
+
+    private var activeLanguageBadge: ClipboardSyntaxHighlighter.Language? {
+        guard let entry, entry.kind == .text,
+              let renderedText,
+              renderedText.entry.id == entry.id,
+              renderedText.entry.text == entry.text,
+              renderedText.language != .plain else {
+            return nil
+        }
+        return renderedText.language
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -28,7 +62,19 @@ struct ClipboardEntryPreviewSidebar: View {
                 if editingEntryID == entry.id {
                     textEditor(entry)
                 } else if entry.kind == .text {
-                    textPreview(entry)
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let linkURL = ClipboardLinkMetadataFetcher.eligibleURL(from: entry.text) {
+                            linkMetadataCard(url: linkURL, entry: entry)
+                            Divider()
+                        }
+                        transformActionBar(entry)
+                        Divider()
+                        if let applied = appliedTransform, applied.entryID == entry.id {
+                            transformFeedbackStrip(entry: entry, kind: applied.kind, output: applied.output)
+                            Divider()
+                        }
+                        textPreview(entry)
+                    }
                 } else {
                     contentScrollView(entry)
                 }
@@ -42,14 +88,63 @@ struct ClipboardEntryPreviewSidebar: View {
             if editingEntryID != nil, editingEntryID != newID {
                 cancelEditing()
             }
+            if appliedTransform?.entryID != newID {
+                appliedTransform = nil
+            }
         }
         .onDisappear { cancelEditing() }
-        .task(id: entry) {
-            guard let entry, entry.kind == .text else { return }
-            let text = entry.text
-            let pretty = await Task.detached(priority: .userInitiated) { ClipboardJSONFormat.pretty(text) }.value
+        .task(id: PreviewTaskKey(entry: entry, isDark: colorScheme == .dark)) {
+            guard let entry, entry.kind == .text else {
+                renderedText = nil
+                return
+            }
+            let rawText = entry.text
+            let dark = colorScheme == .dark
+            let tokenized = await Task.detached(priority: .userInitiated) {
+                let pretty = ClipboardJSONFormat.pretty(rawText)
+                let displayText = pretty ?? rawText
+                let language: ClipboardSyntaxHighlighter.Language = pretty != nil
+                    ? .json
+                    : ClipboardSyntaxHighlighter.detectLanguage(for: displayText)
+                let tokens = language != .plain && displayText.count <= ClipboardSyntaxHighlighter.maxHighlightCharacters
+                    ? ClipboardSyntaxHighlighter.tokenize(displayText, language: language).tokens
+                    : []
+                return (displayText: displayText, language: language, tokens: tokens)
+            }.value
             guard !Task.isCancelled else { return }
-            prettyJSON = pretty.map { (entry, $0) }
+            let highlighted: NSAttributedString? = tokenized.tokens.isEmpty
+                ? nil
+                : ClipboardSyntaxHighlighter.nsAttributedString(
+                    tokenized.displayText,
+                    tokens: tokenized.tokens,
+                    darkAppearance: dark,
+                    font: .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+                )
+            renderedText = RenderedTextPreview(entry: entry,
+                                               darkAppearance: dark,
+                                               displayText: tokenized.displayText,
+                                               language: tokenized.language,
+                                               highlighted: highlighted)
+        }
+        .task(id: entry?.id) {
+            guard let entry,
+                  entry.kind == .text,
+                  let url = ClipboardLinkMetadataFetcher.eligibleURL(from: entry.text) else {
+                linkMetadata = nil
+                isLoadingLinkMetadata = false
+                return
+            }
+            if let cached = ClipboardLinkMetadataFetcher.sharedCache.metadata(for: url) {
+                linkMetadata = (entry.id, url, cached)
+                isLoadingLinkMetadata = false
+                return
+            }
+            linkMetadata = (entry.id, url, nil)
+            isLoadingLinkMetadata = true
+            let fetched = await ClipboardLinkMetadataFetcher.fetchMetadata(for: url)
+            guard !Task.isCancelled else { return }
+            linkMetadata = (entry.id, url, fetched)
+            isLoadingLinkMetadata = false
         }
     }
 
@@ -58,6 +153,14 @@ struct ClipboardEntryPreviewSidebar: View {
             Label(text.previewLabel, systemImage: "doc.text.magnifyingglass")
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(.secondary)
+            if let lang = activeLanguageBadge {
+                Text(lang.badgeTitle)
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+            }
             Spacer()
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -73,16 +176,170 @@ struct ClipboardEntryPreviewSidebar: View {
         .padding(.vertical, 10)
     }
 
-    /// One text view for every text entry: JSON laid out after the entry
-    /// appears swaps its text and font in place instead of a new view. The
-    /// layout depends only on the text, so a pin or a refreshed copy of the
-    /// same entry keeps it.
-    private func textPreview(_ entry: ClipboardHistoryEntry) -> ClipboardTextPreview {
-        guard let pretty = prettyJSON, pretty.entry.id == entry.id, pretty.entry.text == entry.text else {
-            return ClipboardTextPreview(text: entry.text)
+    /// One text view for every text entry: syntax-colored code/JSON uses a
+    /// read-only rich `NSTextView`, while plain or oversized text keeps
+    /// `ClipboardTextPreview`.
+    @ViewBuilder
+    private func textPreview(_ entry: ClipboardHistoryEntry) -> some View {
+        if let renderedText,
+           renderedText.entry.id == entry.id,
+           renderedText.entry.text == entry.text,
+           renderedText.darkAppearance == (colorScheme == .dark) {
+            if let highlighted = renderedText.highlighted {
+                ClipboardSyntaxTextPreview(attributedText: highlighted)
+            } else {
+                ClipboardTextPreview(
+                    text: renderedText.displayText,
+                    font: renderedText.language == .plain
+                        ? .systemFont(ofSize: 12)
+                        : .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+                )
+            }
+        } else {
+            ClipboardTextPreview(text: entry.text)
         }
-        return ClipboardTextPreview(text: pretty.text,
-                                    font: .monospacedSystemFont(ofSize: 11.5, weight: .regular))
+    }
+
+    private static let transformBarKinds: [ClipboardTransformKind] = [
+        .jsonPretty, .jsonMinify, .jwtDecode,
+        .base64Encode, .base64Decode,
+        .urlEncode, .urlDecode,
+        .sha256, .colorOKLCH,
+    ]
+
+    private func transformActionBar(_ entry: ClipboardHistoryEntry) -> some View {
+        let tint = SemanticCategoryTone.clipboardFiles.color(
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Self.transformBarKinds) { kind in
+                    let candidate = ClipboardTransformEngine.apply(kind, to: entry.text)
+                    let isApplicable = candidate != nil
+                    let isLastApplied = appliedTransform?.entryID == entry.id && appliedTransform?.kind == kind
+                    Button {
+                        guard let result = candidate else { return }
+                        applyTransform(kind, output: result, to: entry)
+                    } label: {
+                        Text(kind.compactLabel)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(isLastApplied ? Color.white : (isApplicable ? Color.primary : Color.secondary.opacity(0.6)))
+                            .padding(.horizontal, 8)
+                            .frame(height: 22)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(isLastApplied
+                                          ? tint
+                                          : Color.primary.opacity(isApplicable ? 0.07 : 0.03))
+                            )
+                    }
+                    .buttonStyle(VorssaintScalePressButtonStyle())
+                    .disabled(!isApplicable)
+                    .help("\(kind.displayTitle) (⌥-click to replace entry)")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+    }
+
+    private func transformFeedbackStrip(entry: ClipboardHistoryEntry,
+                                        kind: ClipboardTransformKind,
+                                        output: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+            Text("\(kind.displayTitle) · \(text.copied)")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer()
+            if output != entry.text, ClipboardHistoryEditing.storableText(output) != nil {
+                Button("Replace") {
+                    VorssaintHaptics.alignment()
+                    _ = ClipboardHistoryService.shared.updateText(entry, to: output)
+                    appliedTransform = nil
+                }
+                .controlSize(.mini)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.08))
+    }
+
+    private func applyTransform(_ kind: ClipboardTransformKind,
+                                output: String,
+                                to entry: ClipboardHistoryEntry) {
+        VorssaintHaptics.alignment()
+        if NSEvent.modifierFlags.contains(.option) {
+            _ = ClipboardHistoryService.shared.updateText(entry, to: output)
+        }
+        ClipboardHistoryService.shared.copyTransformedText(output)
+        appliedTransform = (entry.id, kind, output)
+    }
+
+    private func linkMetadataCard(url: URL, entry: ClipboardHistoryEntry) -> some View {
+        let meta = linkMetadata?.entryID == entry.id ? linkMetadata?.metadata : nil
+        let domain = meta?.domain ?? url.host ?? url.absoluteString
+        let siteLabel = meta?.siteName ?? domain
+        let tint = SemanticCategoryTone.clipboardFiles.color(
+            scheme: colorScheme,
+            highContrast: colorSchemeContrast == .increased
+        )
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "globe")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(siteLabel)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(tint.opacity(0.14), in: Capsule())
+                Spacer()
+                if isLoadingLinkMetadata && meta == nil {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20, height: 20)
+                            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .help(url.absoluteString)
+                }
+            }
+            if let title = meta?.title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let description = meta?.description, !description.isEmpty {
+                Text(description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(domain)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(colorScheme == .dark ? 0.05 : 0.03))
     }
 
     private func contentScrollView(_ entry: ClipboardHistoryEntry) -> some View {
@@ -144,8 +401,35 @@ struct ClipboardEntryPreviewSidebar: View {
             Text("\(text.imageEntryLabel) · \(entry.imageDimensionsLabel)")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
+            if let ocr = entry.ocrText, !ocr.isEmpty {
+                ocrIndexedSection(ocr)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func ocrIndexedSection(_ ocr: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: "text.viewfinder")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text(v2Strings.clipboardOCRIndexedBadge)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            Text(ocr)
+                .font(.system(size: 11))
+                .textSelection(.enabled)
+                .lineSpacing(2)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                )
+        }
+        .padding(.top, 4)
     }
 
     @ViewBuilder
@@ -379,5 +663,36 @@ struct ClipboardEntryPreviewSidebar: View {
     private func saveEditing(_ entry: ClipboardHistoryEntry) {
         guard ClipboardHistoryService.shared.updateText(entry, to: draft) else { return }
         cancelEditing()
+    }
+}
+
+/// Read-only selectable TextKit view for syntax-highlighted code and JSON previews.
+private struct ClipboardSyntaxTextPreview: NSViewRepresentable {
+    let attributedText: NSAttributedString
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        guard let textView = scroll.documentView as? NSTextView else { return scroll }
+        textView.drawsBackground = false
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.textContainerInset = NSSize(width: 8, height: 12)
+        textView.textContainer?.lineFragmentPadding = 4
+        textView.textContainer?.widthTracksTextView = true
+        textView.textStorage?.setAttributedString(attributedText)
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let textView = scroll.documentView as? NSTextView else { return }
+        if textView.attributedString() != attributedText {
+            textView.textStorage?.setAttributedString(attributedText)
+            textView.scroll(.zero)
+        }
     }
 }

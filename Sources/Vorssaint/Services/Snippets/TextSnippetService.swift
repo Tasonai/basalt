@@ -31,6 +31,7 @@ final class TextSnippetService {
     private var buffer = ""
     private var libraryVisible = false
     private var commandBarVisible = false
+    private var fillInVisible = false
     private var ownKeyWindowActive = false
     /// Registered once when the preferences change, so no expansion pays
     /// for the file read. nil means no sound plays.
@@ -38,6 +39,7 @@ final class TextSnippetService {
     /// Split by expansion mode at load time; the tap callback only scans.
     private var immediateSnippets: [TextSnippet] = []
     private var delimiterSnippets: [TextSnippet] = []
+    private var snippetsByTrigger: [String: String] = [:]
 
     private init() {
         SessionActivity.shared.onChange { [weak self] _ in self?.syncWithPreferences() }
@@ -128,9 +130,14 @@ final class TextSnippetService {
     private func reloadSnippets() {
         let all = TextSnippetSupport.decode(
             UserDefaults.standard.data(forKey: DefaultsKey.textSnippets))
+        var byTrigger: [String: String] = [:]
+        for snippet in all where snippet.enabled && !snippet.trigger.isEmpty {
+            byTrigger[snippet.trigger] = snippet.replacement
+        }
         inputLock.withLock {
             immediateSnippets = all.filter { $0.enabled && $0.expansion == .immediate }
             delimiterSnippets = all.filter { $0.enabled && $0.expansion == .afterDelimiter }
+            snippetsByTrigger = byTrigger
         }
     }
 
@@ -321,7 +328,7 @@ final class TextSnippetService {
         }
         // Visibility is mirrored behind the same lock as the buffer, so this
         // callback never has to ask AppKit or wait for the main thread.
-        guard !inputLock.withLock({ libraryVisible || commandBarVisible }) else {
+        guard !inputLock.withLock({ libraryVisible || commandBarVisible || fillInVisible }) else {
             resetBuffer()
             return Unmanaged.passUnretained(event)
         }
@@ -427,61 +434,303 @@ final class TextSnippetService {
                 event?.post(tap: .cghidEventTap)
             }
         }
-        let needsClip = TextSnippetSupport.needsClipboard(snippet.replacement)
+        let lookupMap = inputLock.withLock { snippetsByTrigger }
+        let snippetLookup: (String) -> String? = { trigger in lookupMap[trigger] }
+        var visited = Set<String>()
+        let nestedTemplate = TextSnippetProEngine.resolveNestedSnippets(
+            snippet.replacement,
+            lookup: snippetLookup,
+            visited: &visited,
+            depth: 0
+        )
+        let argFields = TextSnippetProEngine.extractArgumentSpecs(from: nestedTemplate)
+        let needsClip = TextSnippetSupport.needsClipboard(nestedTemplate)
         let remoteType = NSPasteboard.PasteboardType("com.apple.is-remote-clipboard")
+
+        func deliver(_ result: TextSnippetExpansionResult) {
+            if let attributed = result.markdownRTFAttributed {
+                let posted = Self.postRichExpansion(
+                    deleteCount: deleteCount,
+                    typedTrigger: typedTrigger,
+                    attributed: attributed,
+                    trailingKeyCode: trailingKeyCode,
+                    trailingFlags: trailingFlags,
+                    trailingText: trailingText,
+                    failureKeyCode: failureKeyCode,
+                    failureFlags: failureFlags,
+                    cursorMoveBackSteps: result.cursorMoveBackCharacters,
+                    didExpand: didExpand
+                )
+                if !posted { replaySwallowedKey() }
+                return
+            }
+            let posted = Self.postExpansion(
+                deleteCount: deleteCount,
+                typedTrigger: typedTrigger,
+                text: result.text,
+                trailingKeyCode: trailingKeyCode,
+                trailingFlags: trailingFlags,
+                trailingText: trailingText,
+                failureKeyCode: failureKeyCode,
+                failureFlags: failureFlags,
+                cursorMoveBackSteps: result.cursorMoveBackCharacters,
+                didExpand: didExpand
+            )
+            if !posted { replaySwallowedKey() }
+        }
+
+        if !argFields.isEmpty {
+            inputLock.withLock {
+                fillInVisible = true
+                buffer = ""
+            }
+            let promptTitle = snippet.name.isEmpty ? snippet.trigger : snippet.name
+            let showPopover: (String?) -> Void = { [weak self] clipboard in
+                DispatchQueue.main.async {
+                    SnippetFillInPopoverController.shared.show(
+                        snippetTitle: promptTitle,
+                        fields: argFields
+                    ) { values in
+                        self?.inputLock.withLock { self?.fillInVisible = false }
+                        guard let values else {
+                            replaySwallowedKey()
+                            return
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                            let expanded = TextSnippetProEngine.expandAdvanced(
+                                nestedTemplate,
+                                date: Date(),
+                                clipboard: clipboard,
+                                arguments: values,
+                                snippetLookup: snippetLookup
+                            )
+                            deliver(expanded)
+                        }
+                    }
+                }
+            }
+            if needsClip {
+                GeneralPasteboardAccess.shared.async({
+                    NSPasteboard.general.string(forType: .string)
+                }, then: showPopover)
+            } else {
+                showPopover(nil)
+            }
+            return true
+        }
+
         if !Thread.isMainThread, needsClip, (NSPasteboard.general.types ?? []).contains(remoteType) {
             // Remote Universal Clipboard payloads can stall for seconds over
             // Continuity; resolve on the pasteboard lane off the tap thread.
             GeneralPasteboardAccess.shared.async({
                 NSPasteboard.general.string(forType: .string)
             }, then: { clipboard in
-                let text = TextSnippetSupport.expand(snippet.replacement, date: Date(), clipboard: clipboard)
-                let posted = Self.postExpansion(deleteCount: deleteCount,
-                                                typedTrigger: typedTrigger,
-                                                text: text,
-                                                trailingKeyCode: trailingKeyCode,
-                                                trailingFlags: trailingFlags,
-                                                trailingText: trailingText,
-                                                failureKeyCode: failureKeyCode,
-                                                failureFlags: failureFlags,
-                                                didExpand: didExpand)
-                if !posted { replaySwallowedKey() }
+                let expanded = TextSnippetProEngine.expandAdvanced(
+                    nestedTemplate,
+                    date: Date(),
+                    clipboard: clipboard,
+                    snippetLookup: snippetLookup
+                )
+                deliver(expanded)
             })
             return true
         }
 
         let clipboard = needsClip ? NSPasteboard.general.string(forType: .string) : nil
-        let text = TextSnippetSupport.expand(
-            snippet.replacement,
+        let expanded = TextSnippetProEngine.expandAdvanced(
+            nestedTemplate,
             date: Date(),
-            clipboard: clipboard
+            clipboard: clipboard,
+            snippetLookup: snippetLookup
         )
-        if !Thread.isMainThread, TextSnippetSupport.requiresPaste(text) {
+        let needsMainThreadPaste = expanded.markdownRTFAttributed != nil
+            || TextSnippetSupport.requiresPaste(expanded.text)
+        if !Thread.isMainThread, needsMainThreadPaste {
             // TransientPaste runs on main and dispatches to the pasteboard lane;
             // queue asynchronously so the event tap never blocks on main.sync.
             DispatchQueue.main.async {
-                let posted = Self.postExpansion(deleteCount: deleteCount,
-                                                typedTrigger: typedTrigger,
-                                                text: text,
-                                                trailingKeyCode: trailingKeyCode,
-                                                trailingFlags: trailingFlags,
-                                                trailingText: trailingText,
-                                                failureKeyCode: failureKeyCode,
-                                                failureFlags: failureFlags,
-                                                didExpand: didExpand)
-                if !posted { replaySwallowedKey() }
+                deliver(expanded)
             }
             return true
         }
+        if let attributed = expanded.markdownRTFAttributed {
+            return Self.postRichExpansion(
+                deleteCount: deleteCount,
+                typedTrigger: typedTrigger,
+                attributed: attributed,
+                trailingKeyCode: trailingKeyCode,
+                trailingFlags: trailingFlags,
+                trailingText: trailingText,
+                failureKeyCode: failureKeyCode,
+                failureFlags: failureFlags,
+                cursorMoveBackSteps: expanded.cursorMoveBackCharacters,
+                didExpand: didExpand
+            )
+        }
         return Self.postExpansion(deleteCount: deleteCount,
                                   typedTrigger: typedTrigger,
-                                  text: text,
+                                  text: expanded.text,
                                   trailingKeyCode: trailingKeyCode,
                                   trailingFlags: trailingFlags,
                                   trailingText: trailingText,
                                   failureKeyCode: failureKeyCode,
                                   failureFlags: failureFlags,
+                                  cursorMoveBackSteps: expanded.cursorMoveBackCharacters,
                                   didExpand: didExpand)
+    }
+
+    private static func postRichExpansion(deleteCount: Int,
+                                          typedTrigger: String,
+                                          attributed: NSAttributedString,
+                                          trailingKeyCode: CGKeyCode?,
+                                          trailingFlags: CGEventFlags,
+                                          trailingText: String,
+                                          failureKeyCode: CGKeyCode?,
+                                          failureFlags: CGEventFlags,
+                                          cursorMoveBackSteps: Int,
+                                          didExpand: (() -> Void)?) -> Bool {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async {
+                _ = postRichExpansion(deleteCount: deleteCount,
+                                      typedTrigger: typedTrigger,
+                                      attributed: attributed,
+                                      trailingKeyCode: trailingKeyCode,
+                                      trailingFlags: trailingFlags,
+                                      trailingText: trailingText,
+                                      failureKeyCode: failureKeyCode,
+                                      failureFlags: failureFlags,
+                                      cursorMoveBackSteps: cursorMoveBackSteps,
+                                      didExpand: didExpand)
+            }
+            return true
+        }
+
+        let fullAttributed = NSMutableAttributedString(attributedString: attributed)
+        if !trailingText.isEmpty {
+            let normalizedTrailing = trailingText.replacingOccurrences(of: "\r", with: "\n")
+            fullAttributed.append(NSAttributedString(string: normalizedTrailing,
+                                                     attributes: [.font: NSFont.systemFont(ofSize: 13)]))
+        }
+        let plainPayload = fullAttributed.string
+        guard let rtfData = try? fullAttributed.data(
+            from: NSRange(location: 0, length: fullAttributed.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        ) else {
+            return postExpansion(deleteCount: deleteCount,
+                                 typedTrigger: typedTrigger,
+                                 text: attributed.string,
+                                 trailingKeyCode: trailingKeyCode,
+                                 trailingFlags: trailingFlags,
+                                 trailingText: trailingText,
+                                 failureKeyCode: failureKeyCode,
+                                 failureFlags: failureFlags,
+                                 cursorMoveBackSteps: cursorMoveBackSteps,
+                                 didExpand: didExpand)
+        }
+
+        let trailingMoveBack = trailingText.isEmpty ? (trailingKeyCode == nil ? 0 : 1) : trailingText.count
+        let totalCursorRewind = cursorMoveBackSteps > 0 ? cursorMoveBackSteps + trailingMoveBack : 0
+
+        let source = CGEventSource(stateID: .hidSystemState)
+        source?.userData = syntheticMarker
+        func postSyntheticKey(_ keyCode: CGKeyCode, flags: CGEventFlags = []) {
+            for down in [true, false] {
+                let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down)
+                event?.flags = flags
+                event?.post(tap: .cghidEventTap)
+            }
+        }
+        func postTriggerDeletes() {
+            guard deleteCount > 0 else { return }
+            let app = ownWindowIsKey ? nil : NSWorkspace.shared.frontmostApplication
+            let selection = app.flatMap {
+                SelectedTextReader.focusedTextSelection(processID: $0.processIdentifier, timeout: 0.12)
+            }
+            let count = TextSnippetSupport.triggerDeleteCount(
+                deleteCount, typed: typedTrigger,
+                focusedSelection: selection.map { (range: $0.range, textLength: $0.textLength) }
+            ) { selection?.text(in: $0) }
+            for _ in 0..<count { postSyntheticKey(CGKeyCode(kVK_Delete)) }
+        }
+        func snapshotPasteboard(_ pasteboard: NSPasteboard) -> [NSPasteboardItem]? {
+            guard let items = pasteboard.pasteboardItems else {
+                return pasteboard.types?.isEmpty == false ? nil : []
+            }
+            var copies: [NSPasteboardItem] = []
+            for item in items {
+                let copy = NSPasteboardItem()
+                for type in item.types {
+                    guard let data = item.data(forType: type) else { return nil }
+                    copy.setData(data, forType: type)
+                }
+                copies.append(copy)
+            }
+            return copies
+        }
+        func restoreSnapshot(_ snapshot: [NSPasteboardItem], expectedChangeCount: Int) {
+            GeneralPasteboardAccess.shared.async {
+                let pasteboard = NSPasteboard.general
+                guard pasteboard.changeCount == expectedChangeCount else { return }
+                pasteboard.clearContents()
+                if !snapshot.isEmpty { pasteboard.writeObjects(snapshot) }
+                let restoredCount = pasteboard.changeCount
+                DispatchQueue.main.async {
+                    ClipboardHistoryService.shared.ignoreNextChange(upTo: restoredCount)
+                }
+            }
+        }
+
+        GeneralPasteboardAccess.shared.async {
+            let pasteboard = NSPasteboard.general
+            let originalChangeCount = pasteboard.changeCount
+            guard let snapshot = snapshotPasteboard(pasteboard),
+                  pasteboard.changeCount == originalChangeCount else {
+                DispatchQueue.main.async {
+                    if let failureKeyCode { postSyntheticKey(failureKeyCode, flags: failureFlags) }
+                }
+                return
+            }
+
+            pasteboard.clearContents()
+            let rtfOK = pasteboard.setData(rtfData, forType: .rtf)
+            let stringOK = pasteboard.setString(plainPayload, forType: .string)
+            guard rtfOK, stringOK else {
+                if !snapshot.isEmpty { pasteboard.writeObjects(snapshot) }
+                DispatchQueue.main.async {
+                    if let failureKeyCode { postSyntheticKey(failureKeyCode, flags: failureFlags) }
+                }
+                return
+            }
+            let writtenChangeCount = pasteboard.changeCount
+            DispatchQueue.main.async {
+                ClipboardHistoryService.shared.ignoreNextChange(upTo: writtenChangeCount)
+                let started = TransientPaste.shared.pasteCurrentContents(
+                    willPostShortcut: {
+                        postTriggerDeletes()
+                    },
+                    didPostShortcut: {
+                        if totalCursorRewind > 0 {
+                            for _ in 0..<totalCursorRewind {
+                                postSyntheticKey(CGKeyCode(kVK_LeftArrow))
+                            }
+                        }
+                        didExpand?()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            restoreSnapshot(snapshot, expectedChangeCount: writtenChangeCount)
+                        }
+                    },
+                    didFail: {
+                        restoreSnapshot(snapshot, expectedChangeCount: writtenChangeCount)
+                        if let failureKeyCode { postSyntheticKey(failureKeyCode, flags: failureFlags) }
+                    }
+                )
+                if !started {
+                    restoreSnapshot(snapshot, expectedChangeCount: writtenChangeCount)
+                    if let failureKeyCode { postSyntheticKey(failureKeyCode, flags: failureFlags) }
+                }
+            }
+        }
+        return true
     }
 
     /// Hung off the replacement going out rather than off `postExpansion`'s
@@ -528,6 +777,7 @@ final class TextSnippetService {
                               trailingText: String = "",
                               failureKeyCode: CGKeyCode? = nil,
                               failureFlags: CGEventFlags = [],
+                              cursorMoveBackSteps: Int = 0,
                               didExpand: (() -> Void)? = nil) -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
         source?.userData = syntheticMarker
@@ -540,6 +790,14 @@ final class TextSnippetService {
                 let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down)
                 event?.flags = flags
                 post(event)
+            }
+        }
+        let trailingMoveBack = trailingText.isEmpty ? (trailingKeyCode == nil ? 0 : 1) : trailingText.count
+        let totalCursorRewind = cursorMoveBackSteps > 0 ? cursorMoveBackSteps + trailingMoveBack : 0
+        func postCursorRewind() {
+            guard totalCursorRewind > 0 else { return }
+            for _ in 0..<totalCursorRewind {
+                postKey(CGKeyCode(kVK_LeftArrow))
             }
         }
         // Asked right before the backspaces go out, so the count covers a
@@ -565,7 +823,10 @@ final class TextSnippetService {
             return TransientPaste.shared.paste(
                 payload,
                 willPostShortcut: { postDeletes() },
-                didPostShortcut: { didExpand?() },
+                didPostShortcut: {
+                    postCursorRewind()
+                    didExpand?()
+                },
                 didFail: {
                     if let failureKeyCode { postKey(failureKeyCode, flags: failureFlags) }
                 }
@@ -597,6 +858,7 @@ final class TextSnippetService {
         if let trailingKeyCode {
             postKey(trailingKeyCode, flags: trailingFlags)
         }
+        postCursorRewind()
         didExpand?()
         return true
     }

@@ -250,6 +250,7 @@ struct MetricsTests {
             ("wave2-v2-bento", { Wave2V2BentoAndMascotContract.run(suite) }),
             ("wave3-v2-audio-display", { Wave3V2AudioAndDisplayProContract.run(suite) }),
             ("wave4-v2-capture", { Wave4V2RecorderAndScreenshotProContract.run(suite) }),
+            ("wave5-v2-launcher-clipboard", { Wave5V2LauncherAndClipboardContract.run(suite) }),
         ]
         var selected = Set<String>()
         var listOnly = false

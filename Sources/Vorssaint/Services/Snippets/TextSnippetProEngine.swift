@@ -4,12 +4,38 @@
 import AppKit
 import Foundation
 
+/// Argument placeholder specification extracted from `{{arg:name=default}}` tokens.
+struct TextSnippetArgumentField: Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let defaultValue: String
+
+    init(id: String? = nil, name: String, defaultValue: String = "") {
+        self.id = id ?? name
+        self.name = name
+        self.defaultValue = defaultValue
+    }
+}
+
 /// Output of expanding a Snippets 2.0 template including final caret rewind offset and rich-text styling.
 struct TextSnippetExpansionResult: Equatable {
     let text: String
     let cursorMoveBackUTF16: Int
+    let cursorMoveBackCharacters: Int
     let containsMarkdownFormatting: Bool
     let markdownRTFAttributed: NSAttributedString?
+
+    init(text: String,
+         cursorMoveBackUTF16: Int,
+         cursorMoveBackCharacters: Int? = nil,
+         containsMarkdownFormatting: Bool,
+         markdownRTFAttributed: NSAttributedString?) {
+        self.text = text
+        self.cursorMoveBackUTF16 = cursorMoveBackUTF16
+        self.cursorMoveBackCharacters = cursorMoveBackCharacters ?? cursorMoveBackUTF16
+        self.containsMarkdownFormatting = containsMarkdownFormatting
+        self.markdownRTFAttributed = markdownRTFAttributed
+    }
 }
 
 /// Snippets 2.0 engine: `{{cursor}}` caret placement, `{{arg:name=default}}` form tokens,
@@ -17,6 +43,32 @@ struct TextSnippetExpansionResult: Equatable {
 enum TextSnippetProEngine {
     static let cursorMarker = "{{cursor}}"
     static let maxRecursionDepth = 8
+    private static let argumentPattern = #"\{\{arg:([A-Za-z0-9_.\-]+)(?:=([^{}]*))?\}\}"#
+
+    /// Extracts deduplicated `{{arg:name=default}}` fields in appearance order.
+    static func extractArgumentSpecs(from template: String) -> [TextSnippetArgumentField] {
+        guard template.contains("{{arg:"),
+              let regex = try? NSRegularExpression(pattern: argumentPattern) else {
+            return []
+        }
+        var seen = Set<String>()
+        var fields: [TextSnippetArgumentField] = []
+        let nsRange = NSRange(template.startIndex..<template.endIndex, in: template)
+        for match in regex.matches(in: template, range: nsRange) {
+            guard let nameRange = Range(match.range(at: 1), in: template) else { continue }
+            let name = String(template[nameRange])
+            guard seen.insert(name).inserted else { continue }
+            let defaultValue: String
+            if match.range(at: 2).location != NSNotFound,
+               let defRange = Range(match.range(at: 2), in: template) {
+                defaultValue = String(template[defRange])
+            } else {
+                defaultValue = ""
+            }
+            fields.append(TextSnippetArgumentField(id: name, name: name, defaultValue: defaultValue))
+        }
+        return fields
+    }
 
     static func expandAdvanced(
         _ template: String,
@@ -34,7 +86,7 @@ enum TextSnippetProEngine {
         expanded = resolveArguments(in: expanded, values: arguments)
         expanded = resolveDateArithmetic(in: expanded, baseDate: date, locale: locale)
 
-        // Replace basic {{date}} / {{time}} / {{datetime}} / {{date:...}} before clipboard injection.
+        // Replace basic {{date}} / {{time}} / {{datetime}} / {{date:...}} / {{date-tz(...):...}} before clipboard injection.
         expanded = expandBaseDateTokens(expanded, date: date, locale: locale)
 
         // Resolve {{cursor}} against final text, inserting clipboard after cursor computation if needed.
@@ -43,24 +95,36 @@ enum TextSnippetProEngine {
         let withClipboard = expanded.replacingOccurrences(of: "{{clipboard}}", with: clipboard ?? "")
 
         let finalText: String
+        let suffixText: String
         let moveBackUTF16: Int
         if let cursorRange = withClipboard.range(of: cursorMarker) {
             let prefix = String(withClipboard[..<cursorRange.lowerBound])
             let suffix = String(withClipboard[cursorRange.upperBound...])
                 .replacingOccurrences(of: cursorMarker, with: "")
             finalText = prefix + suffix
+            suffixText = suffix
             moveBackUTF16 = suffix.utf16.count
         } else {
             finalText = withClipboard
+            suffixText = ""
             moveBackUTF16 = 0
         }
 
         let hasMarkdown = containsMarkdownSyntax(finalText)
         let attributed = hasMarkdown ? renderMarkdownAttributedString(finalText) : nil
+        let moveBackCharacters: Int
+        if suffixText.isEmpty {
+            moveBackCharacters = 0
+        } else if hasMarkdown {
+            moveBackCharacters = renderMarkdownAttributedString(suffixText).string.count
+        } else {
+            moveBackCharacters = suffixText.count
+        }
 
         return TextSnippetExpansionResult(
             text: finalText,
             cursorMoveBackUTF16: moveBackUTF16,
+            cursorMoveBackCharacters: moveBackCharacters,
             containsMarkdownFormatting: hasMarkdown,
             markdownRTFAttributed: attributed
         )
@@ -198,6 +262,23 @@ enum TextSnippetProEngine {
             .replacingOccurrences(of: "{{date}}", with: dStr)
             .replacingOccurrences(of: "{{time}}", with: tStr)
             .replacingOccurrences(of: "{{datetime}}", with: "\(dStr) \(tStr)")
+
+        if let regex = try? NSRegularExpression(pattern: #"\{\{(datetime|date|time)-tz\(([^(){}]+)\):([^{}]+)\}\}"#) {
+            let nsRange = NSRange(out.startIndex..<out.endIndex, in: out)
+            for match in regex.matches(in: out, range: nsRange).reversed() {
+                guard match.numberOfRanges >= 4,
+                      let fullRange = Range(match.range(at: 0), in: out),
+                      let tzRange = Range(match.range(at: 2), in: out),
+                      let patRange = Range(match.range(at: 3), in: out) else { continue }
+                let tzID = String(out[tzRange])
+                guard let tz = TimeZone(identifier: tzID) else { continue }
+                let formatter = DateFormatter()
+                formatter.locale = locale
+                formatter.timeZone = tz
+                formatter.dateFormat = String(out[patRange])
+                out.replaceSubrange(fullRange, with: formatter.string(from: date))
+            }
+        }
 
         if let regex = try? NSRegularExpression(pattern: #"\{\{(datetime|date|time):([^{}]+)\}\}"#) {
             let nsRange = NSRange(out.startIndex..<out.endIndex, in: out)

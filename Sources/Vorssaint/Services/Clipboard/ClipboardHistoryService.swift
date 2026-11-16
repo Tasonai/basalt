@@ -69,6 +69,7 @@ final class ClipboardHistoryService: ObservableObject {
     /// Read again on every opening, so the window's frame and its content
     /// always agree, even if the setting changes while it is open.
     @Published private(set) var quickLayout = ClipboardHistoryLayout.current()
+    @Published var isDockCarouselMode = UserDefaults.standard.bool(forKey: "clipboardDockCarouselMode")
 
     private var timer: Timer?
     /// Entries age out with nothing new copied, so the retention window is
@@ -100,8 +101,12 @@ final class ClipboardHistoryService: ObservableObject {
     private var outsideClickMonitor: Any?
     private var activationObserver: NSObjectProtocol?
     private var hotKeyRef: EventHotKeyRef?
+    private var pasteStackHotKeyRef: EventHotKeyRef?
+    private var suspendedQuickLauncherForPasteStack = false
     private var hotKeyHandler: EventHandlerRef?
     private var registeredShortcut: GlobalShortcut?
+    private var proCancellables: Set<AnyCancellable> = []
+    private static let pasteStackHotKeyID: UInt32 = 4
     private var pasteTargetApp: NSRunningApplication?
     private var promptedForAccessibility = false
     /// Writes coalesce per mutation cycle; the JSON encode and the disk write
@@ -118,6 +123,7 @@ final class ClipboardHistoryService: ObservableObject {
 
     private init() {
         load()
+        setupProObservers()
     }
 
     func syncWithPreferences() {
@@ -125,9 +131,11 @@ final class ClipboardHistoryService: ObservableObject {
            UserDefaults.standard.bool(forKey: DefaultsKey.clipboardHistoryEnabled) {
             start()
             syncHotkey()
+            syncPasteStackHotkey()
         } else {
             stop()
             unregisterHotkey()
+            unregisterPasteStackHotkey()
         }
     }
 
@@ -894,8 +902,12 @@ final class ClipboardHistoryService: ObservableObject {
     private func promoteImage(_ image: (data: Data, width: Int, height: Int), source: String?,
                               keepsSource: Bool) {
         let hash = Self.sha256Hex(image.data)
+        let targetID: UUID
+        var needsOCR = false
         if let existing = entries.first(where: { $0.kind == .image && $0.imageHash == hash }) {
             entries.removeAll { $0.id == existing.id }
+            targetID = existing.id
+            needsOCR = existing.ocrText == nil
             insertPromoted(ClipboardHistoryEntry(id: existing.id,
                                                  text: "",
                                                  copiedAt: Date(),
@@ -904,39 +916,55 @@ final class ClipboardHistoryService: ObservableObject {
                                                  imageFile: existing.imageFile,
                                                  imageHash: hash,
                                                  imageWidth: existing.imageWidth,
-                                                 imageHeight: existing.imageHeight),
+                                                 imageHeight: existing.imageHeight,
+                                                 ocrText: existing.ocrText),
                            source: keepsSource ? existing.sourceBundleID : source)
         } else {
             guard let name = ClipboardImageStore.store(image.data) else { return }
-            insertPromoted(ClipboardHistoryEntry(text: "",
-                                                 kind: .image,
-                                                 imageFile: name,
-                                                 imageHash: hash,
-                                                 imageWidth: image.width,
-                                                 imageHeight: image.height), source: source)
+            let created = ClipboardHistoryEntry(text: "",
+                                                kind: .image,
+                                                imageFile: name,
+                                                imageHash: hash,
+                                                imageWidth: image.width,
+                                                imageHeight: image.height)
+            targetID = created.id
+            needsOCR = true
+            insertPromoted(created, source: source)
         }
         normalizeEntryOrder()
         trimToLimit()
         save()
+        if needsOCR {
+            scheduleImageOCR(for: targetID, pngData: image.data)
+        }
     }
 
     private func promoteFiles(_ paths: [String], source: String?, keepsSource: Bool) {
         let existing = entries.first(where: { $0.kind == .files && $0.filePaths == paths })
         entries.removeAll { $0.kind == .files && $0.filePaths == paths }
+        let targetID: UUID
+        let existingOCR = existing?.ocrText
         if let existing {
+            targetID = existing.id
             insertPromoted(ClipboardHistoryEntry(id: existing.id,
                                                  text: "",
                                                  copiedAt: Date(),
                                                  pinnedAt: existing.pinnedAt,
                                                  kind: .files,
-                                                 filePaths: paths),
+                                                 filePaths: paths,
+                                                 ocrText: existing.ocrText),
                            source: keepsSource ? existing.sourceBundleID : source)
         } else {
-            insertPromoted(ClipboardHistoryEntry(text: "", kind: .files, filePaths: paths), source: source)
+            let created = ClipboardHistoryEntry(text: "", kind: .files, filePaths: paths)
+            targetID = created.id
+            insertPromoted(created, source: source)
         }
         normalizeEntryOrder()
         trimToLimit()
         save()
+        if existingOCR == nil, paths.count == 1, ClipboardImageStore.isImageFile(atPath: paths[0]) {
+            scheduleImageFileOCR(for: targetID, path: paths[0])
+        }
     }
 
     private static func sha256Hex(_ data: Data) -> String {
@@ -1188,29 +1216,39 @@ final class ClipboardHistoryService: ObservableObject {
         wanted ? registerHotkey() : unregisterHotkey()
     }
 
+    private func ensureHotKeyHandler() {
+        guard hotKeyHandler == nil else { return }
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                 eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetEventDispatcherTarget(), { _, event, userData -> OSStatus in
+            guard let userData else { return OSStatus(eventNotHandledErr) }
+            var id = EventHotKeyID()
+            if let event {
+                GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                                  EventParamType(typeEventHotKeyID), nil,
+                                  MemoryLayout<EventHotKeyID>.size, nil, &id)
+            }
+            guard id.signature == 0x5655_434C else { return OSStatus(eventNotHandledErr) }
+            let service = Unmanaged<ClipboardHistoryService>.fromOpaque(userData).takeUnretainedValue()
+            switch id.id {
+            case 3:
+                DispatchQueue.main.async { service.toggleHistoryWindow() }
+                return noErr
+            case ClipboardHistoryService.pasteStackHotKeyID:
+                DispatchQueue.main.async { service.pasteNextFromStack() }
+                return noErr
+            default:
+                return OSStatus(eventNotHandledErr)
+            }
+        }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &hotKeyHandler)
+    }
+
     private func registerHotkey() {
         let shortcut = GlobalShortcut.saved(for: DefaultsKey.clipboardHistoryShortcut,
                                             fallback: .clipboardDefault)
         if hotKeyRef != nil, registeredShortcut == shortcut { return }
         unregisterHotkey()
-        if hotKeyHandler == nil {
-            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                     eventKind: UInt32(kEventHotKeyPressed))
-            InstallEventHandler(GetEventDispatcherTarget(), { _, event, userData -> OSStatus in
-                guard let userData else { return OSStatus(eventNotHandledErr) }
-                var id = EventHotKeyID()
-                if let event {
-                    GetEventParameter(event, EventParamName(kEventParamDirectObject),
-                                      EventParamType(typeEventHotKeyID), nil,
-                                      MemoryLayout<EventHotKeyID>.size, nil, &id)
-                }
-                guard id.signature == 0x5655_434C, id.id == 3
-                else { return OSStatus(eventNotHandledErr) }
-                let service = Unmanaged<ClipboardHistoryService>.fromOpaque(userData).takeUnretainedValue()
-                DispatchQueue.main.async { service.toggleHistoryWindow() }
-                return noErr
-            }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &hotKeyHandler)
-        }
+        ensureHotKeyHandler()
         let id = EventHotKeyID(signature: 0x5655_434C, id: 3) // 'VUCL'
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(shortcut.carbonKeyCode,
@@ -1231,7 +1269,10 @@ final class ClipboardHistoryService: ObservableObject {
     /// Lets go of the global key while a shortcut field is listening, so the
     /// user can record the very combination this feature uses. The next
     /// `syncWithPreferences` takes it back.
-    func suspendShortcut() { unregisterHotkey() }
+    func suspendShortcut() {
+        unregisterHotkey()
+        unregisterPasteStackHotkey()
+    }
 
     private func unregisterHotkey() {
         if let hotKeyRef {
@@ -1241,6 +1282,47 @@ final class ClipboardHistoryService: ObservableObject {
         hotKeyRef = nil
         registeredShortcut = nil
         shortcutRegistrationFailed = false
+    }
+
+    private func syncPasteStackHotkey() {
+        if isRunning && !ClipboardPasteStack.shared.queue.isEmpty {
+            registerPasteStackHotkey()
+        } else {
+            unregisterPasteStackHotkey()
+        }
+    }
+
+    private func registerPasteStackHotkey() {
+        guard pasteStackHotKeyRef == nil else { return }
+        let pasteStackShortcut = GlobalShortcut(keyCode: Int64(kVK_ANSI_V), modifiers: [.control, .command])
+        let launcherShortcut = GlobalShortcut.saved(for: DefaultsKey.quickLauncherShortcut,
+                                                    fallback: .quickLauncherDefault)
+        if AppFeature.quickLauncher.isAvailable,
+           UserDefaults.standard.bool(forKey: DefaultsKey.quickLauncherShortcutEnabled),
+           launcherShortcut == pasteStackShortcut {
+            QuickLauncherService.shared.suspend()
+            suspendedQuickLauncherForPasteStack = true
+        }
+        ensureHotKeyHandler()
+        let id = EventHotKeyID(signature: 0x5655_434C, id: Self.pasteStackHotKeyID)
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(pasteStackShortcut.carbonKeyCode,
+                                         pasteStackShortcut.carbonModifiers,
+                                         id, GetEventDispatcherTarget(), 0, &ref)
+        if status == noErr, let ref {
+            pasteStackHotKeyRef = ref
+        }
+    }
+
+    private func unregisterPasteStackHotkey() {
+        if let pasteStackHotKeyRef {
+            UnregisterEventHotKey(pasteStackHotKeyRef)
+            self.pasteStackHotKeyRef = nil
+        }
+        if suspendedQuickLauncherForPasteStack {
+            suspendedQuickLauncherForPasteStack = false
+            QuickLauncherService.shared.syncWithPreferences()
+        }
     }
 
     // MARK: - Quick window
@@ -1253,9 +1335,9 @@ final class ClipboardHistoryService: ObservableObject {
         guard presented != quickPreviewPresented else { return }
         quickPreviewPresented = presented
         UserDefaults.standard.set(presented, forKey: DefaultsKey.clipboardHistoryQuickPreview)
-        // The list window grows to make room for the preview. The shelf keeps
-        // its frame and gives the preview part of the strip.
-        guard quickLayout == .list, let panel, panel.isVisible else { return }
+        // The list window grows to make room for the preview. The shelf and
+        // dock carousel keep their own frame and give the preview part of the strip.
+        guard !isDockCarouselMode, quickLayout == .list, let panel, panel.isVisible else { return }
         let previousFrame = panel.frame
         resize(panel, to: preferredPanelSize(visibleFrame: panel.screen?.visibleFrame
                                             ?? NSScreen.pointerVisibleFrame),
@@ -1281,6 +1363,9 @@ final class ClipboardHistoryService: ObservableObject {
         clearQuickBatchSelection()
         resetQuickSelection()
         position(panel)
+        if isDockCarouselMode {
+            applyDockCarouselFrameIfNeeded(animated: false)
+        }
         installKeyMonitor(for: panel)
         installDismissMonitors(for: panel)
         // A copy made just before opening is read while the panel does not
@@ -1535,6 +1620,17 @@ final class ClipboardHistoryService: ObservableObject {
                 self.selectAllQuickEntries()
                 return nil
             }
+            if modifiers == [.command, .shift],
+               event.keyCode == UInt16(kVK_ANSI_P) || key == "p" {
+                self.enqueueSelectedQuickEntriesInPasteStack()
+                VorssaintHaptics.alignment()
+                return nil
+            }
+            if modifiers == [.command, .control],
+               event.keyCode == UInt16(kVK_ANSI_V) || key == "v",
+               self.pasteNextFromStack() {
+                return nil
+            }
             if modifiers == [.option], event.keyCode == UInt16(kVK_ANSI_P) {
                 self.togglePinSelectedQuickEntry()
                 return nil
@@ -1545,8 +1641,9 @@ final class ClipboardHistoryService: ObservableObject {
                 self.removeSelectedQuickEntries()
                 return nil
             }
+            let effectiveLayout: ClipboardHistoryLayout = self.isDockCarouselMode ? .cards : self.quickLayout
             if let step = ClipboardHistoryNavigation.step(keyCode: event.keyCode, modifiers: modifiers,
-                                                          key: key, layout: self.quickLayout) {
+                                                          key: key, layout: effectiveLayout) {
                 self.moveQuickSelection(step)
                 return nil
             }
@@ -1564,14 +1661,17 @@ final class ClipboardHistoryService: ObservableObject {
         let mouseEvents: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents) { [weak self, weak panel] event in
             guard let self, let panel, panel.isVisible else { return event }
-            if event.window !== panel, !Self.mouseIsInside(panel) {
+            let isChildPopoverWindow = event.window?.parent === panel
+                || (panel.childWindows?.contains(where: { $0 === event.window }) ?? false)
+            if event.window !== panel, !isChildPopoverWindow, !Self.mouseIsInside(panel) {
                 self.hideHistoryWindow()
             }
             return event
         }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseEvents) { [weak self, weak panel] event in
             guard let self, let panel, panel.isVisible else { return }
-            if event.windowNumber != panel.windowNumber, !Self.mouseIsInside(panel),
+            let isChildWindow = panel.childWindows?.contains(where: { $0.windowNumber == event.windowNumber }) ?? false
+            if event.windowNumber != panel.windowNumber, !isChildWindow, !Self.mouseIsInside(panel),
                // Every key on the Accessibility Keyboard is a click outside this
                // panel. Dismissing on those makes the panel impossible to type into.
                !AssistiveKeyboard.ownsCocoaPoint(NSEvent.mouseLocation) {
@@ -1660,6 +1760,256 @@ final class ClipboardHistoryService: ObservableObject {
     /// A highlighted entry that left the results falls back to the first.
     private func selectedQuickIndex(in matches: [ClipboardHistoryEntry]) -> Int {
         matches.firstIndex { $0.id == quickSelectionID } ?? 0
+    }
+
+    // MARK: - Clipboard 2.0 (OCR, Paste Stack, Dock Mode & Vault Merge)
+
+    private func setupProObservers() {
+        capturedEntry
+            .sink { entry in
+                guard ClipboardPasteStack.shared.isRecording else { return }
+                ClipboardPasteStack.shared.enqueue(entry)
+                ClipboardPasteStackHUDController.shared.refresh()
+            }
+            .store(in: &proCancellables)
+
+        let stack = ClipboardPasteStack.shared
+        Publishers.Merge3(
+            stack.$queue.map { _ in () },
+            stack.$isRecording.map { _ in () },
+            $isRunning.map { _ in () }
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] in
+            DispatchQueue.main.async {
+                self?.syncPasteStackState()
+            }
+        }
+        .store(in: &proCancellables)
+    }
+
+    private func syncPasteStackState() {
+        syncPasteStackHotkey()
+        ClipboardPasteStackHUDController.shared.refresh()
+    }
+
+    func enqueueInPasteStack(_ entry: ClipboardHistoryEntry) {
+        ClipboardPasteStack.shared.enqueue(entry)
+        syncPasteStackState()
+    }
+
+    func enqueueInPasteStack(_ entries: [ClipboardHistoryEntry]) {
+        guard !entries.isEmpty else { return }
+        ClipboardPasteStack.shared.enqueueBatch(entries)
+        syncPasteStackState()
+    }
+
+    func enqueueSelectedQuickEntriesInPasteStack() {
+        let selected = quickEntriesForPrimaryAction()
+        enqueueInPasteStack(selected)
+    }
+
+    @discardableResult
+    func pasteNextFromStack() -> Bool {
+        guard let next = ClipboardPasteStack.shared.popNext() else {
+            syncPasteStackState()
+            return false
+        }
+        syncPasteStackState()
+        let target: NSRunningApplication?
+        if panel?.isVisible == true {
+            target = pasteTargetApp
+            hideHistoryWindow()
+            pasteTargetApp = nil
+        } else {
+            target = currentExternalFrontmostApp()
+        }
+        copy(next) { [weak self] copied in
+            guard copied else {
+                NSSound.beep()
+                return
+            }
+            self?.pasteNextEntryIntoApp(target)
+        }
+        return true
+    }
+
+    private func currentExternalFrontmostApp() -> NSRunningApplication? {
+        let ownBundleID = Bundle.main.bundleIdentifier
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.bundleIdentifier != ownBundleID,
+              app.activationPolicy == .regular,
+              !app.isTerminated else {
+            return nil
+        }
+        return app
+    }
+
+    private func pasteNextEntryIntoApp(_ app: NSRunningApplication?) {
+        guard let app else { return }
+        guard !app.isTerminated else {
+            NSSound.beep()
+            return
+        }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
+            app.activate(options: [])
+        }
+        guard AXIsProcessTrusted() else {
+            if promptedForAccessibility {
+                NSSound.beep()
+            } else {
+                promptedForAccessibility = true
+                Permissions.shared.requestAccessibility()
+            }
+            return
+        }
+        if !TransientPaste.shared.pasteCurrentContents() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                Self.postPasteShortcut()
+            }
+        }
+    }
+
+    func setDockCarouselMode(_ enabled: Bool) {
+        if isDockCarouselMode != enabled {
+            isDockCarouselMode = enabled
+            UserDefaults.standard.set(enabled, forKey: "clipboardDockCarouselMode")
+        }
+        applyDockCarouselFrameIfNeeded(animated: true)
+    }
+
+    private func applyDockCarouselFrameIfNeeded(animated: Bool) {
+        guard let panel, panel.isVisible else { return }
+        if isDockCarouselMode {
+            let screen = panel.screen?.visibleFrame ?? NSScreen.pointerVisibleFrame
+            panel.styleMask.remove(.resizable)
+            let frame = NSRect(x: screen.minX + 16,
+                               y: screen.minY + 8,
+                               width: max(320, screen.width - 32),
+                               height: min(352, max(240, screen.height - 16)))
+            panel.setFrame(frame,
+                           display: true,
+                           animate: animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        } else {
+            position(panel)
+        }
+    }
+
+    func copyTransformedText(_ transformed: String) {
+        GeneralPasteboardAccess.shared.async(timeout: Self.pasteboardTimeout, { isExpired -> ClipboardHistoryWriteResult? in
+            guard !isExpired() else { return nil }
+            let pasteboard = NSPasteboard.general
+            _ = pasteboard.clearContents()
+            guard !isExpired(), pasteboard.setString(transformed, forType: .string) else {
+                return ClipboardHistoryWriteResult(succeeded: false, changeCount: pasteboard.changeCount)
+            }
+            pasteboard.declareVorssaintSource()
+            return ClipboardHistoryWriteResult(succeeded: true, changeCount: pasteboard.changeCount)
+        }, then: { result in
+            if result?.succeeded != true { NSSound.beep() }
+        }, didFinish: { _ in })
+    }
+
+    @discardableResult
+    func mergeVaultSnapshot(_ snapshot: ClipboardVaultSnapshot) -> Int {
+        var addedCount = 0
+        var merged = entries
+        for imported in snapshot.entries {
+            let duplicate = merged.contains { existing in
+                existing.id == imported.id || existing.matchesContent(of: imported)
+            }
+            if !duplicate {
+                merged.append(imported)
+                addedCount += 1
+            }
+        }
+        if addedCount > 0 {
+            entries = merged
+            normalizeEntryOrder()
+            trimToLimit()
+            save()
+        }
+        ClipboardPinboardStore.shared.mergeImportedBoards(snapshot.pinboards)
+        return addedCount
+    }
+
+    private func scheduleImageOCR(for entryID: UUID, pngData: Data) {
+        guard UserDefaults.standard.bool(forKey: DefaultsKey.clipboardHistoryIncludeImagesFiles) else {
+            return
+        }
+        Task.detached(priority: .utility) { [weak self] in
+            let recognized = Self.recognizeTextFromImageData(pngData)
+            guard !recognized.isEmpty else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.applyRecognizedOCR(recognized, to: entryID)
+            }
+        }
+    }
+
+    private func scheduleImageFileOCR(for entryID: UUID, path: String) {
+        guard UserDefaults.standard.bool(forKey: DefaultsKey.clipboardHistoryIncludeImagesFiles) else {
+            return
+        }
+        Task.detached(priority: .utility) { [weak self] in
+            let url = URL(fileURLWithPath: path)
+            let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else { return }
+            let recognized = Self.recognizeText(from: source)
+            guard !recognized.isEmpty else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.applyRecognizedOCR(recognized, to: entryID)
+            }
+        }
+    }
+
+    private static func recognizeTextFromImageData(_ data: Data) -> String {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
+            return ""
+        }
+        return recognizeText(from: source)
+    }
+
+    private static func recognizeText(from source: CGImageSource) -> String {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, sourceOptions) as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0, height > 0 else {
+            return ""
+        }
+        let maxPixelSize = ClipboardImageRecognition.decodeMaxPixelSize(width: width, height: height)
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ] as CFDictionary
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
+            return ""
+        }
+        let raw = ClipboardImageOCRIndexer.recognizeText(in: cgImage)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return "" }
+        return raw.count > 32_000 ? String(raw.prefix(32_000)) : raw
+    }
+
+    private func applyRecognizedOCR(_ recognized: String, to entryID: UUID) {
+        guard !recognized.isEmpty,
+              let index = entries.firstIndex(where: { $0.id == entryID }),
+              entries[index].ocrText != recognized else {
+            return
+        }
+        var updated = entries
+        updated[index].ocrText = recognized
+        if updated[index].isPinned,
+           !ClipboardHistoryEditing.pinnedEntriesFit(updated, byteLimit: encodedHistoryByteLimit) {
+            return
+        }
+        entries = updated
+        if latestPasteboardEntry?.id == entryID {
+            latestPasteboardEntry = updated[index]
+        }
+        save()
     }
 }
 

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ClipboardSettings: View {
     @ObservedObject private var l10n = L10n.shared
@@ -10,6 +12,13 @@ struct ClipboardSettings: View {
     @ObservedObject private var pastePlain = PastePlainService.shared
     @ObservedObject private var permissions = Permissions.shared
     @State private var clearingIDs: [UUID: Date]?
+    @State private var vaultExpanded = false
+    @State private var vaultPassphraseInput = ""
+    @State private var hasStoredVaultPassphrase = false
+    @State private var vaultStatusMessage: String?
+    @State private var vaultStatusIsError = false
+    @State private var isVaultBusy = false
+    private let vaultSecretStore = KeychainClipboardVaultSecretStore()
     @AppStorage(DefaultsKey.pastePlainEnabled) private var pastePlainEnabled = false
     @AppStorage(DefaultsKey.clipboardHistoryEnabled) private var enabled = false
     @AppStorage(DefaultsKey.clipboardHistoryLimit) private var limit = 50
@@ -37,6 +46,10 @@ struct ClipboardSettings: View {
 
     private var retentionText: ClipboardRetentionStrings {
         FeatureStrings.clipboardRetention(l10n.language)
+    }
+
+    private var v2Strings: OverhaulV2Strings {
+        OverhaulV2Strings.localized(l10n.language)
     }
 
     var body: some View {
@@ -171,6 +184,7 @@ struct ClipboardSettings: View {
             }
 
             if AppFeature.clipboardHistory.isAvailable {
+                clipboardVaultCard
                 clipboardStatsCard
             }
         }
@@ -179,6 +193,10 @@ struct ClipboardSettings: View {
             retentionDays = Defaults.sanitizedClipboardHistoryRetentionDays(retentionDays)
             autoClearDelay = Defaults.sanitizedClipboardAutoClearDelay(autoClearDelay)
             menuBarPreviewLength = Defaults.sanitizedClipboardMenuBarPreviewLength(menuBarPreviewLength)
+            refreshVaultPassphraseStatus()
+        }
+        .onDisappear {
+            commitVaultPassphraseIfEdited()
         }
         .onChange(of: limit) { _, value in
             let sanitized = Defaults.sanitizedClipboardHistoryLimit(value)
@@ -345,6 +363,206 @@ struct ClipboardSettings: View {
         formatter.usesGroupingSeparator = false
         return formatter
     }()
+
+    private var clipboardVaultCard: some View {
+        let trimmedInput = vaultPassphraseInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SettingsDisclosureCard(
+            title: v2Strings.clipboardVaultTitle,
+            symbol: "lock.shield",
+            badge: hasStoredVaultPassphrase ? "Keychain" : nil,
+            isExpanded: $vaultExpanded
+        ) {
+            SettingsRow(
+                symbol: "key.fill",
+                title: v2Strings.clipboardVaultPassphraseLabel,
+                caption: hasStoredVaultPassphrase ? "Stored securely in macOS Keychain" : nil
+            ) {
+                HStack(spacing: 8) {
+                    SecureField(
+                        hasStoredVaultPassphrase ? "•••••••• (Keychain)" : v2Strings.clipboardVaultPassphraseLabel,
+                        text: $vaultPassphraseInput
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 190)
+                    .onSubmit {
+                        commitVaultPassphraseIfEdited()
+                    }
+                    if !trimmedInput.isEmpty {
+                        VorssaintActionChip(title: text.save, tone: .clipboardFiles, prominent: true) {
+                            commitVaultPassphraseIfEdited()
+                        }
+                    } else if hasStoredVaultPassphrase {
+                        VorssaintActionChip(title: text.delete, destructive: true) {
+                            _ = vaultSecretStore.deleteSecret()
+                            refreshVaultPassphraseStatus()
+                            vaultStatusIsError = false
+                            vaultStatusMessage = "Vault passphrase removed from Keychain."
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                VorssaintActionChip(
+                    title: "Export .vorssaintvault…",
+                    symbol: "square.and.arrow.up",
+                    tone: .clipboardFiles
+                ) {
+                    exportVault()
+                }
+                .disabled(isVaultBusy)
+
+                VorssaintActionChip(
+                    title: "Import .vorssaintvault…",
+                    symbol: "square.and.arrow.down",
+                    tone: .clipboardFiles
+                ) {
+                    importVault()
+                }
+                .disabled(isVaultBusy)
+
+                if isVaultBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Spacer()
+            }
+
+            if let vaultStatusMessage {
+                Label(vaultStatusMessage,
+                      systemImage: vaultStatusIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(vaultStatusIsError ? Color.red : Color.green)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, settingsRowTextInset)
+            }
+        }
+    }
+
+    private func refreshVaultPassphraseStatus() {
+        hasStoredVaultPassphrase = vaultSecretStore.loadSecret()?.isEmpty == false
+    }
+
+    private func commitVaultPassphraseIfEdited() {
+        let trimmed = vaultPassphraseInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if vaultSecretStore.saveSecret(trimmed) {
+            vaultPassphraseInput = ""
+            refreshVaultPassphraseStatus()
+            vaultStatusIsError = false
+            vaultStatusMessage = "Vault passphrase saved in Keychain."
+            VorssaintHaptics.alignment()
+        } else {
+            vaultStatusIsError = true
+            vaultStatusMessage = "Unable to store vault passphrase in Keychain."
+        }
+    }
+
+    private func resolveVaultPassphrase() -> String? {
+        let trimmed = vaultPassphraseInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            commitVaultPassphraseIfEdited()
+            return trimmed
+        }
+        if let saved = vaultSecretStore.loadSecret(), !saved.isEmpty {
+            return saved
+        }
+        vaultStatusIsError = true
+        vaultStatusMessage = "Enter and save a vault passphrase before exporting or importing."
+        NSSound.beep()
+        return nil
+    }
+
+    private func exportVault() {
+        guard let passphrase = resolveVaultPassphrase() else { return }
+        let panel = NSSavePanel()
+        if let vaultType = UTType(filenameExtension: "vorssaintvault") {
+            panel.allowedContentTypes = [vaultType, .data]
+        }
+        panel.nameFieldStringValue = "Vorssaint-Clipboard.vorssaintvault"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let entriesSnapshot = history.entries
+        let pinboardsSnapshot = ClipboardPinboardStore.shared.pinboards
+        isVaultBusy = true
+        vaultStatusMessage = nil
+
+        Task { @MainActor in
+            do {
+                let count = try await Task.detached(priority: .userInitiated) {
+                    let snapshot = ClipboardVaultSnapshot(entries: entriesSnapshot, pinboards: pinboardsSnapshot)
+                    let data = try JSONEncoder().encode(snapshot)
+                    try ClipboardSyncVault.seal(data, to: url, passphrase: passphrase)
+                    return snapshot.entries.count
+                }.value
+                isVaultBusy = false
+                vaultStatusIsError = false
+                vaultStatusMessage = "Exported \(count) encrypted entries to \(url.lastPathComponent)."
+                VorssaintHaptics.alignment()
+            } catch {
+                isVaultBusy = false
+                vaultStatusIsError = true
+                vaultStatusMessage = vaultErrorMessage(error)
+            }
+        }
+    }
+
+    private func importVault() {
+        guard let passphrase = resolveVaultPassphrase() else { return }
+        let panel = NSOpenPanel()
+        if let vaultType = UTType(filenameExtension: "vorssaintvault") {
+            panel.allowedContentTypes = [vaultType, .data]
+        }
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        isVaultBusy = true
+        vaultStatusMessage = nil
+
+        Task { @MainActor in
+            do {
+                let snapshot = try await Task.detached(priority: .userInitiated) { () -> ClipboardVaultSnapshot in
+                    let plaintext = try ClipboardSyncVault.open(from: url, passphrase: passphrase)
+                    let decoder = JSONDecoder()
+                    if let decoded = try? decoder.decode(ClipboardVaultSnapshot.self, from: plaintext) {
+                        return decoded
+                    }
+                    let entries = try decoder.decode([ClipboardHistoryEntry].self, from: plaintext)
+                    return ClipboardVaultSnapshot(entries: entries)
+                }.value
+                let added = history.mergeVaultSnapshot(snapshot)
+                isVaultBusy = false
+                vaultStatusIsError = false
+                vaultStatusMessage = added > 0
+                    ? "Imported \(added) new entries from \(url.lastPathComponent)."
+                    : "Vault decrypted cleanly — all entries are already present."
+                VorssaintHaptics.alignment()
+            } catch {
+                isVaultBusy = false
+                vaultStatusIsError = true
+                vaultStatusMessage = vaultErrorMessage(error)
+            }
+        }
+    }
+
+    private func vaultErrorMessage(_ error: Error) -> String {
+        if let vaultError = error as? ClipboardSyncVault.VaultError {
+            switch vaultError {
+            case .emptyPassphrase:
+                return "Vault passphrase cannot be empty."
+            case .invalidEnvelope:
+                return "Selected file is not a valid .vorssaintvault archive."
+            case .wrongPassphraseOrTampered:
+                return "Wrong passphrase or the .vorssaintvault file was tampered with."
+            }
+        }
+        return "Vault sync failed: \(error.localizedDescription)"
+    }
 
     private var clipboardStatsCard: some View {
         SettingsCard {

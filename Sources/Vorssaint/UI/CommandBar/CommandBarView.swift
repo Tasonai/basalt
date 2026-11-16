@@ -48,11 +48,27 @@ struct CommandBarView: View {
     @FocusState private var searchFocused: Bool
     @State private var showHomebrewDetails = false
     @State private var showQuickAICard = false
+    @State private var attachedContextTokens: Set<QuickAIContextToken> = []
+    @State private var quickAICopied = false
+    @State private var quickAIPromptDraft = ""
+    @State private var showActionPanelOverlay = false
+    @State private var actionPanelIndex = 0
+    @State private var actionPanelTransformOutput: String?
+    @State private var scriptArgInputs: [String] = ["", "", ""]
+    @State private var scriptArgLinkID: UUID?
+    @State private var detectedCLITools: [QuickAIProvider] = []
+    @FocusState private var actionPanelFocused: Bool
 
     private var wave3Strings: OverhaulWave3Strings { OverhaulStrings.wave3(l10n.language) }
+    private var v2Strings: OverhaulV2Strings { OverhaulV2Strings.localized(l10n.language) }
 
     private var layoutMode: CommandBarLayoutMode {
         CommandBarLayoutMode(rawValue: layoutModeRaw) ?? .list
+    }
+
+    private var effectiveWidth: CGFloat {
+        if shownAs == .island { return Self.width }
+        return layoutMode == .splitDetail ? 680 : Self.width
     }
 
     /// The mark, made a handle. Dragging rides on AppKit's own window
@@ -166,7 +182,18 @@ struct CommandBarView: View {
                     }
                 } else {
                     if !showsCategoryChips { Divider() }
-                    resultsList
+                    if showActionPanelOverlay, let selected = service.selectedEntry {
+                        commandBarActionPanelCard(for: selected)
+                    } else {
+                        switch layoutMode {
+                        case .list:
+                            resultsList
+                        case .splitDetail:
+                            splitDetailResultsView
+                        case .grid:
+                            gridResultsView
+                        }
+                    }
                 }
             case .argument(let entryID):
                 Divider()
@@ -201,7 +228,7 @@ struct CommandBarView: View {
                 footer
             }
         }
-        .frame(width: Self.width)
+        .frame(width: effectiveWidth)
         .environment(\.colorScheme, shownAs == .window ? colorScheme : .dark)
         .background(backdrop)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -214,9 +241,26 @@ struct CommandBarView: View {
         .onAppear {
             focusSearch()
             service.barDidAppear()
+            detectedCLITools = CommandBarQuickAIService.installedCLITools()
         }
-        .onChange(of: service.presentationID) { _, _ in focusSearch() }
-        .onChange(of: service.mode) { _, _ in focusSearch() }
+        .onChange(of: service.presentationID) { _, _ in
+            showActionPanelOverlay = false
+            actionPanelTransformOutput = nil
+            quickAICopied = false
+            detectedCLIsRefresh()
+            focusSearch()
+        }
+        .onChange(of: service.mode) { _, _ in
+            showActionPanelOverlay = false
+            focusSearch()
+        }
+        .onChange(of: layoutModeRaw) { _, _ in
+            service.refreshPanelLayout()
+        }
+        .onChange(of: service.selectedEntry?.id) { _, _ in
+            actionPanelTransformOutput = nil
+            syncScriptArgInputsForSelection()
+        }
         // Typing as the drop still falls hurries it, so the bar shows what
         // is being typed right away.
         .onChange(of: service.query) { _, query in
@@ -289,9 +333,11 @@ struct CommandBarView: View {
                 let prompt = service.query.trimmingCharacters(in: .whitespacesAndNewlines)
                 if prompt.isEmpty {
                     showQuickAICard.toggle()
+                    if showQuickAICard { detectedCLIsRefresh() }
                 } else {
                     showQuickAICard = true
-                    quickAI.askLocalOllama(prompt: prompt)
+                    detectedCLIsRefresh()
+                    sendQuickAIPrompt(prompt)
                 }
             } label: {
                 Image(systemName: quickAI.isStreaming ? "ellipsis.bubble.fill" : "sparkles")
@@ -353,13 +399,61 @@ struct CommandBarView: View {
     /// shape as the results so there is nothing new to learn.
     private var actionsList: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(text.actionsTitle.uppercased())
-                .font(.system(size: 10, weight: .bold))
-                .tracking(0.5)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 2)
+            HStack(spacing: 8) {
+                Text(text.actionsTitle.uppercased())
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(0.5)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("↑↓ ⏎ Esc")
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+
+            if case .actions(let entryID) = service.mode,
+               let entry = service.entry(withID: entryID) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(actionPanelItems(for: entry)) { item in
+                            Button {
+                                executeActionPanelItem(item, for: entry)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: item.symbolName)
+                                        .font(.system(size: 10, weight: .semibold))
+                                    Text(item.title)
+                                        .font(.system(size: 10.5, weight: .medium))
+                                        .lineLimit(1)
+                                    Text(item.shortcutDisplay)
+                                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .foregroundStyle(item.isDestructive ? Color.red : Color.primary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(item.isDestructive
+                                              ? Color.red.opacity(0.10)
+                                              : Color.primary.opacity(0.07))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .padding(.bottom, 6)
+                if let transformed = actionPanelTransformOutput {
+                    transformOutputBanner(transformed)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 6)
+                }
+            }
+
             VStack(spacing: 1) {
                 ForEach(Array(service.actionRows.enumerated()), id: \.element.id) { index, action in
                     Button {
@@ -375,6 +469,17 @@ struct CommandBarView: View {
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(action.isDestructive ? Color.red : Color.primary)
                             Spacer(minLength: 12)
+                            if let shortcutHint = actionShortcutDisplay(for: action.id) {
+                                Text(shortcutHint)
+                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                            .fill(Color.primary.opacity(0.06))
+                                    )
+                            }
                             Image(systemName: "return")
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(.tertiary)
@@ -809,17 +914,39 @@ struct CommandBarView: View {
             Text(text.noResultsTitle)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-            Button {
-                service.goHome()
-            } label: {
-                Text(text.noResultsAction)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+            HStack(spacing: 8) {
+                Button {
+                    service.goHome()
+                } label: {
+                    Text(text.noResultsAction)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+
+                if !trimmedQuery.isEmpty {
+                    Button {
+                        showQuickAICard = true
+                        detectedCLIsRefresh()
+                        sendQuickAIPrompt(trimmedQuery)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(wave3Strings.quickAITitle)
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(SemanticCategoryTone.dynamicIsland.badgeColor)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(SemanticCategoryTone.dynamicIsland.badgeColor.opacity(0.16)))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
@@ -1220,14 +1347,26 @@ struct CommandBarView: View {
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(.secondary)
             Spacer()
-            if service.canOpenActions {
-                Text("⌘K")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.secondary)
-                Text(text.actionsHint)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .padding(.trailing, 4)
+            if service.selectedEntry != nil || service.canOpenActions {
+                Button {
+                    toggleActionPanel()
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("⌘K")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        Text(text.actionsHint)
+                            .font(.system(size: 10))
+                    }
+                    .foregroundStyle(showActionPanelOverlay || isActionsMode ? Color.accentColor : Color.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(showActionPanelOverlay || isActionsMode ? Color.accentColor.opacity(0.14) : Color.clear)
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 4)
             }
             Text(service.isShowingSuggestions && !service.categoryChips.isEmpty ? "⌃P ⌃N ↑↓ ←→" : "⌃P ⌃N ↑↓")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -1259,18 +1398,675 @@ struct CommandBarView: View {
         }
     }
 
+    // MARK: - Split Detail & Grid Views (Command Bar 2.0)
+
+    private var splitDetailResultsView: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: service.rows.count > 10) {
+                        LazyVStack(spacing: 1) {
+                            ForEach(Array(service.rows.enumerated()), id: \.element.id) { index, entry in
+                                if let heading = service.sectionTitles[index] {
+                                    sectionHeader(heading)
+                                }
+                                row(entry, index: index)
+                                    .id(entry.id)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                    }
+                    .frame(height: Self.listCeiling)
+                    .notchScrollEdgeFade(axis: .vertical, length: 14)
+                    .onChange(of: service.selectedIndex) { _, index in
+                        guard service.rows.indices.contains(index) else { return }
+                        proxy.scrollTo(service.rows[index].id)
+                    }
+                }
+            }
+            .frame(width: shownAs == .island ? 236 : 272)
+
+            Divider()
+
+            splitDetailInspector
+                .frame(maxWidth: .infinity, maxHeight: Self.listCeiling, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder
+    private var splitDetailInspector: some View {
+        if let entry = service.selectedEntry ?? service.rows.first {
+            let source = CommandBarPreferences.source(ofRowID: entry.id)
+            let tone = categoryTone(for: source)
+            let accent = tone.color(scheme: shownAs == .window ? colorScheme : .dark, highContrast: false)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 10) {
+                        iconView(entry)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.title)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if !entry.subtitle.isEmpty {
+                                Text(entry.subtitle)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        Text(service.categoryTitle(source))
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(accent)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2.5)
+                            .background(Capsule().fill(accent.opacity(0.15)))
+                    }
+
+                    // Metadata badges
+                    HStack(spacing: 6) {
+                        if entry.isActive {
+                            inspectorPill(title: text.stateOn, symbol: "circle.fill", tint: .green)
+                        }
+                        if service.isPinned(entry) {
+                            inspectorPill(title: text.pinnedTitle, symbol: "pin.fill", tint: accent)
+                        }
+                        if let alias = service.alias(for: entry) {
+                            inspectorPill(title: alias, symbol: "character.cursor.ibeam", tint: .secondary)
+                        }
+                        if let shortcut = service.rowShortcut(for: entry)?.displayString
+                            ?? entry.shortcut?.displayString ?? entry.menuShortcut {
+                            inspectorPill(title: shortcut, symbol: "command", tint: .secondary)
+                        }
+                    }
+
+                    // Live preview body
+                    inspectorPreviewBody(for: entry, accent: accent)
+
+                    // Quick Actions from CommandBarActionPanelModel
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(text.actionsTitle.uppercased())
+                            .font(.system(size: 9, weight: .bold))
+                            .tracking(0.5)
+                            .foregroundStyle(.tertiary)
+                        ForEach(actionPanelItems(for: entry)) { item in
+                            Button {
+                                executeActionPanelItem(item, for: entry)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: item.symbolName)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(item.isDestructive ? Color.red : accent)
+                                        .frame(width: 16)
+                                    Text(item.title)
+                                        .font(.system(size: 11.5, weight: .medium))
+                                        .foregroundStyle(item.isDestructive ? Color.red : Color.primary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(item.shortcutDisplay)
+                                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .fill(Color.primary.opacity(0.05))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    if let transformed = actionPanelTransformOutput {
+                        transformOutputBanner(transformed)
+                    }
+                }
+                .padding(14)
+            }
+            .notchScrollEdgeFade(axis: .vertical, length: 12)
+        } else {
+            VStack {
+                Text(text.noResultsTitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func inspectorPreviewBody(for entry: CommandBarEntry, accent: Color) -> some View {
+        if let value = entry.answerValue ?? (entry.isAnswer ? entry.title : nil) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(value)
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(accent)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button {
+                        copyTextToPasteboard(value)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(accent.opacity(0.10)))
+        } else if let link = scriptLink(for: entry) {
+            scriptInspectorSection(link: link, accent: accent)
+        } else if let path = entry.revealPath {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(path)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(9)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(0.05)))
+        } else if case .needsSetup(let featureTitle, _) = entry.trouble {
+            Label(String(format: text.needsSetupFormat, featureTitle), systemImage: "gearshape")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+        } else if case .needsPermission = entry.trouble {
+            Label(text.needsPermissionHint, systemImage: "hand.raised")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+        }
+
+        if quickAI.isStreaming || !quickAI.responseText.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                    Text(wave3Strings.quickAITitle)
+                        .font(.system(size: 10.5, weight: .semibold))
+                    Spacer()
+                    if quickAI.isStreaming {
+                        Text(wave3Strings.quickAIThinking)
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(quickAI.responseText.isEmpty ? wave3Strings.quickAIPlaceholder : quickAI.responseText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+            }
+            .padding(9)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.accentColor.opacity(0.09)))
+        }
+    }
+
+    @ViewBuilder
+    private func scriptInspectorSection(link: CommandBarLink, accent: Color) -> some View {
+        let meta = service.scriptRunner.metadata(for: link)
+        let typed = service.query.trimmingCharacters(in: .whitespaces)
+        let typedArg = CommandBarLinks.trailingArgument(query: typed, name: link.name) ?? ""
+        let explicitArg = scriptArgInputs.prefix(max(1, meta?.arguments.count ?? 1))
+            .map { value -> String in
+                value.contains(where: \.isWhitespace) ? "\"\(value)\"" : value
+            }
+            .joined(separator: " ")
+        let activeResult = service.scriptRunner.cachedResult(linkID: link.id, argument: typedArg)
+            ?? service.scriptRunner.cachedResult(linkID: link.id, argument: explicitArg)
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                if let mode = meta?.mode {
+                    inspectorPill(title: mode.rawValue, symbol: "terminal", tint: accent)
+                }
+                if let refresh = meta?.refreshTime, !refresh.isEmpty {
+                    inspectorPill(title: refresh, symbol: "clock", tint: .secondary)
+                }
+                if let pkg = meta?.packageName, !pkg.isEmpty {
+                    inspectorPill(title: pkg, symbol: "shippingbox", tint: .secondary)
+                }
+            }
+            if let desc = meta?.description, !desc.isEmpty {
+                Text(desc)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let argSpecs = meta?.arguments, !argSpecs.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(argSpecs.enumerated()), id: \.element.index) { idx, spec in
+                        if idx < 3 {
+                            HStack(spacing: 6) {
+                                if spec.secure {
+                                    SecureField(spec.placeholder.isEmpty ? "Arg \(spec.index)" : spec.placeholder,
+                                                text: $scriptArgInputs[idx])
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.system(size: 11))
+                                } else {
+                                    TextField(spec.placeholder.isEmpty ? "Arg \(spec.index)" : spec.placeholder,
+                                              text: $scriptArgInputs[idx])
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.system(size: 11))
+                                }
+                            }
+                        }
+                    }
+                    Button {
+                        let args = (0..<min(argSpecs.count, 3)).map { scriptArgInputs[$0] }
+                        service.scriptRunner.runWithArguments(link: link, arguments: args)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 9.5))
+                            Text("Run Script")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(accent))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let result = activeResult {
+                if let payload = result.jsonPayload {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(payload.title)
+                                .font(.system(size: 12, weight: .semibold))
+                            Spacer()
+                            if let badge = payload.badge, !badge.isEmpty {
+                                Text(badge)
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                    .foregroundStyle(Color.green)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.green.opacity(0.15)))
+                            }
+                        }
+                        if let sub = payload.subtitle, !sub.isEmpty {
+                            Text(sub)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        HStack(spacing: 8) {
+                            Button {
+                                copyTextToPasteboard(payload.copyText ?? payload.title)
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                                    .font(.system(size: 10.5, weight: .medium))
+                            }
+                            .buttonStyle(.plain)
+                            if let openURL = payload.openURL, let url = URL(string: openURL) {
+                                Button {
+                                    NSWorkspace.shared.open(url)
+                                } label: {
+                                    Label("Open URL", systemImage: "arrow.up.right.square")
+                                        .font(.system(size: 10.5, weight: .medium))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .foregroundStyle(accent)
+                    }
+                    .padding(9)
+                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(accent.opacity(0.09)))
+                } else {
+                    Text(result.rawOutput)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(9)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(0.05)))
+                }
+            } else if service.scriptRunner.isAwaiting {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(wave3Strings.quickAIThinking)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func inspectorPill(title: String, symbol: String, tint: Color) -> some View {
+        HStack(spacing: 3.5) {
+            Image(systemName: symbol)
+                .font(.system(size: 8.5, weight: .semibold))
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2.5)
+        .background(Capsule().fill(tint.opacity(0.12)))
+    }
+
+    private var gridResultsView: some View {
+        let columns = [GridItem(.adaptive(minimum: 122, maximum: 146), spacing: 8)]
+        return VStack(alignment: .leading, spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: service.rows.count > 9) {
+                    LazyVGrid(columns: columns, spacing: 8) {
+                        ForEach(Array(service.rows.enumerated()), id: \.element.id) { index, entry in
+                            gridTile(entry, index: index)
+                                .id(entry.id)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                }
+                .frame(maxHeight: Self.listCeiling)
+                .fixedSize(horizontal: false, vertical: service.rows.count <= 9)
+                .frame(minHeight: service.rows.count > 9 ? Self.listCeiling : nil)
+                .notchScrollEdgeFade(axis: .vertical, length: 14)
+                .onChange(of: service.selectedIndex) { _, index in
+                    guard service.rows.indices.contains(index) else { return }
+                    proxy.scrollTo(service.rows[index].id)
+                }
+            }
+        }
+    }
+
+    private func gridTile(_ entry: CommandBarEntry, index: Int) -> some View {
+        let isSelected = index == service.selectedIndex
+        let source = CommandBarPreferences.source(ofRowID: entry.id)
+        let accent = categoryTone(for: source).color(scheme: shownAs == .window ? colorScheme : .dark, highContrast: false)
+        return Button {
+            service.run(entry, fromClick: true)
+        } label: {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .top) {
+                    iconView(entry)
+                    Spacer(minLength: 4)
+                    if service.commandIsHeld, index < 9 {
+                        Text("⌘\(index + 1)")
+                            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.accentColor.opacity(0.14)))
+                    } else {
+                        Text(service.categoryTitle(source))
+                            .font(.system(size: 8.5, weight: .semibold))
+                            .foregroundStyle(accent)
+                            .lineLimit(1)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(accent.opacity(0.14)))
+                    }
+                }
+                Text(entry.title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let value = entry.answerValue {
+                    Text(value)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                } else if !entry.subtitle.isEmpty {
+                    Text(entry.subtitle)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? accent.opacity(0.16) : Color.primary.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(isSelected ? accent.opacity(0.65) : Color.primary.opacity(0.08), lineWidth: isSelected ? 1.2 : 0.6)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering { service.selectFromHover(index) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel(entry))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    // MARK: - ⌘K Action Panel Card
+
+    private func commandBarActionPanelCard(for entry: CommandBarEntry) -> some View {
+        let items = actionPanelItems(for: entry)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                iconView(entry)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .lineLimit(1)
+                    Text(text.actionsTitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showActionPanelOverlay = false
+                    focusSearch()
+                } label: {
+                    Text("Esc")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.primary.opacity(0.07)))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+
+            VStack(spacing: 2) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    let isSelected = index == actionPanelIndex
+                    Button {
+                        executeActionPanelItem(item, for: entry)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: item.symbolName)
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(item.isDestructive ? Color.red : Color.primary.opacity(0.85))
+                                .frame(width: 24, height: 24)
+                            Text(item.title)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(item.isDestructive ? Color.red : Color.primary)
+                            Spacer()
+                            Text(item.shortcutDisplay)
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.primary.opacity(0.06)))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .background(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(isSelected
+                                      ? (item.isDestructive ? Color.red.opacity(0.12) : Color.accentColor.opacity(0.16))
+                                      : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hovering in
+                        if hovering { actionPanelIndex = index }
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+
+            if let transformed = actionPanelTransformOutput {
+                transformOutputBanner(transformed)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            }
+        }
+        .focusable()
+        .focused($actionPanelFocused)
+        .onAppear {
+            actionPanelIndex = 0
+            actionPanelFocused = true
+        }
+        .onKeyPress(.upArrow) {
+            guard !items.isEmpty else { return .ignored }
+            actionPanelIndex = (actionPanelIndex - 1 + items.count) % items.count
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            guard !items.isEmpty else { return .ignored }
+            actionPanelIndex = (actionPanelIndex + 1) % items.count
+            return .handled
+        }
+        .onKeyPress(.return) {
+            guard items.indices.contains(actionPanelIndex) else { return .ignored }
+            executeActionPanelItem(items[actionPanelIndex], for: entry)
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            showActionPanelOverlay = false
+            focusSearch()
+            return .handled
+        }
+    }
+
+    private func transformOutputBanner(_ transformed: String) -> some View {
+        HStack(spacing: 8) {
+            Text(transformed)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(2)
+                .textSelection(.enabled)
+            Spacer()
+            Button {
+                copyTextToPasteboard(transformed)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.accentColor.opacity(0.10)))
+    }
+
+    // MARK: - Quick AI (Command Bar 2.0)
+
     private var quickAICard: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let missingProvider = missingAPIKeyProvider
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Label(wave3Strings.quickAITitle, systemImage: "sparkles")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
-                if quickAI.isStreaming {
-                    Text(wave3Strings.quickAIThinking)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
+
+                Menu {
+                    ForEach(QuickAIProvider.allCases) { provider in
+                        Button {
+                            quickAI.selectedProvider = provider
+                        } label: {
+                            HStack {
+                                Text(providerMenuLabel(provider))
+                                if quickAI.selectedProvider == provider {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(quickAI.selectedProvider.displayName)
+                            .font(.system(size: 10.5, weight: .medium))
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8.5, weight: .semibold))
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.primary.opacity(0.08)))
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                if quickAI.isStreaming {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text(wave3Strings.quickAIThinking)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if quickAI.dropletState == .celebrate && !quickAI.responseText.isEmpty {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.green)
+                }
+
                 Spacer()
+
+                if !quickAI.responseText.isEmpty {
+                    Button {
+                        copyTextToPasteboard(quickAI.responseText)
+                        quickAICopied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            quickAICopied = false
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: quickAICopied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 9.5, weight: .semibold))
+                            if quickAICopied {
+                                Text("Copied")
+                                    .font(.system(size: 9.5, weight: .semibold))
+                            }
+                        }
+                        .foregroundStyle(quickAICopied ? Color.green : Color.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if quickAI.isStreaming {
+                    Button {
+                        quickAI.reset()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.orange)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 Button {
                     showQuickAICard = false
                     quickAI.reset()
@@ -1283,19 +2079,129 @@ struct CommandBarView: View {
                 }
                 .buttonStyle(.plain)
             }
-            if let error = quickAI.errorText, !error.isEmpty {
+
+            // Context injection chips: @clipboard, @selection, @frontApp, @browser
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(QuickAIContextToken.allCases) { token in
+                        let isActive = attachedContextTokens.contains(token)
+                            || service.query.lowercased().contains(token.token.lowercased())
+                            || quickAIPromptDraft.lowercased().contains(token.token.lowercased())
+                        Button {
+                            if attachedContextTokens.contains(token) {
+                                attachedContextTokens.remove(token)
+                            } else {
+                                attachedContextTokens.insert(token)
+                            }
+                        } label: {
+                            HStack(spacing: 3.5) {
+                                Image(systemName: token.symbolName)
+                                    .font(.system(size: 8.5, weight: .semibold))
+                                Text(token.token)
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            }
+                            .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule().fill(isActive ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06))
+                            )
+                            .overlay(
+                                Capsule().strokeBorder(isActive ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 0.8)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if trimmedQuery.isEmpty {
+                HStack(spacing: 6) {
+                    TextField(wave3Strings.quickAIPlaceholder, text: $quickAIPromptDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11.5))
+                        .onSubmit {
+                            let prompt = quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !prompt.isEmpty else { return }
+                            sendQuickAIPrompt(prompt)
+                        }
+                    Button {
+                        let prompt = quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !prompt.isEmpty else { return }
+                        sendQuickAIPrompt(prompt)
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 17))
+                            .foregroundStyle(quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                             ? Color.secondary.opacity(0.4) : Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(quickAIPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            } else {
+                HStack {
+                    Text(v2Strings.quickAIContextHint)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        sendQuickAIPrompt(trimmedQuery)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 9.5, weight: .semibold))
+                            Text("Ask")
+                                .font(.system(size: 10.5, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3.5)
+                        .background(Capsule().fill(Color.accentColor))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let missingProvider {
+                HStack(spacing: 8) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                    Text(quickAI.errorText ?? "\(missingProvider.displayName) key missing in Keychain.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button {
+                        service.hide()
+                        SettingsRouter.shared.page = .commandBar
+                        (NSApp.delegate as? AppDelegate)?.openSettingsWindow()
+                    } label: {
+                        Label("Open Settings", systemImage: "gearshape")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3.5)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.orange.opacity(0.10)))
+            } else if let error = quickAI.errorText, !error.isEmpty {
                 Text(error)
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             } else if !quickAI.responseText.isEmpty {
                 ScrollView {
-                    Text(quickAI.responseText)
+                    markdownOrPlainText(quickAI.responseText)
                         .font(.system(size: 12))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 140)
+                .frame(maxHeight: 150)
             } else {
                 Text(wave3Strings.quickAIPlaceholder)
                     .font(.system(size: 11))
@@ -1304,6 +2210,184 @@ struct CommandBarView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    // MARK: - Helpers
+
+    private var isActionsMode: Bool {
+        if case .actions = service.mode { return true }
+        return false
+    }
+
+    private var missingAPIKeyProvider: QuickAIProvider? {
+        if let explicit = quickAI.missingKeyProvider { return explicit }
+        let selected = quickAI.selectedProvider
+        if (selected == .byokOpenAI || selected == .byokAnthropic),
+           quickAI.apiKey(for: selected) == nil {
+            return selected
+        }
+        return nil
+    }
+
+    private func detectedCLIsRefresh() {
+        detectedCLITools = CommandBarQuickAIService.installedCLITools()
+    }
+
+    private func providerMenuLabel(_ provider: QuickAIProvider) -> String {
+        switch provider {
+        case .claudeCLI, .codexCLI:
+            let ready = detectedCLITools.contains(provider)
+            return ready ? "\(provider.displayName) ✓" : "\(provider.displayName) (not found)"
+        case .byokOpenAI, .byokAnthropic:
+            let hasKey = quickAI.apiKey(for: provider) != nil
+            return hasKey ? "\(provider.displayName) ✓" : "\(provider.displayName) (no key)"
+        case .ollama:
+            return provider.displayName
+        }
+    }
+
+    private func sendQuickAIPrompt(_ prompt: String) {
+        quickAICopied = false
+        quickAI.sendContextualPrompt(prompt, attachedTokens: attachedContextTokens)
+    }
+
+    private func markdownOrPlainText(_ content: String) -> Text {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        if let attributed = try? AttributedString(markdown: content, options: options) {
+            return Text(attributed)
+        }
+        return Text(content)
+    }
+
+    private func toggleActionPanel() {
+        if showActionPanelOverlay {
+            showActionPanelOverlay = false
+            focusSearch()
+        } else if isActionsMode {
+            service.stepBack()
+        } else if service.canOpenActions {
+            service.openActions()
+        } else if service.selectedEntry != nil {
+            showActionPanelOverlay = true
+        }
+    }
+
+    private func actionPanelItems(for entry: CommandBarEntry) -> [CommandBarActionItem] {
+        CommandBarActionPanelModel.actions(
+            forTitle: entry.title,
+            canRevealInFinder: entry.canRevealInFinder,
+            canCopyValue: canCopyEntryValue(entry),
+            canPin: CommandBarPreferences.acceptsPin(rowID: entry.id),
+            canTransform: canTransformEntry(entry),
+            isDestructiveSupported: true
+        )
+    }
+
+    private func canCopyEntryValue(_ entry: CommandBarEntry) -> Bool {
+        entry.answerValue != nil || entry.isAnswer || entry.revealPath != nil || !entry.title.isEmpty
+    }
+
+    private func canTransformEntry(_ entry: CommandBarEntry) -> Bool {
+        let source = CommandBarPreferences.source(ofRowID: entry.id)
+        return entry.isAnswer || entry.answerValue != nil || source == .clipboard || source == .selection
+    }
+
+    private func copyableValue(for entry: CommandBarEntry) -> String {
+        if let link = scriptLink(for: entry) {
+            let typed = service.query.trimmingCharacters(in: .whitespaces)
+            let arg = CommandBarLinks.trailingArgument(query: typed, name: link.name) ?? ""
+            if let res = service.scriptRunner.cachedResult(linkID: link.id, argument: arg) {
+                return res.jsonPayload?.copyText ?? res.text
+            }
+        }
+        return entry.answerValue ?? entry.revealPath ?? entry.title
+    }
+
+    private func executeActionPanelItem(_ item: CommandBarActionItem, for entry: CommandBarEntry) {
+        switch item.id {
+        case "open":
+            showActionPanelOverlay = false
+            service.run(entry, fromClick: true)
+        case "reveal":
+            showActionPanelOverlay = false
+            service.revealInFinder(entry)
+        case "copy":
+            let value = copyableValue(for: entry)
+            copyTextToPasteboard(value)
+            showActionPanelOverlay = false
+        case "pin":
+            service.togglePin(entry)
+        case "transform":
+            let input = copyableValue(for: entry)
+            let candidate = ClipboardTransformEngine.apply(.jsonPretty, to: input)
+                ?? ClipboardTransformEngine.apply(.jwtDecode, to: input)
+                ?? ClipboardTransformEngine.apply(.colorOKLCH, to: input)
+                ?? ClipboardTransformEngine.apply(.base64Encode, to: input)
+                ?? ClipboardTransformEngine.apply(.sha256, to: input)
+            actionPanelTransformOutput = candidate
+        case "delete":
+            showActionPanelOverlay = false
+            service.toggleHidden(entry)
+        default:
+            break
+        }
+    }
+
+    private func actionShortcutDisplay(for actionID: String) -> String? {
+        switch actionID {
+        case "reveal": return "⌘⏎"
+        case "pin": return "⌘P"
+        case "hide": return "⌘⌫"
+        default: return nil
+        }
+    }
+
+    private func copyTextToPasteboard(_ value: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.declareVorssaintSource()
+        let ok = pasteboard.setString(value, forType: .string)
+        QuickToolHUD.show(
+            icon: ok ? "doc.on.doc" : "exclamationmark.circle",
+            message: ok ? value : text.copyFailed
+        )
+    }
+
+    private func scriptLink(for entry: CommandBarEntry) -> CommandBarLink? {
+        guard entry.id.hasPrefix("link."),
+              let uuid = UUID(uuidString: String(entry.id.dropFirst("link.".count))) else { return nil }
+        let links = CommandBarLinks.decode(UserDefaults.standard.data(forKey: DefaultsKey.commandBarLinks))
+        return links.first(where: { $0.id == uuid && $0.kind == .script })
+    }
+
+    private func syncScriptArgInputsForSelection() {
+        guard let entry = service.selectedEntry,
+              let link = scriptLink(for: entry) else {
+            scriptArgLinkID = nil
+            return
+        }
+        guard scriptArgLinkID != link.id else { return }
+        scriptArgLinkID = link.id
+        scriptArgInputs = ["", "", ""]
+    }
+
+    private func categoryTone(for source: CommandBarSource) -> SemanticCategoryTone {
+        switch source {
+        case .actions, .settingsPages, .macSettings:
+            return .brand
+        case .apps, .windows, .menus, .quitApps, .uninstallApps:
+            return .windowsDock
+        case .snippets, .emoji, .selection:
+            return .mouseKeyboard
+        case .clipboard, .files, .folders, .links:
+            return .clipboardFiles
+        case .answers, .calculator:
+            return .energyDisplay
+        case .killProcess:
+            return .tools
+        }
     }
 }
 

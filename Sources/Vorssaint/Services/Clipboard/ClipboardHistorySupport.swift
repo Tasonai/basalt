@@ -140,13 +140,13 @@ enum ClipboardHistoryChangeCount {
     }
 }
 
-enum ClipboardHistoryEntryKind: String, Codable {
+enum ClipboardHistoryEntryKind: String, Codable, Sendable {
     case text
     case image
     case files
 }
 
-struct ClipboardHistoryEntry: Codable, Equatable, Identifiable {
+struct ClipboardHistoryEntry: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     /// The content for text entries; empty for images and files, whose display
     /// strings are derived so they never go stale in storage.
@@ -167,6 +167,8 @@ struct ClipboardHistoryEntry: Codable, Equatable, Identifiable {
     /// a history written before it existed still decodes, and an older
     /// version reading this file skips the key.
     var sourceBundleID: String?
+    /// Offline Vision OCR text indexed in the background for image entries.
+    var ocrText: String? = nil
 
     init(id: UUID = UUID(),
          text: String,
@@ -177,7 +179,8 @@ struct ClipboardHistoryEntry: Codable, Equatable, Identifiable {
          imageFile: String? = nil,
          imageHash: String? = nil,
          imageWidth: Int? = nil,
-         imageHeight: Int? = nil) {
+         imageHeight: Int? = nil,
+         ocrText: String? = nil) {
         self.id = id
         self.text = text
         self.copiedAt = copiedAt
@@ -188,6 +191,7 @@ struct ClipboardHistoryEntry: Codable, Equatable, Identifiable {
         self.imageHash = imageHash
         self.imageWidth = imageWidth
         self.imageHeight = imageHeight
+        self.ocrText = ocrText
     }
 
     var isPinned: Bool {
@@ -268,21 +272,26 @@ struct ClipboardHistoryEntry: Codable, Equatable, Identifiable {
     }
 
     /// What the search box can match. Image entries carry the localized label
-    /// plus dimensions so typing "image"/"imagem" finds them.
+    /// plus dimensions and any indexed OCR text so typing recognized words finds them.
     func searchableText(imageLabel: String) -> String {
         switch kind {
         case .text: return text
-        case .image: return "\(imageLabel) png \(imageDimensionsLabel)"
+        case .image:
+            let base = "\(imageLabel) png \(imageDimensionsLabel)"
+            guard let ocrText, !ocrText.isEmpty else { return base }
+            return "\(base) \(ocrText)"
         case .files:
             let names = fileNames.joined(separator: " ")
             let hasImage = filePaths.contains { ClipboardHistoryImageSupport.isImageFileName($0) }
-            return hasImage ? "\(imageLabel) \(names)" : names
+            let base = hasImage ? "\(imageLabel) \(names)" : names
+            guard let ocrText, !ocrText.isEmpty else { return base }
+            return "\(base) \(ocrText)"
         }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, text, copiedAt, pinnedAt, kind, filePaths, imageFile, imageHash, imageWidth, imageHeight
-        case sourceBundleID
+        case sourceBundleID, ocrText
     }
 
     init(from decoder: Decoder) throws {
@@ -299,6 +308,7 @@ struct ClipboardHistoryEntry: Codable, Equatable, Identifiable {
         imageWidth = try container.decodeIfPresent(Int.self, forKey: .imageWidth)
         imageHeight = try container.decodeIfPresent(Int.self, forKey: .imageHeight)
         sourceBundleID = try container.decodeIfPresent(String.self, forKey: .sourceBundleID)
+        ocrText = try container.decodeIfPresent(String.self, forKey: .ocrText)
     }
 }
 
@@ -399,6 +409,7 @@ enum ClipboardHistoryEditing {
         // never encoded on the main thread just to be measured.
         let rawBound = pinned.reduce(0) { total, entry in
             total + 512 + entry.text.utf8.count + (entry.imageFile?.utf8.count ?? 0)
+                + (entry.ocrText?.utf8.count ?? 0)
                 + entry.filePaths.reduce(0) { $0 + $1.utf8.count + 3 }
         }
         guard rawBound > (byteLimit - 2) / 6 else { return true }
@@ -707,6 +718,10 @@ enum ClipboardHistorySearch {
         guard !tokens.isEmpty else { return true }
         let normalizedText = normalized(text)
         return tokens.allSatisfy { normalizedText.contains($0) }
+    }
+
+    static func matches(_ entry: ClipboardHistoryEntry, query: String, imageLabel: String = "Image") -> Bool {
+        matches(entry.searchableText(imageLabel: imageLabel), query: query)
     }
 
     /// Non-empty search tokens from a raw query, split by whitespace.
