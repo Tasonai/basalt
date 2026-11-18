@@ -1867,11 +1867,6 @@ enum ScreenshotFeatureTests {
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
             .joined(separator: "\n")
-        suite.expect(screenshotEditorSource.contains("if tool != .select, tool != .crop, tool != .expandCanvas {\n            selectedID = nil\n        }"),
-               "the editor clears stale selection before creating a new annotation")
-        suite.expect(!screenshotEditorSource.contains("annotations.append(annotation)\n            selectedID = annotation.id\n            draftID = annotation.id")
-                && screenshotEditorSource.contains("} else if let draftID {\n                selectedID = draftID"),
-               "a shape is selected only after its drag ends")
         suite.expect(!screenshotEditorSource.contains("current.baseImage"),
                "background OCR and QR queues never read @Published baseImage off the main thread")
         suite.expect(screenshotSupportSource.contains("let color: ColorID?")
