@@ -5,39 +5,44 @@
   </picture>
 </p>
 
-<h1 align="center">Vorssaint</h1>
+<h1 align="center">Vorssaint (Custom Intel Mac Fork)</h1>
 
 <p align="center">
   One menu bar icon doing the job of a dozen paid Mac apps.<br>
   Install only what you use.
 </p>
 
+> [!NOTE]
+> **Unofficial Custom Fork for Intel Macs (`x86_64`):** This repository is a custom, vibe-coded community alternative adapted for **Intel Macs** (with additional UI & pro workflow customizations), created because the official [vorssaint/vorssaint-utils](https://github.com/vorssaint/vorssaint-utils) app targets **Apple Silicon only**.
+>
+> All credit for the original architecture and concept belongs to **[@vorssaint](https://github.com/vorssaint)**. The **Buy Me a Coffee** donation link below is intentionally kept pointing directly to the original author — he did an awesome job building Vorssaint.
+
 <p align="center">
-  <a href="https://vorssaint.com">Website</a> ·
+  <a href="https://github.com/vorssaint/vorssaint-utils">Original Repo</a> ·
+  <a href="https://vorssaint.com">Original Website</a> ·
   <a href="#install">Install</a> ·
   <a href="#everything-it-does">Features</a> ·
   <a href="#private-by-default">Privacy</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
-  <a href="mailto:hello@vorssaint.com">Contact</a> ·
   <a href="https://discord.gg/M6BwWH4BJp">Discord</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/vorssaint/vorssaint-utils/releases"><img src="https://img.shields.io/github/v/release/vorssaint/vorssaint-utils?label=release&color=4c8dff" alt="Latest release"></a>
-  <a href="https://github.com/vorssaint/vorssaint-utils/releases"><img src="https://img.shields.io/github/downloads/vorssaint/vorssaint-utils/total?color=4c8dff" alt="Downloads"></a>
-  <a href="https://github.com/vorssaint/vorssaint-utils/actions/workflows/ci.yml"><img src="https://github.com/vorssaint/vorssaint-utils/actions/workflows/ci.yml/badge.svg?branch=main&event=push" alt="CI status"></a>
-  <a href="#what-you-need"><img src="https://img.shields.io/badge/macOS-14%2B%20Apple%20Silicon-black" alt="macOS 14 and newer, Apple Silicon"></a>
+  <a href="https://github.com/vorssaint/vorssaint-utils/releases"><img src="https://img.shields.io/github/v/release/vorssaint/vorssaint-utils?label=upstream%20release&color=4c8dff" alt="Latest upstream release"></a>
+  <a href="https://github.com/vorssaint/vorssaint-utils/releases"><img src="https://img.shields.io/github/downloads/vorssaint/vorssaint-utils/total?color=4c8dff" alt="Upstream downloads"></a>
+  <a href="#what-you-need"><img src="https://img.shields.io/badge/macOS-14%2B%20Intel%20(x86__64)%20Custom%20Fork-black" alt="macOS 14 and newer, Intel x86_64 Custom Fork"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License GPL 3.0 or later"></a>
 </p>
 
 <p align="center">
   <a href="https://buymeacoffee.com/vorssaint">
-    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="217" height="60" alt="Buy Me a Coffee">
-  </a>
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="217" height="60" alt="Buy Me a Coffee for original author @vorssaint">
+  </a><br>
+  <sub>Supports the original Vorssaint author (<a href="https://github.com/vorssaint">@vorssaint</a>) directly.</sub>
 </p>
 
 <p align="center">
-  For anything private, email
+  Original author contact:
   <a href="mailto:hello@vorssaint.com"><strong>hello@vorssaint.com</strong></a>.
 </p>
 
@@ -188,15 +193,25 @@ Reorder or hide panel sections, choose a compact layout, and export settings to 
 
 ## Install
 
-With [Homebrew](https://brew.sh):
+### Intel Mac (this custom fork)
+
+Build and install locally from this repository (Xcode Command Line Tools required):
+
+```sh
+git clone https://github.com/Tasonai/vorssaint-utils.git
+cd vorssaint-utils
+./build.sh --install
+```
+
+### Apple Silicon Mac (official upstream release)
+
+If you are on Apple Silicon, use the official release from [@vorssaint](https://github.com/vorssaint/vorssaint-utils) via [Homebrew](https://brew.sh):
 
 ```sh
 brew install --cask vorssaint
 ```
 
-Or grab the disk image from the [releases page](https://github.com/vorssaint/vorssaint-utils/releases) and drag Vorssaint into Applications.
-
-Builds are signed with an Apple Developer ID and notarized, so macOS opens them without a fuss and your permissions survive updates.
+Or grab the official disk image from the [upstream releases page](https://github.com/vorssaint/vorssaint-utils/releases) and drag Vorssaint into Applications. Official builds are signed with an Apple Developer ID and notarized.
 
 ## Uninstall
 
@@ -226,19 +241,19 @@ See the [permissions guide](docs/PERMISSIONS.md) for which features need access 
 
 ## What you need
 
-- A Mac with Apple Silicon
-- macOS 14 Sonoma or newer
+- **This custom fork:** A Mac with **Intel (`x86_64`)** or Apple Silicon running **macOS 14 Sonoma or newer**
+- **Official upstream build:** [vorssaint/vorssaint-utils](https://github.com/vorssaint/vorssaint-utils) supports **Apple Silicon only**
 
-### Build it yourself
+### Build this custom Intel fork yourself
 
 ```sh
-git clone https://github.com/vorssaint/vorssaint-utils.git
+git clone https://github.com/Tasonai/vorssaint-utils.git
 cd vorssaint-utils
 ./build.sh --dev            # build the separate Developer variant
-./build.sh --dev --install  # install and launch it
+./build.sh --install        # build and install locally to /Applications
 ```
 
-Xcode Command Line Tools are the only requirement. The [contributing guide](CONTRIBUTING.md) covers the layout and conventions. Official builds come only from the maintainer: the GPL covers the source, while the Vorssaint name, icon and look are covered by [TRADEMARKS.md](TRADEMARKS.md), so forks need their own identity.
+Xcode Command Line Tools are the only requirement. The [contributing guide](CONTRIBUTING.md) covers the layout and conventions. Official builds come only from the upstream maintainer: the GPL covers the source, while the Vorssaint name, icon and look are covered by [TRADEMARKS.md](TRADEMARKS.md). This fork is a personal/custom vibe-coded Intel Mac alternative and is not affiliated with or endorsed by the upstream maintainer.
 
 ## When something misbehaves
 
@@ -257,7 +272,7 @@ See [troubleshooting](docs/TROUBLESHOOTING.md) for launch problems, permissions 
 
 Vorssaint went from first commit to the front of GitHub trending in three days, top of the Swift charts, and issues and pull requests have shaped every release since. Bug reports, feature ideas and translations are all welcome, starting from the [contributing guide](CONTRIBUTING.md).
 
-Vorssaint is free and will stay that way. If it earned its place in your menu bar, a star helps other people find it, and a [coffee](https://buymeacoffee.com/vorssaint) keeps the maintainer awake, with or without the Keep awake feature.
+Vorssaint is free and will stay that way. If it earned its place in your menu bar, a star on the [original repository](https://github.com/vorssaint/vorssaint-utils) helps other people find it, and a [coffee](https://buymeacoffee.com/vorssaint) goes directly to the original author (`@vorssaint`) who built Vorssaint.
 
 ## Acknowledgements
 

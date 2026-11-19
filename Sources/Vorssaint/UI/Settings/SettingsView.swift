@@ -754,6 +754,15 @@ struct AboutSettings: View {
                     Text("\(l10n.s.versionPrefix) \(AppInfo.version)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if AppInfo.isCustomIntelFork {
+                        Text(CustomForkAttribution.localized(l10n.language).badge)
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.14))
+                            .foregroundStyle(Color.accentColor)
+                            .clipShape(Capsule())
+                    }
                     if AppInfo.isBeta {
                         Text(l10n.s.betaBadgeLabel)
                             .font(.system(size: 9, weight: .bold))
@@ -776,6 +785,35 @@ struct AboutSettings: View {
                 .font(.system(size: 12))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
+            if AppInfo.isCustomIntelFork {
+                let forkCopy = CustomForkAttribution.localized(l10n.language)
+                VStack(spacing: 6) {
+                    Text(forkCopy.aboutSummary)
+                        .font(.system(size: 11.5))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 12) {
+                        Link(forkCopy.originalRepoLabel, destination: AppInfo.repositoryURL)
+                            .font(.system(size: 11.5, weight: .medium))
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        Link(forkCopy.customForkRepoLabel, destination: AppInfo.customForkRepositoryURL)
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: 500)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.22), lineWidth: 1)
+                )
+            }
             HStack(spacing: 12) {
                 Button(l10n.s.reviewIntro) {
                     appDelegate()?.showOnboarding()
@@ -974,6 +1012,15 @@ struct SupportSettings: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+
+                if AppInfo.isCustomIntelFork {
+                    Text(CustomForkAttribution.localized(l10n.language).donateCreditNote)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 460)
+                }
 
                 HStack(alignment: .top, spacing: 14) {
                     Image(systemName: "star.fill")

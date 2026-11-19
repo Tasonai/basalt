@@ -920,3 +920,130 @@ private extension OverhaulV3Strings {
         clopExternalToolsBadge: "Clop CLI 編碼器"
     )
 }
+
+/// Clear attribution for this unofficial custom Intel Mac fork while keeping full credit and
+/// donation links pointing directly to the original Vorssaint author (@vorssaint).
+struct CustomForkAttribution {
+    let badge: String
+    let aboutSummary: String
+    let donateCreditNote: String
+    let originalRepoLabel: String
+    let customForkRepoLabel: String
+
+    static func localized(_ language: AppLanguage) -> CustomForkAttribution {
+        switch language {
+        case .ru:
+            return CustomForkAttribution(
+                badge: "Кастомная версия · Intel Mac",
+                aboutSummary: "Неофициальная кастомная навайбкоженная альтернатива для Mac на процессорах Intel (x86_64). Оригинальный Vorssaint работает только на Apple Silicon — этот форк создан на базе отличной работы автора @vorssaint.",
+                donateCreditNote: "Ссылка на донат ведёт напрямую оригинальному автору Vorssaint (@vorssaint) — он проделал огромную работу, на которой основана эта кастомная Intel-сборка.",
+                originalRepoLabel: "Оригинальный Vorssaint",
+                customForkRepoLabel: "Этот Intel-форк"
+            )
+        case .uk:
+            return CustomForkAttribution(
+                badge: "Кастомна версія · Intel Mac",
+                aboutSummary: "Неофіційна кастомна навайбкоджена альтернатива для Mac на процесорах Intel (x86_64). Оригінальний Vorssaint працює лише на Apple Silicon — цей форк створено на основі чудової роботи автора @vorssaint.",
+                donateCreditNote: "Посилання на донат веде напряму до оригінального автора Vorssaint (@vorssaint), чия чудова робота лежить в основі цієї кастомної Intel-збірки.",
+                originalRepoLabel: "Оригінальний Vorssaint",
+                customForkRepoLabel: "Цей Intel-форк"
+            )
+        case .de:
+            return CustomForkAttribution(
+                badge: "Custom Intel Mac Fork",
+                aboutSummary: "Inoffizielle, per Vibe-Coding angepasste Alternative für Intel-Macs (x86_64). Das offizielle Vorssaint läuft nur auf Apple Silicon — dieser Fork baut auf der großartigen Arbeit von @vorssaint auf.",
+                donateCreditNote: "Spenden über Buy Me a Coffee gehen direkt an den ursprünglichen Vorssaint-Autor (@vorssaint), auf dessen Arbeit dieser Intel-Fork basiert.",
+                originalRepoLabel: "Original Vorssaint",
+                customForkRepoLabel: "Intel-Fork"
+            )
+        case .fr:
+            return CustomForkAttribution(
+                badge: "Fork Custom · Intel Mac",
+                aboutSummary: "Alternative personnalisée et non officielle (vibe-codée) pour Mac Intel (x86_64). L’application officielle Vorssaint ne fonctionne que sur Apple Silicon — ce fork repose sur l’excellent travail de @vorssaint.",
+                donateCreditNote: "Le lien de don soutient directement l’auteur original de Vorssaint (@vorssaint), dont l’excellent travail est à la base de cette version Intel.",
+                originalRepoLabel: "Vorssaint original",
+                customForkRepoLabel: "Fork Intel"
+            )
+        case .es:
+            return CustomForkAttribution(
+                badge: "Fork Personalizado · Intel Mac",
+                aboutSummary: "Alternativa personalizada no oficial (vibe-coded) para Mac con Intel (x86_64). El Vorssaint oficial solo funciona en Apple Silicon; este fork se basa en el gran trabajo de @vorssaint.",
+                donateCreditNote: "Las donaciones van directamente al autor original de Vorssaint (@vorssaint), cuyo excelente trabajo hace posible esta versión para Intel.",
+                originalRepoLabel: "Vorssaint original",
+                customForkRepoLabel: "Fork Intel"
+            )
+        case .ptBR:
+            return CustomForkAttribution(
+                badge: "Fork Custom · Intel Mac",
+                aboutSummary: "Alternativa personalizada não oficial (vibe-coded) para Macs Intel (x86_64). O Vorssaint oficial funciona apenas no Apple Silicon — este fork é baseado no ótimo trabalho de @vorssaint.",
+                donateCreditNote: "As doações vão diretamente para o autor original do Vorssaint (@vorssaint), cujo excelente trabalho serve de base para esta edição Intel.",
+                originalRepoLabel: "Vorssaint original",
+                customForkRepoLabel: "Fork Intel"
+            )
+        case .it:
+            return CustomForkAttribution(
+                badge: "Fork Custom · Intel Mac",
+                aboutSummary: "Alternativa personalizzata non ufficiale (vibe-coded) per Mac Intel (x86_64). Vorssaint ufficiale funziona solo su Apple Silicon: questo fork nasce sull’ottimo lavoro di @vorssaint.",
+                donateCreditNote: "Le donazioni vanno direttamente all’autore originale di Vorssaint (@vorssaint), il cui ottimo lavoro è alla base di questa versione Intel.",
+                originalRepoLabel: "Vorssaint originale",
+                customForkRepoLabel: "Fork Intel"
+            )
+        case .tr:
+            return CustomForkAttribution(
+                badge: "Özel Intel Mac Çatalı",
+                aboutSummary: "Intel Mac (x86_64) için resmi olmayan, vibe-coded özel alternatif. Orijinal Vorssaint yalnızca Apple Silicon’da çalışır; bu sürüm @vorssaint’in harika çalışması üzerine kuruludur.",
+                donateCreditNote: "Bağış bağlantısı doğrudan bu özel Intel sürümünün temelini oluşturan orijinal Vorssaint yazarına (@vorssaint) gider.",
+                originalRepoLabel: "Orijinal Vorssaint",
+                customForkRepoLabel: "Intel Çatalı"
+            )
+        case .sk:
+            return CustomForkAttribution(
+                badge: "Vlastný Intel Mac Fork",
+                aboutSummary: "Neoficiálna vlastná (vibe-coded) alternatíva pre Intel Mac (x86_64). Oficiálny Vorssaint funguje iba na Apple Silicon — tento fork stavia na skvelej práci autora @vorssaint.",
+                donateCreditNote: "Odkaz na podporu smeruje priamo k pôvodnému autorovi Vorssaint (@vorssaint), na ktorého skvelej práci táto Intel verzia stojí.",
+                originalRepoLabel: "Pôvodný Vorssaint",
+                customForkRepoLabel: "Intel fork"
+            )
+        case .ja:
+            return CustomForkAttribution(
+                badge: "カスタム Intel Mac 版",
+                aboutSummary: "Intel Mac (x86_64) 向けの非公式カスタム（バイブコーディング）フォークです。公式 Vorssaint は Apple Silicon 専用のため、@vorssaint の素晴らしい開発成果をもとに Intel 向けに拡張しています。",
+                donateCreditNote: "寄付リンクはオリジナルの Vorssaint 開発者（@vorssaint）へ直接届きます。このカスタム Intel 版は同氏の素晴らしい仕事に基づいています。",
+                originalRepoLabel: "公式 Vorssaint",
+                customForkRepoLabel: "Intel フォーク"
+            )
+        case .ko:
+            return CustomForkAttribution(
+                badge: "커스텀 Intel Mac 포크",
+                aboutSummary: "Intel Mac(x86_64)을 위한 비공식 커스텀(바이브 코딩) 대안 버전입니다. 공식 Vorssaint는 Apple Silicon 전용이므로 @vorssaint의 훌륭한 원작을 바탕으로 Intel용으로 제작되었습니다.",
+                donateCreditNote: "후원 링크는 이 커스텀 Intel 버전의 기반이 된 원작자(@vorssaint)에게 직접 전달됩니다.",
+                originalRepoLabel: "원본 Vorssaint",
+                customForkRepoLabel: "Intel 포크"
+            )
+        case .zhHans:
+            return CustomForkAttribution(
+                badge: "定制版 · Intel Mac",
+                aboutSummary: "面向 Intel Mac (x86_64) 的非官方定制（vibe-coded）替代版本。官方 Vorssaint 仅支持 Apple Silicon，本分支基于原作者 @vorssaint 的出色作品构建。",
+                donateCreditNote: "赞助链接直接指向 Vorssaint 原作者（@vorssaint）——感谢他打造了如此优秀的基础项目。",
+                originalRepoLabel: "原版 Vorssaint",
+                customForkRepoLabel: "Intel 定制分支"
+            )
+        case .zhTW, .zhHK:
+            return CustomForkAttribution(
+                badge: "客製版 · Intel Mac",
+                aboutSummary: "專為 Intel Mac (x86_64) 打造的非官方客製（vibe-coded）替代版本。官方 Vorssaint 僅支援 Apple Silicon，本分支基於原作者 @vorssaint 的優秀作品延伸。",
+                donateCreditNote: "贊助連結直接導向 Vorssaint 原作者（@vorssaint）——感謝他奠定了如此出色的基礎。",
+                originalRepoLabel: "原版 Vorssaint",
+                customForkRepoLabel: "Intel 客製分支"
+            )
+        case .enUS:
+            return CustomForkAttribution(
+                badge: "Custom Intel Mac Fork",
+                aboutSummary: "Unofficial custom vibe-coded alternative for Intel Macs (x86_64). Official Vorssaint runs on Apple Silicon only — this custom fork builds on @vorssaint’s great work.",
+                donateCreditNote: "Donations go directly to the original Vorssaint author (@vorssaint), whose great work this custom Intel Mac build is based on.",
+                originalRepoLabel: "Original Vorssaint",
+                customForkRepoLabel: "Intel Fork"
+            )
+        }
+    }
+}

@@ -243,6 +243,13 @@ private struct UpdateSupportContent: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
+                if AppInfo.isCustomIntelFork {
+                    Text(CustomForkAttribution.localized(l10n.language).donateCreditNote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Button {
                     openURL(AppInfo.repositoryURL)
                 } label: {
