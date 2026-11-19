@@ -454,7 +454,7 @@ struct NotchSettings: View {
         switch module {
         case .controls:
             let primary = [NotchControlItem.music, .volume, .brightness, .keyboardLight]
-            HStack(spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 8)], spacing: 8) {
                 ForEach(primary) { item in
                     toggleCard(item.title(l10n), symbol: item.symbol, value: controlBinding(item), available: item.isAvailable(),
                                reason: controlReason(item), reservesReason: !primary.allSatisfy { $0.isAvailable() },
@@ -483,19 +483,21 @@ struct NotchSettings: View {
             switchRow("play.rectangle", music.includeOtherPlayers, isOn: $includeOtherPlayers)
             SettingsFeatureSwitchRow(symbol: "speaker.wave.2", title: music.showVolume,
                                      isOn: $musicShowVolume, feature: .mixer)
-            SettingsRow(symbol: "arrow.up.forward.app", title: music.preferredPlayer, caption: music.preferredPlayerHint) {
-                Picker(music.preferredPlayer, selection: $preferredPlayer) {
-                    Text(music.automaticSource).tag(NotchPreferredPlayer.automatic)
-                    ForEach(NotchPreferredPlayer.choices(in: preferredPlayers ?? [], including: preferredPlayer), id: \.bundleID) { app in
-                        Text(app.name).tag(app.bundleID)
-                    }
+            SettingsMenuRow(symbol: "arrow.up.forward.app", title: music.preferredPlayer, selection: $preferredPlayer) {
+                Text(music.automaticSource).tag(NotchPreferredPlayer.automatic)
+                ForEach(NotchPreferredPlayer.choices(in: preferredPlayers ?? [], including: preferredPlayer), id: \.bundleID) { app in
+                    Text(app.name).tag(app.bundleID)
                 }
-                .labelsHidden()
             }
             .task {
                 guard let choices = await NotchPreferredPlayer.loadInstalled(), !Task.isCancelled else { return }
                 preferredPlayers = choices
             }
+            Text(music.preferredPlayerHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, settingsRowTextInset)
             SettingsFeatureSwitchRow(symbol: "text.quote", title: music.enableLyrics, isOn: $lyricsEnabled, feature: .notchLyrics)
             if lyricsEnabled, AppFeature.notchLyrics.isAvailable {
                 switchRow("globe", music.online, caption: music.onlineHint, isOn: $lyricsOnline)
@@ -517,12 +519,25 @@ struct NotchSettings: View {
                 .toggleStyle(TrailingSwitchToggleStyle())
         case .calendar:
             let calendar = FeatureStrings.notchCalendar(l10n.language)
+            let planner = NotchPlannerStrings.localized(l10n.language)
             Text(calendar.permission).font(.callout).foregroundStyle(.secondary)
             if permissions.calendarAccess == .fullAccess {
                 Label(l10n.s.permissionGranted, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else {
                 Button(calendar.allow, action: permissions.requestCalendar).disabled(permissions.requestingCalendar)
                 Button(calendar.settings, action: permissions.openCalendarSettings)
+            }
+            Divider()
+            Text(planner.remindersPermissionPrompt).font(.callout).foregroundStyle(.secondary)
+            if permissions.remindersAccess == .fullAccess {
+                Label("\(planner.remindersTitle): \(l10n.s.permissionGranted)", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else {
+                HStack(spacing: 8) {
+                    Button(planner.allowReminders, action: permissions.requestReminders)
+                        .disabled(permissions.requestingReminders)
+                    Button(planner.openRemindersSettings, action: permissions.openRemindersSettings)
+                }
             }
             Divider()
             switchRow("calendar.badge.clock", calendar.countdown, caption: calendar.countdownHint,
@@ -740,28 +755,24 @@ struct NotchSettings: View {
                 let overhaul = OverhaulStrings.localized(l10n.language)
                 switchRow("moon.fill", overhaul.focusModeTitle, caption: overhaul.focusModeCaption, isOn: $respectFocusMode)
                 switchRow("sparkles.square.filled.on.square", overhaul.smartOrderTitle, caption: overhaul.smartOrderCaption, isOn: $smartContextualOrder)
-                SettingsRow(symbol: "arrow.uturn.backward", title: editor.reopening) {
-                    Picker(editor.reopening, selection: Binding(get: {
-                        guard returnHome else { return "" }
-                        return NotchModule(rawValue: homeModule) != nil
-                            || NotchReopeningDestination(rawValue: homeModule) != nil
-                            ? homeModule : NotchModule.controls.rawValue
-                    }, set: { value in
-                        returnHome = !value.isEmpty
-                        if returnHome { homeModule = value }
-                    })) {
-                        Text(editor.lastPage).tag("")
-                        Text(text.panel).tag(NotchReopeningDestination.appPanel.rawValue)
-                        Text(text.sectionsTitle).tag(NotchReopeningDestination.explore.rawValue)
-                        ForEach(NotchSupport.modules()) { module in
-                            Text(module.title(l10n.language)).tag(module.rawValue)
-                        }
-                        if let saved = NotchModule(rawValue: homeModule), !NotchSupport.modules().contains(saved) {
-                            Text(saved.title(l10n.language)).tag(homeModule).disabled(true)
-                        }
+                SettingsMenuRow(symbol: "arrow.uturn.backward", title: editor.reopening, selection: Binding(get: {
+                    guard returnHome else { return "" }
+                    return NotchModule(rawValue: homeModule) != nil
+                        || NotchReopeningDestination(rawValue: homeModule) != nil
+                        ? homeModule : NotchModule.controls.rawValue
+                }, set: { value in
+                    returnHome = !value.isEmpty
+                    if returnHome { homeModule = value }
+                })) {
+                    Text(editor.lastPage).tag("")
+                    Text(text.panel).tag(NotchReopeningDestination.appPanel.rawValue)
+                    Text(text.sectionsTitle).tag(NotchReopeningDestination.explore.rawValue)
+                    ForEach(NotchSupport.modules()) { module in
+                        Text(module.title(l10n.language)).tag(module.rawValue)
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
+                    if let saved = NotchModule(rawValue: homeModule), !NotchSupport.modules().contains(saved) {
+                        Text(saved.title(l10n.language)).tag(homeModule).disabled(true)
+                    }
                 }
                 switchRow("livephoto", editor.openActivity, caption: editor.openActivityHint, isOn: $opensActivity)
             }

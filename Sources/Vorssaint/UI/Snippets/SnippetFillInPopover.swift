@@ -46,7 +46,7 @@ final class SnippetFillInPopoverController: OverlayPanel {
                    styleMask: [.borderless, .nonactivatingPanel],
                    backing: backingStoreType,
                    defer: flag)
-        title = "Vorssaint"
+        title = AppInfo.name
         isReleasedWhenClosed = false
         isOpaque = false
         backgroundColor = .clear

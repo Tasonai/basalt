@@ -166,6 +166,8 @@ final class NotchService: ObservableObject {
     /// Find runs against the island's own text view, which the page holds;
     /// the key arrives here, so it is passed on the way Command-W already is.
     @Published private(set) var scratchpadFindSerial = 0
+    /// Bumped when Command-N opens the inline Quick Capture composer on the Calendar/Reminders page.
+    @Published private(set) var calendarQuickCreateSerial = 0
     private(set) var scratchpadFindAction = NSTextFinder.Action.showFindInterface
     /// The last ⌘1–⌘9 pressed on the Clipboard page, which the page turns
     /// into a paste of the entry at that place.
@@ -238,6 +240,7 @@ final class NotchService: ObservableObject {
     /// the preferences: the open page's geometry is read on every layout pass.
     private var homeControls: [NotchControlItem] = []
     private var fileInteractionActive = false
+    private var calendarQuickCaptureActive = false
     /// A screenshot preview stays when the pointer leaves or another app
     /// activates. It leaves on its own timer or on a click elsewhere.
     private var keepsWorkingSurface: Bool { keepsSurfaceOnClick || showsCapturePreview }
@@ -250,7 +253,7 @@ final class NotchService: ObservableObject {
             || (expanded && selected == .downloads && NotchDownloadService.shared.isChoosingFolder)
             || (expanded && selected == .scratchpad && ScratchpadService.shared.modalInteractionActive)
             || (expanded && showingAppPanel && WallpaperService.shared.isChoosingSource)
-            || (expanded && !showingSections && selected == .calendar && Permissions.shared.keepsCalendarPrompt)
+            || (expanded && !showingSections && selected == .calendar && (Permissions.shared.keepsCalendarPrompt || calendarQuickCaptureActive))
             || (expanded && !showingSections && selected == .files && fileInteractionActive)
             || CameraPreviewService.shared.keepsNotchPermissionPrompt
             || (expanded && !showingSections && selected == .tools && (QuickLauncherService.shared.activeUtility != nil || QuickLauncherService.shared.isEditing))
@@ -945,7 +948,7 @@ final class NotchService: ObservableObject {
     }
     /// A detail's title, the app panel's, or the island's own with no sections.
     var detailTitle: String {
-        if showingAppPanel { return "Vorssaint" }
+        if showingAppPanel { return AppInfo.name }
         let language = L10n.shared.language
         guard let metric = selectedMetric else { return FeatureStrings.notch(language).title }
         // The fan card opens Fan Control, so its page shares that title.
@@ -1207,6 +1210,7 @@ final class NotchService: ObservableObject {
         homeControls = NotchSupport.controls()
         NotchDownloadService.shared.syncWithPreferences()
         NotchCalendarService.shared.syncWithPreferences()
+        NotchRemindersService.shared.syncWithPreferences()
         NotchNotificationService.shared.syncWithPreferences()
         NotchAudioLevelService.shared.syncWithPreferences()
         AgentUsageService.shared.syncWithPreferences()
@@ -1366,6 +1370,7 @@ final class NotchService: ObservableObject {
         NotchAccessoryService.shared.suspend()
         NotchDownloadService.shared.stop()
         NotchCalendarService.shared.stop()
+        NotchRemindersService.shared.stop()
         NotchNotificationService.shared.stop()
         AgentUsageService.shared.pause()
         settingsSignature = ""
@@ -1903,6 +1908,25 @@ final class NotchService: ObservableObject {
 
     /// The floating pad's tab shortcuts work on its page too. With one pad
     /// left, Command-W closes the island the way it hides the pad.
+    func setCalendarQuickCaptureActive(_ active: Bool) {
+        calendarQuickCaptureActive = active
+        guard active else { return }
+        openedByHover = false
+        panel?.acceptsKeyFocus = true
+        panel?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func handleCalendarPlannerKey(_ event: NSEvent) -> Bool {
+        guard selected == .calendar, !showingAppPanel, !showingSections, selectedMetric == nil else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        // Match physical ANSI N (keyCode 45) as well as Latin "n" so ⌘N works on Russian/non-Latin layouts.
+        let isN = event.keyCode == 45 || event.charactersIgnoringModifiers?.lowercased() == "n"
+        guard modifiers == .command, isN else { return false }
+        calendarQuickCreateSerial += 1
+        return true
+    }
+
     private func handleScratchpadKey(_ event: NSEvent) -> Bool {
         guard selected == .scratchpad, !showingAppPanel, !showingSections, selectedMetric == nil else { return false }
         let pad = ScratchpadService.shared
@@ -4128,6 +4152,7 @@ final class NotchService: ObservableObject {
                     return nil
                 }
                 if self.handleSectionKey(event) { return nil }
+                if self.handleCalendarPlannerKey(event) { return nil }
                 if self.handleScratchpadKey(event) { return nil }
                 if self.handleClipboardPasteKey(event) { return nil }
             }

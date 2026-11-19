@@ -67,15 +67,17 @@ struct CommandBarSettings: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(text.positionCaption)
                     Label(text.privacyNote, systemImage: "lock.laptopcomputer")
-                    HStack(spacing: 6) {
-                        Text(text.tryTheseLabel)
-                            .foregroundStyle(.tertiary)
-                        ForEach(examples, id: \.self) { example in
-                            Text(example)
-                                .font(.system(size: 10.5, design: .rounded))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            Text(text.tryTheseLabel)
+                                .foregroundStyle(.tertiary)
+                            ForEach(examples, id: \.self) { example in
+                                Text(example)
+                                    .font(.system(size: 10.5, design: .rounded))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.primary.opacity(0.06)))
+                            }
                         }
                     }
                     .padding(.top, 2)

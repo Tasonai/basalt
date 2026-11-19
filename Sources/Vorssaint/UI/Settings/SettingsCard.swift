@@ -43,17 +43,19 @@ struct SettingsRow<Accessory: View>: View {
     let badge: String?
     let caption: String?
     let tint: Color?
+    let singleLineTitle: Bool
     let accessory: Accessory
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     init(symbol: String?, title: String, badge: String? = nil, caption: String? = nil,
-         tint: Color? = nil, @ViewBuilder accessory: () -> Accessory) {
+         tint: Color? = nil, singleLineTitle: Bool = false, @ViewBuilder accessory: () -> Accessory) {
         self.symbol = symbol
         self.title = title
         self.badge = badge
         self.caption = caption
         self.tint = tint
+        self.singleLineTitle = singleLineTitle
         self.accessory = accessory()
     }
 
@@ -64,9 +66,9 @@ struct SettingsRow<Accessory: View>: View {
                 HStack(spacing: 6) {
                     Text(title)
                         .font(.system(size: 13, weight: .regular))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.9)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(singleLineTitle ? 1 : 2)
+                        .minimumScaleFactor(singleLineTitle ? 1.0 : 0.9)
+                        .fixedSize(horizontal: singleLineTitle, vertical: true)
                     if let badge {
                         Text(badge)
                             .font(.system(size: 8, weight: .bold))
@@ -85,7 +87,7 @@ struct SettingsRow<Accessory: View>: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer(minLength: 12)
+            Spacer(minLength: singleLineTitle ? 16 : 12)
             accessory
         }
     }
@@ -187,7 +189,7 @@ struct SettingsChoiceRow<Value: Hashable, Options: View>: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            SettingsRow(symbol: symbol, title: title) {
+            SettingsRow(symbol: symbol, title: title, singleLineTitle: true) {
                 picker.pickerStyle(.segmented).fixedSize()
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -226,14 +228,19 @@ struct SettingsMenuRow<Value: Hashable, Options: View>: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            SettingsRow(symbol: symbol, title: title) { menu }
+            SettingsRow(symbol: symbol, title: title, singleLineTitle: true) { menu }
             VStack(alignment: .leading, spacing: 8) {
                 SettingsRow(symbol: symbol, title: title) { EmptyView() }
                 // Only the menu's width decides here: a title too long for one
-                // line wraps above it either way.
+                // line wraps above it either way; if the menu itself is wider than
+                // a narrow card, let it truncate inside the card instead of overflowing.
                 ViewThatFits(in: .horizontal) {
                     menu.padding(.leading, settingsRowTextInset)
                     menu
+                    Picker(title, selection: $selection) { options }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

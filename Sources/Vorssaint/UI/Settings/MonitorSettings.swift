@@ -139,16 +139,22 @@ struct MonitorSettings: View {
                 }
             }
             Divider()
-            SettingsRow(symbol: "arrow.left.and.right", title: l10n.s.menuBarSpacingLabel) {
-                VorssaintSegmentedTabs(
-                    selection: $metricSpacing,
-                    options: [
-                        .init("standard", title: l10n.s.menuBarSpacingStandard),
-                        .init("compact", title: l10n.s.menuBarSpacingCompact),
-                    ],
-                    tone: .monitor
-                )
-                .fixedSize()
+            let spacingTabs = VorssaintSegmentedTabs(
+                selection: $metricSpacing,
+                options: [
+                    .init("standard", title: l10n.s.menuBarSpacingStandard),
+                    .init("compact", title: l10n.s.menuBarSpacingCompact),
+                ],
+                tone: .monitor
+            ).fixedSize()
+            ViewThatFits(in: .horizontal) {
+                SettingsRow(symbol: "arrow.left.and.right", title: l10n.s.menuBarSpacingLabel, singleLineTitle: true) {
+                    spacingTabs
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    SettingsRow(symbol: "arrow.left.and.right", title: l10n.s.menuBarSpacingLabel) { EmptyView() }
+                    spacingTabs.padding(.leading, settingsRowTextInset)
+                }
             }
             SettingsRow(symbol: "eye.slash", title: l10n.s.menuBarHideIconToggle,
                         caption: l10n.s.menuBarHideIconCaption) {
@@ -197,16 +203,22 @@ struct MonitorSettings: View {
                 }
             }
             if AppFeature.monitorMemory.isAvailable {
-                SettingsRow(symbol: "memorychip", title: l10n.s.monitorMemoryMetricLabel) {
-                    VorssaintSegmentedTabs(
-                        selection: $memoryMetric,
-                        options: [
-                            .init("used", title: l10n.s.memoryMetricUsed),
-                            .init("app", title: l10n.s.memoryMetricApp),
-                        ],
-                        tone: .monitor
-                    )
-                    .fixedSize()
+                let memoryTabs = VorssaintSegmentedTabs(
+                    selection: $memoryMetric,
+                    options: [
+                        .init("used", title: l10n.s.memoryMetricUsed),
+                        .init("app", title: l10n.s.memoryMetricApp),
+                    ],
+                    tone: .monitor
+                ).fixedSize()
+                ViewThatFits(in: .horizontal) {
+                    SettingsRow(symbol: "memorychip", title: l10n.s.monitorMemoryMetricLabel, singleLineTitle: true) {
+                        memoryTabs
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        SettingsRow(symbol: "memorychip", title: l10n.s.monitorMemoryMetricLabel) { EmptyView() }
+                        memoryTabs.padding(.leading, settingsRowTextInset)
+                    }
                 }
             }
         }

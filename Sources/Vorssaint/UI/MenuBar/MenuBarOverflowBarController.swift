@@ -17,7 +17,7 @@ final class MenuBarOverflowBarPanel: OverlayPanel {
             backing: .buffered,
             defer: false
         )
-        title = "Vorssaint"
+        title = AppInfo.name
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         isOpaque = false

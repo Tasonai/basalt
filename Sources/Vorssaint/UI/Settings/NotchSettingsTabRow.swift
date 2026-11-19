@@ -23,14 +23,16 @@ struct NotchSettingsTabRow: View {
 
     var body: some View {
         let text = FeatureStrings.notch(language)
-        let segmentedSize = measuredSegmentedSize
-        HStack {
+        HStack(spacing: 8) {
             ViewThatFits(in: .horizontal) {
-                Color.clear
-                    .frame(width: segmentedSize.width, height: segmentedSize.height)
-                    .overlay { picker.pickerStyle(.segmented).fixedSize() }
-                picker.pickerStyle(.menu)
+                picker
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                picker
+                    .pickerStyle(.menu)
+                    .fixedSize()
             }
+            Spacer(minLength: 4)
             Button(action: open) { Image(systemName: "arrow.up.forward.app") }
                 .buttonStyle(.bordered).disabled(!canOpen).help(text.open).accessibilityLabel(text.open)
         }
@@ -49,7 +51,8 @@ struct NotchSettingsTabRow: View {
         let control = NSSegmentedControl(labels: segmentTitles, trackingMode: .selectOne, target: nil, action: nil)
         let fitting = control.fittingSize
         let alignment = control.alignmentRect(forFrame: NSRect(origin: .zero, size: fitting)).size
-        return CGSize(width: ceil(alignment.width), height: ceil(alignment.height))
+        // macOS 26 Liquid Glass segmented controls draw slightly wider capsule pills than classic alignmentRect reports.
+        return CGSize(width: ceil(alignment.width) + 16, height: ceil(alignment.height))
     }
 
     private var selectionBinding: Binding<NotchSettingsTab> {

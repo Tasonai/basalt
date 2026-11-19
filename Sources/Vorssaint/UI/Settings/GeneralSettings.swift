@@ -82,14 +82,10 @@ struct GeneralSettings: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Divider()
-            SettingsRow(symbol: "globe", title: l10n.s.languageLabel) {
-                Picker(l10n.s.languageLabel, selection: $l10n.language) {
-                    ForEach(AppLanguage.allCases) { language in
-                        Text(language.displayName).tag(language)
-                    }
+            SettingsMenuRow(symbol: "globe", title: l10n.s.languageLabel, selection: $l10n.language) {
+                ForEach(AppLanguage.allCases) { language in
+                    Text(language.displayName).tag(language)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
             }
         }
     }

@@ -1021,9 +1021,31 @@ struct ScreenshotDefaultActionPicker: View {
     @Binding var selection: String
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                Text(strings.defaultActionLabel)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                    .fixedSize()
+                Spacer(minLength: 8)
+                menuPicker.fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(strings.defaultActionLabel)
+                    .font(.system(size: 13))
+                    .fixedSize(horizontal: false, vertical: true)
+                menuPicker
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var menuPicker: some View {
         Picker(strings.defaultActionLabel, selection: $selection) {
             Self.options(strings: strings)
         }
+        .pickerStyle(.menu)
+        .labelsHidden()
     }
 
     @ViewBuilder

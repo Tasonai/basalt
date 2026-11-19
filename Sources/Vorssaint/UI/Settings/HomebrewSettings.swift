@@ -118,17 +118,26 @@ struct HomebrewSettings: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                VorssaintSegmentedTabs(
-                    selection: $installedFilter,
-                    options: [
-                        .init(.all, title: "\(l10n.s.homebrewAll) \(homebrew.installed.count)"),
-                        .init(.cask, title: "\(l10n.s.homebrewCasks) \(installedCaskCount)"),
-                        .init(.formula, title: "\(l10n.s.homebrewFormulas) \(installedFormulaCount)"),
-                    ],
-                    tone: .tools
-                )
-                outdatedSummary
+            let filterTabs = VorssaintSegmentedTabs(
+                selection: $installedFilter,
+                options: [
+                    .init(.all, title: "\(l10n.s.homebrewAll) \(homebrew.installed.count)"),
+                    .init(.cask, title: "\(l10n.s.homebrewCasks) \(installedCaskCount)"),
+                    .init(.formula, title: "\(l10n.s.homebrewFormulas) \(installedFormulaCount)"),
+                ],
+                tone: .tools
+            )
+            .fixedSize()
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    filterTabs
+                    Spacer(minLength: 8)
+                    outdatedSummary
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    filterTabs
+                    outdatedSummary
+                }
             }
             HStack {
                 Spacer(minLength: 0)

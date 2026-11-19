@@ -228,7 +228,7 @@ final class InlineAISelectionHUDController: ObservableObject {
             backing: .buffered,
             defer: false
         )
-        created.title = "Vorssaint"
+        created.title = AppInfo.name
         created.isReleasedWhenClosed = false
         created.isOpaque = false
         created.backgroundColor = .clear

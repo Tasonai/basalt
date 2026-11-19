@@ -31,11 +31,19 @@ final class Permissions: ObservableObject {
     @Published private(set) var requestingCalendar = false
     @Published private(set) var calendarRequestFailed = false
     private var calendarPermissionResolution: TimeInterval?
+    @Published private(set) var remindersAccess = EKEventStore.authorizationStatus(for: .reminder)
+    @Published private(set) var requestingReminders = false
+    @Published private(set) var remindersRequestFailed = false
+    private var remindersPermissionResolution: TimeInterval?
 
     var keepsCalendarPrompt: Bool {
-        NotchSupport.keepsPermissionSurface(requesting: requestingCalendar,
-                                            resolvedAt: calendarPermissionResolution,
-                                            now: ProcessInfo.processInfo.systemUptime)
+        let now = ProcessInfo.processInfo.systemUptime
+        return NotchSupport.keepsPermissionSurface(requesting: requestingCalendar,
+                                                   resolvedAt: calendarPermissionResolution,
+                                                   now: now)
+            || NotchSupport.keepsPermissionSurface(requesting: requestingReminders,
+                                                   resolvedAt: remindersPermissionResolution,
+                                                   now: now)
     }
     /// Optional microphone access, used only while a recording that asked for
     /// it is active.
@@ -135,7 +143,10 @@ final class Permissions: ObservableObject {
         refreshActivePermissions()
         refreshNotificationPermission()
         refreshCameraPermission()
-        calendarAccess = EKEventStore.authorizationStatus(for: .event)
+        let newCal = EKEventStore.authorizationStatus(for: .event)
+        if calendarAccess != newCal { calendarAccess = newCal }
+        let newRem = EKEventStore.authorizationStatus(for: .reminder)
+        if remindersAccess != newRem { remindersAccess = newRem }
         refreshMicrophonePermission()
         // Checking Full Disk Access means asking the system about protected
         // folders, and every refused answer costs time. Doing that where the
@@ -364,6 +375,27 @@ final class Permissions: ObservableObject {
 
     func openCalendarSettings() {
         open(pane: "Privacy_Calendars")
+    }
+
+    func requestReminders() {
+        guard !requestingReminders else { return }
+        requestingReminders = true
+        remindersRequestFailed = false
+        let store = EKEventStore()
+        store.requestFullAccessToReminders { [weak self, store] _, error in
+            _ = store
+            DispatchQueue.main.async {
+                self?.remindersPermissionResolution = ProcessInfo.processInfo.systemUptime
+                self?.requestingReminders = false
+                let status = EKEventStore.authorizationStatus(for: .reminder)
+                self?.remindersRequestFailed = NotchCalendarSupport.requestFailed(status: status, hasError: error != nil)
+                self?.remindersAccess = status
+            }
+        }
+    }
+
+    func openRemindersSettings() {
+        open(pane: "Privacy_Reminders")
     }
 
     func requestCamera() {

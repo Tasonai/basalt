@@ -4050,6 +4050,95 @@ enum NotchTests {
                "a repeating all-day occurrence keeps its local day")
         suite.expect(link(ended, identifier: "", recurring: false) == nil,
                "an appointment without an identifier falls back to opening Calendar itself")
+
+        // MARK: - Monolith 2.0-class Daily Planner (Reminders + Split View + Drag/Drop + ⌘N)
+        let plannerNow = date(2026, 3, 8, 14).addingTimeInterval(20 * 60)
+        let overdueRem = NotchReminderItem(
+            id: "r1", title: "Send invoice", listID: "l1", listTitle: "Work",
+            dueDate: date(2026, 3, 8, 12), hasDueTime: true, isCompleted: false,
+            priority: 1, color: .fallback, notes: ""
+        )
+        let todayRem = NotchReminderItem(
+            id: "r2", title: "Review PR", listID: "l1", listTitle: "Work",
+            dueDate: date(2026, 3, 8, 18), hasDueTime: true, isCompleted: false,
+            priority: 5, color: .fallback, notes: ""
+        )
+        let upcomingRem = NotchReminderItem(
+            id: "r3", title: "Dentist", listID: "l2", listTitle: "Personal",
+            dueDate: date(2026, 3, 10, 0), hasDueTime: false, isCompleted: false,
+            priority: 0, color: .fallback, notes: ""
+        )
+        let anytimeRem = NotchReminderItem(
+            id: "r4", title: "Read docs", listID: "l2", listTitle: "Personal",
+            dueDate: nil, hasDueTime: false, isCompleted: false,
+            priority: 0, color: .fallback, notes: ""
+        )
+        let doneRem = NotchReminderItem(
+            id: "r5", title: "Done item", listID: "l1", listTitle: "Work",
+            dueDate: date(2026, 3, 8, 9), hasDueTime: true, isCompleted: true,
+            priority: 1, color: .fallback, notes: ""
+        )
+        let allReminders = [anytimeRem, upcomingRem, doneRem, todayRem, overdueRem]
+        let allGroups = NotchRemindersSupport.grouped(allReminders, filter: .all, now: plannerNow, calendar: calendar)
+        suite.expect(allGroups.map(\.bucket) == [.overdue, .today, .upcoming, .anytime],
+                     "reminders group cleanly into overdue, today, upcoming, and anytime while excluding completed")
+        let todayOnly = NotchRemindersSupport.grouped(allReminders, filter: .today, now: plannerNow, calendar: calendar)
+        suite.expect(todayOnly.map(\.bucket) == [.overdue, .today],
+                     "today filter surfaces both overdue and today reminders")
+        let overdueOnly = NotchRemindersSupport.grouped(allReminders, filter: .overdue, now: plannerNow, calendar: calendar)
+        suite.expect(overdueOnly.map(\.bucket) == [.overdue] && overdueOnly[0].items.map(\.id) == ["r1"],
+                     "overdue filter isolates past-due reminders")
+
+        // Split-view column math
+        let bal = NotchRemindersSupport.columnWidths(totalWidth: 500, spacing: 12, ratio: .balanced)
+        suite.expect(abs(bal.calendar - 244) < 0.01 && abs(bal.reminders - 244) < 0.01,
+                     "balanced 50/50 split divides usable width evenly")
+        let focus = NotchRemindersSupport.columnWidths(totalWidth: 500, spacing: 12, ratio: .calendarFocus)
+        suite.expect(focus.calendar > focus.reminders && abs((focus.calendar + focus.reminders) - 488) < 0.01,
+                     "70/30 calendar focus keeps calendar wider while preserving total width")
+        let onlyCal = NotchRemindersSupport.columnWidths(totalWidth: 500, spacing: 12, ratio: .calendarOnly)
+        suite.expect(onlyCal.calendar == 500 && onlyCal.reminders == 0,
+                     "calendar-only layout allocates full width to calendar")
+
+        // Drag-and-drop payload + reschedule + time-blocking
+        let payload = NotchRemindersSupport.encodeDragPayload(reminderID: "r1")
+        suite.expect(NotchRemindersSupport.decodeDragPayload(payload) == "r1"
+                     && NotchRemindersSupport.decodeDragPayload("https://example.com") == nil,
+                     "drag payload round-trips reminder IDs and rejects unrelated text")
+        let rescheduled = NotchRemindersSupport.rescheduleComponents(
+            for: date(2026, 3, 9), preserving: overdueRem.dueDate, hasDueTime: true, calendar: calendar
+        )
+        suite.expect(rescheduled.day == 9 && rescheduled.hour == 12 && rescheduled.minute == 0,
+                     "rescheduling preserves existing time-of-day when moving a timed reminder to another day")
+        let activeMeeting = NotchCalendarEvent(
+            id: "now-ev", title: "Standup", calendar: "Work",
+            start: date(2026, 3, 8, 14), end: date(2026, 3, 8, 14).addingTimeInterval(40 * 60),
+            allDay: false, location: "", color: .fallback
+        )
+        let tomorrowMeeting = NotchCalendarEvent(
+            id: "tmrw-ev", title: "Design Sync", calendar: "Work",
+            start: date(2026, 3, 9, 10), end: date(2026, 3, 9, 11),
+            allDay: false, location: "", color: .fallback
+        )
+        let summary = NotchRemindersSupport.nowAndTomorrow(
+            events: [activeMeeting, tomorrowMeeting], now: plannerNow, calendar: calendar
+        )
+        suite.expect(summary.activeEvent?.id == "now-ev"
+                     && summary.remainingMinutes == 20
+                     && abs((summary.activeProgress ?? 0) - 0.5) < 0.01
+                     && summary.tomorrowEvents.map(\.id) == ["tmrw-ev"],
+                     "NOW + Tomorrow summary calculates live progress, remaining minutes, and tomorrow's events")
+        let timeBlock = NotchRemindersSupport.timeBlockInterval(
+            after: activeMeeting, on: date(2026, 3, 8), now: plannerNow, durationMinutes: 30, calendar: calendar
+        )
+        suite.expect(timeBlock.start == activeMeeting.end && timeBlock.duration == 1800,
+                     "dropping a reminder onto an event time-blocks immediately after it")
+        suite.expect(NotchRemindersSupport.sanitizedTitle("   ") == nil
+                     && NotchRemindersSupport.sanitizedTitle("  Ship Basalt  ") == "Ship Basalt",
+                     "quick capture rejects blank titles and trims whitespace")
+        suite.expect(AppLanguage.allCases.allSatisfy { !NotchPlannerStrings.localized($0).nowBadge.isEmpty
+                                                     && !NotchPlannerStrings.localized($0).remindersTitle.isEmpty },
+                     "all 15 languages provide non-empty planner localization strings")
     }
 
 }

@@ -9,75 +9,329 @@ struct NotchCalendarView: View {
     @Environment(\.notchSettingsPreview) private var preview
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var calendar = NotchCalendarService.shared
+    @ObservedObject private var reminders = NotchRemindersService.shared
+    @ObservedObject private var notch = NotchService.shared
     @ObservedObject private var permissions = Permissions.shared
     @AppStorage(DefaultsKey.notchCalendarCountdown) private var countdownForEvery = false
+    @AppStorage(DefaultsKey.notchPlannerSplitRatio) private var splitRatioRaw = NotchPlannerSplitRatio.balanced.rawValue
+    @AppStorage(DefaultsKey.notchPlannerSwapped) private var plannerSwapped = false
     @Environment(\.notchBand) private var band
     /// The day the month grid or the week strip is built around.
     @State private var focus = Date()
     @State private var selectedDay: Date?
     /// The strip's month grid, in place of the strip and the cards.
     @State private var showingMonth = false
+    @State private var showingQuickCapture = false
+    @State private var hoveringTodayDrop = false
+    @State private var hoveringDayDrop: Date?
+    @State private var hoveringEventDropID: String?
     private var text: NotchCalendarStrings { FeatureStrings.notchCalendar(l10n.language) }
+    private var plannerCopy: NotchPlannerStrings { NotchPlannerStrings.localized(l10n.language) }
+    private var splitRatio: NotchPlannerSplitRatio { NotchPlannerSplitRatio.sanitized(splitRatioRaw) }
+    private var canSplitHorizontally: Bool { size.width >= NotchRemindersSupport.minimumSplitWidth }
+    private var effectiveRatio: NotchPlannerSplitRatio {
+        if canSplitHorizontally { return splitRatio }
+        return splitRatio == .remindersOnly ? .remindersOnly : .calendarOnly
+    }
     /// A month grid needs six rows beside an agenda; anything shorter shows
     /// the week as a strip above a vertical agenda.
-    private var showsMonth: Bool { size.height >= 300 && size.width >= 420 }
+    private var showsMonth: Bool {
+        !effectiveRatio.showsReminders && size.height >= 300 && size.width >= 420
+    }
+
+    private var quickCaptureDefaultKind: NotchPlannerQuickCreateKind {
+        if effectiveRatio == .calendarOnly && permissions.calendarAccess == .fullAccess {
+            return .event
+        }
+        if permissions.remindersAccess == .fullAccess {
+            return .reminder
+        }
+        return permissions.calendarAccess == .fullAccess ? .event : .reminder
+    }
 
     var body: some View {
-        Group {
-            if permissions.calendarAccess == .fullAccess {
-                TimelineView(.everyMinute) { context in
-                    Group {
-                        if showsMonth {
-                            HStack(alignment: .top, spacing: 16) {
-                                ScrollView { monthView(now: context.date) }
-                                    .scrollIndicators(.automatic)
-                                    .frame(width: 196)
-                                Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
-                                    .accessibilityHidden(true)
-                                VStack(alignment: .leading, spacing: 12) {
-                                    agendaHeader
-                                    agenda(now: context.date)
-                                }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                            }
-                        } else if showingMonth {
-                            monthGrid(now: context.date)
-                        } else {
-                            VStack(spacing: NotchLayout.rowSpacing) {
-                                weekStrip(now: context.date)
-                                agenda(now: context.date)
+        VStack(alignment: .leading, spacing: 8) {
+            if showingQuickCapture {
+                NotchPlannerQuickCaptureBar(
+                    copy: plannerCopy,
+                    defaultKind: quickCaptureDefaultKind,
+                    onSubmit: { kind, title, preset, done in
+                        reminders.quickCreate(kind: kind, rawTitle: title, preset: preset) { ok in
+                            done(ok)
+                            if ok {
+                                withAnimation(.snappy(duration: 0.18)) { showingQuickCapture = false }
                             }
                         }
+                    },
+                    onCancel: {
+                        withAnimation(.snappy(duration: 0.18)) { showingQuickCapture = false }
                     }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            TimelineView(.everyMinute) { context in
+                plannerBody(now: context.date)
                     .onChange(of: Calendar.current.startOfDay(for: context.date)) { _, _ in
                         if selectedDay == nil { focus = context.date }
                     }
-                }
-                // The month's name and the way through it head the page from
-                // the island's top row, the same in all three layouts.
-                .notchBand { monthTitle } trailing: { navigation }
-            } else {
-                permissionCard
             }
         }
+        .overlay(alignment: .bottom) {
+            if let banner = reminders.statusBanner {
+                HStack(spacing: 7) {
+                    Image(systemName: banner.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(banner.isError ? .orange : .mint)
+                    Text(banner.message)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .lineLimit(1)
+                    if let undoItem = banner.undoReminder {
+                        Button(l10n.s.uninstallerCancel) {
+                            reminders.undoCompletion(undoItem)
+                        }
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.mint)
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.black.opacity(0.84), in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.75))
+                .padding(.bottom, 4)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        // The month's name and planner controls head the page from the island's top row.
+        .notchBand { monthTitle } trailing: { navigation }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // Day and month names follow the app's language; the order of the
         // date and the 12/24-hour clock follow the user's region.
         .environment(\.locale, l10n.language.formattingLocale())
-        .onAppear { if ownsMonth { calendar.showMonth(focus) } }
+        .onAppear {
+            if ownsMonth { calendar.showMonth(focus) }
+            if !preview { reminders.syncWithPreferences() }
+        }
         .onChange(of: focus) { previous, date in
             // A month read already covers every week of that month, so
             // moving the strip within it keeps the loaded events.
             if !Calendar.current.isDate(previous, equalTo: date, toGranularity: .month) { calendar.showMonth(date) }
         }
-        // Escape returns from the month grid to the strip before the island closes.
-        .onChange(of: showingMonth && !showsMonth) { _, showing in
+        .onChange(of: notch.calendarQuickCreateSerial) { _, _ in
             guard !preview else { return }
-            NotchService.shared.setPageLayer(.calendar, close: showing ? { showingMonth = false } : nil)
+            withAnimation(.snappy(duration: 0.18)) { showingQuickCapture.toggle() }
+        }
+        .onChange(of: showingQuickCapture) { _, active in
+            guard !preview else { return }
+            NotchService.shared.setCalendarQuickCaptureActive(active)
+        }
+        // Escape closes Quick Capture or the month grid before closing the island.
+        .onChange(of: showingQuickCapture || (showingMonth && !showsMonth)) { _, hasLayer in
+            guard !preview else { return }
+            if hasLayer {
+                NotchService.shared.setPageLayer(.calendar) {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        if showingQuickCapture {
+                            showingQuickCapture = false
+                        } else if showingMonth {
+                            showingMonth = false
+                        }
+                    }
+                }
+            } else {
+                NotchService.shared.setPageLayer(.calendar, close: nil)
+            }
         }
         .onDisappear {
+            showingQuickCapture = false
             if ownsMonth { calendar.showMonth(nil) }
-            if !preview { NotchService.shared.setPageLayer(.calendar, close: nil); calendar.revealing = nil }
+            if !preview {
+                NotchService.shared.setCalendarQuickCaptureActive(false)
+                NotchService.shared.setPageLayer(.calendar, close: nil)
+                calendar.revealing = nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func plannerBody(now: Date) -> some View {
+        let ratio = effectiveRatio
+        if ratio.isSplit {
+            let spacing: CGFloat = 12
+            let dividerWidth: CGFloat = 1
+            let widths = NotchRemindersSupport.columnWidths(
+                totalWidth: Double(max(0, size.width - dividerWidth)),
+                spacing: Double(spacing),
+                ratio: ratio
+            )
+            HStack(alignment: .top, spacing: spacing / 2) {
+                if plannerSwapped {
+                    remindersColumn(now: now)
+                        .frame(width: CGFloat(widths.reminders))
+                    Rectangle().fill(.white.opacity(0.12)).frame(width: dividerWidth)
+                        .accessibilityHidden(true)
+                    calendarColumn(now: now, compact: true)
+                        .frame(width: CGFloat(widths.calendar))
+                } else {
+                    calendarColumn(now: now, compact: true)
+                        .frame(width: CGFloat(widths.calendar))
+                    Rectangle().fill(.white.opacity(0.12)).frame(width: dividerWidth)
+                        .accessibilityHidden(true)
+                    remindersColumn(now: now)
+                        .frame(width: CGFloat(widths.reminders))
+                }
+            }
+        } else if ratio == .remindersOnly {
+            remindersColumn(now: now)
+        } else {
+            calendarColumn(now: now, compact: false)
+        }
+    }
+
+    @ViewBuilder
+    private func calendarColumn(now: Date, compact: Bool) -> some View {
+        if permissions.calendarAccess == .fullAccess {
+            let summary = NotchRemindersSupport.nowAndTomorrow(events: calendar.events, now: now)
+            VStack(alignment: .leading, spacing: 8) {
+                if let active = summary.activeEvent,
+                   let progress = summary.activeProgress,
+                   let remaining = summary.remainingMinutes {
+                    NotchPlannerNowBannerView(
+                        event: active,
+                        progress: progress,
+                        remainingMinutes: remaining,
+                        copy: plannerCopy
+                    ) {
+                        openCalendar(showing: active)
+                    }
+                }
+
+                if effectiveRatio.showsReminders {
+                    todayDropZone(now: now)
+                }
+
+                if !compact && showsMonth {
+                    HStack(alignment: .top, spacing: 16) {
+                        ScrollView { monthView(now: now) }
+                            .scrollIndicators(.automatic)
+                            .frame(width: 196)
+                        Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 12) {
+                            agendaHeader
+                            agenda(now: now, tomorrowEvents: summary.tomorrowEvents)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                } else if showingMonth {
+                    monthGrid(now: now)
+                } else {
+                    VStack(alignment: .leading, spacing: compact ? 6 : NotchLayout.rowSpacing) {
+                        if compact {
+                            compactAgendaHeader
+                        } else {
+                            weekStrip(now: now)
+                        }
+                        agenda(now: now, tomorrowEvents: summary.tomorrowEvents)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            permissionCard
+        }
+    }
+
+    private var compactAgendaHeader: some View {
+        HStack(spacing: 6) {
+            Group {
+                if let selectedDay {
+                    Text(selectedDay, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated))
+                } else {
+                    Text(text.week)
+                }
+            }
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.85))
+            .lineLimit(1)
+            Spacer(minLength: 4)
+            if selectedDay != nil {
+                Button {
+                    selectedDay = nil
+                    focus = Date()
+                } label: {
+                    Text(text.week)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.white.opacity(0.1), in: Capsule())
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func remindersColumn(now: Date) -> some View {
+        NotchRemindersPaneView(
+            now: now,
+            onQuickCreate: {
+                withAnimation(.snappy(duration: 0.18)) { showingQuickCapture = true }
+            },
+            onRescheduleToday: { reminderID in
+                reminders.reschedule(reminderID: reminderID, toDay: now)
+            },
+            onTimeBlockToday: { reminderID in
+                reminders.timeBlock(reminderID: reminderID, after: nil, on: selectedDay ?? now)
+            }
+        )
+    }
+
+    /// Dedicated Monolith-style drop target to drag any reminder onto Today (or the currently selected day).
+    private func todayDropZone(now: Date) -> some View {
+        let targetDay = selectedDay ?? now
+        let isTargetToday = Calendar.current.isDate(targetDay, inSameDayAs: now)
+        return HStack(spacing: 6) {
+            Image(systemName: hoveringTodayDrop ? "sun.max.fill" : "arrow.down.to.line.compact")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(hoveringTodayDrop ? .mint : .white.opacity(0.45))
+            if isTargetToday {
+                Text(plannerCopy.dropForTodayHint)
+                    .font(.system(size: 10, weight: hoveringTodayDrop ? .semibold : .medium))
+                    .foregroundStyle(hoveringTodayDrop ? .white : .white.opacity(0.45))
+                    .lineLimit(1)
+            } else {
+                HStack(spacing: 3) {
+                    Text("→")
+                    Text(targetDay, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated))
+                }
+                .font(.system(size: 10, weight: hoveringTodayDrop ? .semibold : .medium))
+                .foregroundStyle(hoveringTodayDrop ? .white : .white.opacity(0.55))
+                .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(hoveringTodayDrop ? Color.mint.opacity(0.18) : .white.opacity(0.035))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(
+                    hoveringTodayDrop ? Color.mint.opacity(0.65) : .white.opacity(0.08),
+                    style: StrokeStyle(lineWidth: 1, dash: hoveringTodayDrop ? [] : [4, 3])
+                )
+        )
+        .dropDestination(for: String.self) { payloads, _ in
+            guard let id = payloads.compactMap(NotchRemindersSupport.decodeDragPayload).first else { return false }
+            reminders.reschedule(reminderID: id, toDay: targetDay)
+            return true
+        } isTargeted: { targeted in
+            withAnimation(.snappy(duration: 0.14)) { hoveringTodayDrop = targeted }
         }
     }
 
@@ -141,32 +395,106 @@ struct NotchCalendarView: View {
         }
     }
 
-    /// Calendar itself follows the arrows where the row has room for four
-    /// buttons, the last one apart; the island's own update or pin give way
-    /// to it. Elsewhere an empty agenda offers it, and every appointment card
-    /// opens it as well.
-    private var rowOpensCalendar: Bool { !band.besideCamera || band.side >= 28 * 4 + 6 }
+    /// Accounts for `+`, split capsule, and date arrows so trailing controls never crowd the camera cutout.
+    private var rowShowsNavArrows: Bool {
+        !band.besideCamera || band.side >= 166
+    }
+
+    private var rowOpensCalendar: Bool {
+        !band.besideCamera ? size.width >= 480 : band.side >= 198
+    }
 
     /// The arrows step by week over the strip and by month over a grid,
-    /// around the way back to today, as Calendar's own toolbar does.
+    /// around the way back to today, alongside Quick Capture (⌘N) and Split-View layout controls.
     private var navigation: some View {
         let byWeek = !showsMonth && !showingMonth
-        return HStack(spacing: 6) {
-            HStack(spacing: 0) {
-                NotchIconButton(symbol: "chevron.left", title: byWeek ? text.previousWeek : text.previousMonth) {
-                    byWeek ? moveWeek(-1) : moveMonth(-1)
+        return HStack(spacing: 4) {
+            NotchIconButton(symbol: showingQuickCapture ? "xmark" : "plus",
+                            title: plannerCopy.quickAddTooltip) {
+                withAnimation(.snappy(duration: 0.18)) { showingQuickCapture.toggle() }
+            }
+
+            if canSplitHorizontally {
+                Menu {
+                    ForEach(NotchPlannerSplitRatio.allCases, id: \.self) { ratio in
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) { splitRatioRaw = ratio.rawValue }
+                        } label: {
+                            HStack {
+                                Text(ratioMenuTitle(ratio))
+                                if ratio == splitRatio { Image(systemName: "checkmark") }
+                            }
+                        }
+                    }
+                    if splitRatio.isSplit {
+                        Divider()
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) { plannerSwapped.toggle() }
+                        } label: {
+                            Label(plannerCopy.swapSidesTooltip, systemImage: "arrow.left.arrow.right")
+                        }
+                    }
+                    if !rowOpensCalendar {
+                        Divider()
+                        Button { openCalendar() } label: {
+                            Label(text.openCalendar, systemImage: "arrow.up.forward.app")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(splitRatio.shortLabel)
+                            .font(.system(size: 9.5, weight: .semibold).monospacedDigit())
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .foregroundStyle(.white.opacity(0.86))
+                    .padding(.horizontal, 7)
+                    .frame(height: 24)
+                    .background(.white.opacity(0.1), in: Capsule())
                 }
-                NotchIconButton(symbol: "circle.circle", title: text.today) {
-                    today(now: Date())
-                    showingMonth = false
-                }
-                NotchIconButton(symbol: "chevron.right", title: byWeek ? text.nextWeek : text.nextMonth) {
-                    byWeek ? moveWeek(1) : moveMonth(1)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(plannerCopy.splitLayoutTooltip)
+            } else {
+                NotchIconButton(symbol: splitRatio == .remindersOnly ? "calendar" : "checklist",
+                                title: splitRatio == .remindersOnly ? plannerCopy.calendarTitle : plannerCopy.remindersTitle) {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        splitRatioRaw = (splitRatio == .remindersOnly
+                                         ? NotchPlannerSplitRatio.calendarOnly
+                                         : NotchPlannerSplitRatio.remindersOnly).rawValue
+                    }
                 }
             }
-            if rowOpensCalendar {
-                NotchIconButton(symbol: "arrow.up.forward.app", title: text.openCalendar) { openCalendar() }
+
+            if effectiveRatio.showsCalendar && rowShowsNavArrows {
+                HStack(spacing: 0) {
+                    NotchIconButton(symbol: "chevron.left", title: byWeek ? text.previousWeek : text.previousMonth) {
+                        byWeek ? moveWeek(-1) : moveMonth(-1)
+                    }
+                    NotchIconButton(symbol: "circle.circle", title: text.today) {
+                        today(now: Date())
+                        showingMonth = false
+                    }
+                    NotchIconButton(symbol: "chevron.right", title: byWeek ? text.nextWeek : text.nextMonth) {
+                        byWeek ? moveWeek(1) : moveMonth(1)
+                    }
+                }
+                if rowOpensCalendar {
+                    NotchIconButton(symbol: "arrow.up.forward.app", title: text.openCalendar) { openCalendar() }
+                }
             }
+        }
+    }
+
+    private func ratioMenuTitle(_ ratio: NotchPlannerSplitRatio) -> String {
+        switch ratio {
+        case .calendarOnly: return "\(plannerCopy.calendarTitle) 100%"
+        case .calendarFocus: return "\(plannerCopy.calendarTitle) 70 / 30"
+        case .balanced: return "50 / 50"
+        case .remindersFocus: return "\(plannerCopy.remindersTitle) 70 / 30"
+        case .remindersOnly: return "\(plannerCopy.remindersTitle) 100%"
         }
     }
 
@@ -231,9 +559,9 @@ struct NotchCalendarView: View {
 
     /// Scrolls once to the countdown's event opened from the closed island,
     /// after the reload that opening the page starts has finished.
-    private func agenda(now: Date) -> some View {
+    private func agenda(now: Date, tomorrowEvents: [NotchCalendarEvent]) -> some View {
         ScrollViewReader { proxy in
-            ScrollView { appointmentList(now: now) }
+            ScrollView { appointmentList(now: now, tomorrowEvents: tomorrowEvents) }
                 .scrollIndicators(.automatic)
                 .notchScrollEdgeFade()
                 .id(selectedDay)
@@ -248,32 +576,81 @@ struct NotchCalendarView: View {
         }
     }
 
-    @ViewBuilder private func appointmentList(now: Date) -> some View {
+    @ViewBuilder private func appointmentList(now: Date, tomorrowEvents: [NotchCalendarEvent]) -> some View {
         let groups = groups(now: now)
         let next = NotchCalendarSupport.next(calendar.events, now: now)
+        let showingTomorrowPreview = selectedDay.map { Calendar.current.isDate($0, inSameDayAs: now) } ?? false
         if calendar.loading {
             ProgressView().controlSize(.small)
                 .frame(maxWidth: .infinity, minHeight: 72)
         } else if groups.isEmpty {
-            emptyAgenda.frame(maxWidth: .infinity, minHeight: 72)
+            VStack(alignment: .leading, spacing: 10) {
+                emptyAgenda.frame(maxWidth: .infinity, minHeight: 72)
+                if showingTomorrowPreview && !tomorrowEvents.isEmpty {
+                    tomorrowStrip(now: now, tomorrowEvents: tomorrowEvents)
+                }
+            }
         } else {
             LazyVStack(alignment: .leading, spacing: 10) {
                 ForEach(groups, id: \.day) { group in
+                    let dayTargeted = hoveringDayDrop.map { Calendar.current.isDate($0, inSameDayAs: group.day) } ?? false
                     VStack(alignment: .leading, spacing: 5) {
-                        if selectedDay == nil { dayLabel(group.day, now: now) }
+                        if selectedDay == nil {
+                            dayLabel(group.day, now: now)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(dayTargeted ? Color.mint.opacity(0.2) : .clear)
+                                )
+                                .dropDestination(for: String.self) { payloads, _ in
+                                    guard let id = payloads.compactMap(NotchRemindersSupport.decodeDragPayload).first else {
+                                        return false
+                                    }
+                                    reminders.reschedule(reminderID: id, toDay: group.day)
+                                    return true
+                                } isTargeted: { targeted in
+                                    hoveringDayDrop = targeted ? group.day : (dayTargeted ? nil : hoveringDayDrop)
+                                }
+                        }
                         ForEach(group.events) { event in
+                            let eventTargeted = hoveringEventDropID == event.id
                             NotchCalendarEventRow(event: event, day: group.day, now: now,
                                                   isNext: event.id == next?.id, text: text,
                                                   countdown: countdownChoice(event, now: now),
                                                   choose: { calendar.setCountdown($0, for: event) }) {
                                 openCalendar(showing: event)
                             }
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .strokeBorder(Color.mint.opacity(eventTargeted ? 0.85 : 0), lineWidth: 1.5)
+                            )
+                            .dropDestination(for: String.self) { payloads, _ in
+                                guard let id = payloads.compactMap(NotchRemindersSupport.decodeDragPayload).first else {
+                                    return false
+                                }
+                                reminders.timeBlock(reminderID: id, after: event, on: group.day)
+                                return true
+                            } isTargeted: { targeted in
+                                hoveringEventDropID = targeted ? event.id : (eventTargeted ? nil : hoveringEventDropID)
+                            }
                             .id(event.id)
                         }
                     }
                 }
+                if showingTomorrowPreview {
+                    tomorrowStrip(now: now, tomorrowEvents: tomorrowEvents)
+                }
             }
             .padding(.bottom, 2)
+        }
+    }
+
+    private func tomorrowStrip(now: Date, tomorrowEvents: [NotchCalendarEvent]) -> some View {
+        NotchPlannerTomorrowStripView(events: tomorrowEvents, copy: plannerCopy) {
+            if let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now)) {
+                select(tomorrow)
+            }
         }
     }
 

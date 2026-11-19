@@ -100,6 +100,7 @@ enum NotchKeyMonitorTests {
         func toggleSections() { NotchKeyMonitorTests.actions.append("sections") }
         func select(_ module: NotchModule) { selected = module }
         func handleSectionKey(_ event: NSEvent) -> Bool { false }
+        func handleCalendarPlannerKey(_ event: NSEvent) -> Bool { false }
         func handleScratchpadKey(_ event: NSEvent) -> Bool { false }
         func handleClipboardPasteKey(_ event: NSEvent) -> Bool { false }
         func ownsWindow(_ window: Panel?) -> Bool { window === panel }

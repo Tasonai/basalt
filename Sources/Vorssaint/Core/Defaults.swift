@@ -900,6 +900,9 @@ enum DefaultsKey {
     static let notchCalendarExcluded = "notchCalendarExcluded" // [EKCalendar.calendarIdentifier] left out of the island
     // [countdown key: event end] chosen from an event's menu; unregistered, so it stays out of backups
     static let notchCalendarChosenCountdowns = "notchCalendarChosenCountdowns"
+    // Monolith-class Daily Planner split-view ratio ("calendarOnly" | "calendarFocus" | "balanced" | "remindersFocus" | "remindersOnly")
+    static let notchPlannerSplitRatio = "notchPlannerSplitRatio"
+    static let notchPlannerSwapped = "notchPlannerSwapped"
     // AI agents: what the island reads from Antigravity, Claude Code, Codex, OpenCode and GitHub Copilot, and shows.
     static let notchAgentsEnabled = "notchAgentsEnabled"
     static let notchAgentsAntigravity = "notchAgentsAntigravity"
@@ -1514,6 +1517,8 @@ enum Defaults {
         DefaultsKey.notchCalendarTimeLeft: false,
         DefaultsKey.notchCalendarWeekNumbers: false,
         DefaultsKey.notchCalendarExcluded: [String](),
+        DefaultsKey.notchPlannerSplitRatio: "balanced",
+        DefaultsKey.notchPlannerSwapped: false,
         DefaultsKey.notchAgentsEnabled: false,
         DefaultsKey.notchAgentsAntigravity: true,
         DefaultsKey.notchAgentsClaude: true,

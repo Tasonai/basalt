@@ -232,7 +232,9 @@ struct SettingsView: View {
         } else if #available(macOS 26, *) {
             VStack(spacing: 0) {
                 SidebarSearchField(query: $searchQuery, isFocused: $sidebarSearchFocused)
+                Divider().opacity(0.35)
                 sidebarList(searchResults: searchResults)
+                    .clipped()
             }
         } else {
             sidebarList(searchResults: searchResults)
@@ -354,7 +356,10 @@ struct SettingsView: View {
                                     in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 )
                             Text(item.title)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
+                        .padding(.vertical, 1)
                         .tag(item.id)
                         .id(item.id)
                         .help(item.title)
@@ -374,6 +379,8 @@ struct SettingsView: View {
                             .frame(width: 12)
                             .rotationEffect(.degrees(collapsedSectionIDs.contains(section.id) ? 0 : 90))
                         Text(section.title)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     .contentShape(Rectangle())
                 }

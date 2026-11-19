@@ -19,6 +19,10 @@ struct ScreenCaptureToolPicker: View {
             picker
                 .pickerStyle(.segmented)
                 .controlSize(.large)
+                .fixedSize()
+            picker
+                .pickerStyle(.menu)
+                .fixedSize()
             picker
                 .pickerStyle(.menu)
         }

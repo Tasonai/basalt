@@ -253,18 +253,18 @@ struct EnergySettings: View {
             KeepAwakeIconPicker(iconValue: $keepAwakeActiveIcon, tintValue: $keepAwakeIconTint)
             if PowerSampler.hasInternalBattery {
                 Divider()
-                SettingsRow(symbol: "battery.25percent", title: l10n.s.batteryDisableBelow,
-                            caption: l10n.s.batteryProtectionCaption) {
-                    Picker(l10n.s.batteryDisableBelow, selection: $batteryLimit) {
-                        Text(l10n.s.batteryNever).tag(0)
-                        Text("5%").tag(5)
-                        Text("10%").tag(10)
-                        Text("15%").tag(15)
-                        Text("20%").tag(20)
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
+                SettingsMenuRow(symbol: "battery.25percent", title: l10n.s.batteryDisableBelow, selection: $batteryLimit) {
+                    Text(l10n.s.batteryNever).tag(0)
+                    Text("5%").tag(5)
+                    Text("10%").tag(10)
+                    Text("15%").tag(15)
+                    Text("20%").tag(20)
                 }
+                Text(l10n.s.batteryProtectionCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, settingsRowTextInset)
             }
             Divider()
             SettingsRow(symbol: "laptopcomputer", title: l10n.s.clamshellTitle, caption: clamshellCaption) {
@@ -333,15 +333,16 @@ struct EnergySettings: View {
                                     BrightnessService.shared.syncWithPreferences()
                                 }
                         }
-                        SettingsRow(symbol: "sun.min", title: strings.keyStep, caption: strings.keyStepCaption) {
-                            Picker(strings.keyStep, selection: brightnessKeyStepBinding) {
-                                Text(strings.keyStepStandard).tag(BrightnessSupport.KeyStep.standard)
-                                Text(strings.keyStepHalf).tag(BrightnessSupport.KeyStep.half)
-                                Text(strings.keyStepQuarter).tag(BrightnessSupport.KeyStep.quarter)
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
+                        SettingsMenuRow(symbol: "sun.min", title: strings.keyStep, selection: brightnessKeyStepBinding) {
+                            Text(strings.keyStepStandard).tag(BrightnessSupport.KeyStep.standard)
+                            Text(strings.keyStepHalf).tag(BrightnessSupport.KeyStep.half)
+                            Text(strings.keyStepQuarter).tag(BrightnessSupport.KeyStep.quarter)
                         }
+                        Text(strings.keyStepCaption)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.leading, settingsRowTextInset)
                         DisplayBrightnessShortcutControls(showsSettingsRow: true)
                         if brightness.brightnessOSDSupported {
                             SettingsRow(symbol: "sun.max", title: strings.osdToggle, caption: strings.osdCaption) {

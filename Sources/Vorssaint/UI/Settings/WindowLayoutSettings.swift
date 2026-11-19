@@ -380,29 +380,52 @@ struct WindowLayoutSettings: View {
         }
     }
 
+    private var customSnapGridTabs: some View {
+        VorssaintSegmentedTabs(
+            selection: $customGridColumns,
+            options: [
+                .init(2, title: "2x2"),
+                .init(3, title: "3x2"),
+                .init(4, title: "4x2"),
+                .init(6, title: "6x2"),
+            ],
+            tone: .windowsDock
+        )
+        .fixedSize()
+    }
+
+    private var customSnapOverlayTrigger: some View {
+        Button {
+            CustomSnapGridOverlayController.shared.show()
+        } label: {
+            Label(v2Strings.customSnapOverlayButton, systemImage: "square.grid.3x2")
+                .lineLimit(1)
+        }
+        .fixedSize()
+        .controlSize(.small)
+        .disabled(!permissions.accessibility)
+    }
+
     private var workspacesAndGridSection: some View {
         SettingsCard(title: wave4Strings.workspacesTitle) {
-            HStack(spacing: 10) {
-                Text(wave4Strings.customSnapGridLabel)
-                Spacer()
-                VorssaintSegmentedTabs(
-                    selection: $customGridColumns,
-                    options: [
-                        .init(2, title: "2x2"),
-                        .init(3, title: "3x2"),
-                        .init(4, title: "4x2"),
-                        .init(6, title: "6x2"),
-                    ],
-                    tone: .windowsDock
-                )
-                .fixedSize()
-                Button {
-                    CustomSnapGridOverlayController.shared.show()
-                } label: {
-                    Label(v2Strings.customSnapOverlayButton, systemImage: "square.grid.3x2")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    Text(wave4Strings.customSnapGridLabel)
+                        .lineLimit(1)
+                        .fixedSize()
+                    Spacer(minLength: 8)
+                    customSnapGridTabs
+                    customSnapOverlayTrigger
                 }
-                .controlSize(.small)
-                .disabled(!permissions.accessibility)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(wave4Strings.customSnapGridLabel)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 10) {
+                        customSnapGridTabs
+                        Spacer(minLength: 8)
+                        customSnapOverlayTrigger
+                    }
+                }
             }
             Divider()
             HStack(spacing: 8) {

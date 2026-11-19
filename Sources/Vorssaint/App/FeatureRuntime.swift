@@ -367,7 +367,10 @@ final class FeatureRuntime: ObservableObject {
         },
         .notchCalendar: {
             if AppFeature.notch.isAvailable { NotchService.shared.syncWithPreferences() }
-            else { NotchCalendarService.shared.stop() }
+            else {
+                NotchCalendarService.shared.stop()
+                NotchRemindersService.shared.stop()
+            }
         },
         .notchAgents: {
             if AppFeature.notch.isAvailable { NotchService.shared.syncWithPreferences() }
