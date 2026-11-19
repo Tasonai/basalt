@@ -1311,7 +1311,17 @@ private final class CameraImageBox: @unchecked Sendable {
 /// blurs the background behind the speaker.
 private final class PersonSegmentationBlurProcessor: @unchecked Sendable {
     private let lock = NSLock()
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    private let ciContext = MetalDeviceProvider.lowPowerCIContext(options: [.cacheIntermediates: false])
+    private let request: VNGeneratePersonSegmentationRequest = {
+        let req = VNGeneratePersonSegmentationRequest()
+        #if arch(x86_64)
+        req.qualityLevel = .fast
+        #else
+        req.qualityLevel = .balanced
+        #endif
+        req.outputPixelFormat = kCVPixelFormatType_OneComponent8
+        return req
+    }()
     private var lastSourceID: ObjectIdentifier?
     private var lastOutput: CGImage?
 
@@ -1322,21 +1332,33 @@ private final class PersonSegmentationBlurProcessor: @unchecked Sendable {
         }
 
         return autoreleasepool { () -> CGImage? in
-            let request = VNGeneratePersonSegmentationRequest()
-            request.qualityLevel = .balanced
-            request.outputPixelFormat = kCVPixelFormatType_OneComponent8
-
-            let handler = VNImageRequestHandler(cgImage: image, options: [:])
-            do {
-                try handler.perform([request])
-            } catch {
-                return nil
-            }
-            guard let maskBuffer = request.results?.first?.pixelBuffer else { return nil }
-
             let foreground = CIImage(cgImage: image)
             let extent = foreground.extent
             guard extent.width > 1, extent.height > 1 else { return nil }
+
+            let segmentationImage: CIImage
+            #if arch(x86_64)
+            let maxDimension: CGFloat = 640
+            if max(extent.width, extent.height) > maxDimension {
+                let scale = maxDimension / max(extent.width, extent.height)
+                segmentationImage = foreground.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            } else {
+                segmentationImage = foreground
+            }
+            #else
+            segmentationImage = foreground
+            #endif
+
+            let maskBuffer: CVPixelBuffer? = lock.withLock {
+                let handler = VNImageRequestHandler(ciImage: segmentationImage, options: [:])
+                do {
+                    try handler.perform([request])
+                } catch {
+                    return nil
+                }
+                return request.results?.first?.pixelBuffer
+            }
+            guard let maskBuffer else { return nil }
 
             let rawMask = CIImage(cvPixelBuffer: maskBuffer)
             guard rawMask.extent.width > 0, rawMask.extent.height > 0 else { return nil }
@@ -1400,7 +1422,7 @@ private final class RecorderCompositionInstruction: NSObject, AVVideoComposition
 /// Draws each frame through `RecorderComposer.render` with one context shared
 /// by every preview and export.
 private final class RecorderVideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
-    private static let context = CIContext()
+    private static let context = MetalDeviceProvider.lowPowerCIContext(options: [.cacheIntermediates: false])
 
     /// Frames as the decoder made them, so Core Image does the one colour
     /// conversion.

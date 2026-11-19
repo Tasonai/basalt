@@ -162,7 +162,9 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
 
     @MainActor
     static func hasXDRCapableScreen() -> Bool {
-        NSScreen.screens.contains { $0.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0 }
+        NSScreen.screens.contains {
+            $0.maximumPotentialExtendedDynamicRangeColorComponentValue > ExtraBrightnessSupport.capabilityFloor
+        }
     }
 
     private static func clampBoost(_ value: Double) -> Double {
@@ -178,7 +180,7 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
     @MainActor
     private static func xdrScreens() -> [(screen: NSScreen, spec: ScreenSpec)] {
         NSScreen.screens.compactMap { screen in
-            guard screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.0,
+            guard screen.maximumPotentialExtendedDynamicRangeColorComponentValue > ExtraBrightnessSupport.capabilityFloor,
                   let id = displayID(of: screen) else {
                 return nil
             }
@@ -219,7 +221,7 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
         }
 
         tearDownOnMainActor()
-        guard let device = MTLCreateSystemDefaultDevice(),
+        guard let device = MetalDeviceProvider.lowPowerDevice(),
               let queue = device.makeCommandQueue() else {
             return
         }
@@ -309,7 +311,7 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
         window.hasShadow = false
         window.level = .screenSaver
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
-        window.sharingType = .readOnly
+        window.sharingType = .none
         window.isReleasedWhenClosed = false
         window.animationBehavior = .none
         return window

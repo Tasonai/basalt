@@ -795,17 +795,22 @@ final class ProcessUsageService {
                       let pid = Self.pid(fromCreator: creator)
                 else { continue }
 
-                guard let usageRef = IORegistryEntryCreateCFProperty(
+                if let usageRef = IORegistryEntryCreateCFProperty(
                           client, "AppUsage" as CFString, kCFAllocatorDefault, 0),
-                      let usage = usageRef.takeRetainedValue() as? [[String: Any]]
-                else { continue }
-
-                for entry in usage {
-                    if let time = entry["accumulatedGPUTime"] as? Double {
-                        perPid[pid, default: 0] += time
-                    } else if let time = entry["accumulatedGPUTime"] as? Int64 {
-                        perPid[pid, default: 0] += Double(time)
+                   let usage = usageRef.takeRetainedValue() as? [[String: Any]] {
+                    for entry in usage {
+                        if let time = entry["accumulatedGPUTime"] as? Double {
+                            perPid[pid, default: 0] += time
+                        } else if let time = entry["accumulatedGPUTime"] as? Int64 {
+                            perPid[pid, default: 0] += Double(time)
+                        } else if let time = entry["accumulatedGPUTime"] as? NSNumber {
+                            perPid[pid, default: 0] += time.doubleValue
+                        }
                     }
+                } else if let directRef = IORegistryEntryCreateCFProperty(
+                          client, "accumulatedGPUTime" as CFString, kCFAllocatorDefault, 0),
+                          let num = directRef.takeRetainedValue() as? NSNumber {
+                    perPid[pid, default: 0] += num.doubleValue
                 }
             }
         }

@@ -349,7 +349,7 @@ final class ExtraBrightnessService: ObservableObject {
         overlaySpace?.close()
         overlaySpace = NotchOverlaySpace()
 
-        guard let device = MTLCreateSystemDefaultDevice(),
+        guard let device = MetalDeviceProvider.lowPowerDevice(),
               let queue = device.makeCommandQueue() else { return }
         for frame in ExtraBrightnessSupport.overlayFrames(for: screen.frame) {
             let window = NSWindow(contentRect: frame, styleMask: [.borderless],

@@ -25,9 +25,11 @@ enum NotchMenuBarSpace {
             menuItems.append(rect)
         }
         var statusItems: [CGRect] = []
+        let ownPID = Int(ProcessInfo.processInfo.processIdentifier)
         guard let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] else { return nil }
         for window in windows {
             guard let number = window[kCGWindowNumber as String] as? Int, number != ownWindow,
+                  (window[kCGWindowOwnerPID as String] as? Int) != ownPID,
                   let layer = window[kCGWindowLayer as String] as? Int,
                   layer >= Int(CGWindowLevelForKey(.statusWindow)),
                   layer <= Int(CGWindowLevelForKey(.statusWindow)) + 1,

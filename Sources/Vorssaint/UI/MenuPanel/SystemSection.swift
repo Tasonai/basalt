@@ -516,16 +516,18 @@ struct SystemSection: View {
                     value: String(format: "%.1f W", locale: .autoupdatingCurrent, power.gpuWatts),
                     tint: PanelMetricColor.cyan(for: colorScheme)
                 )
-                powerRailTile(
-                    label: "ANE",
-                    value: String(format: "%.1f W", locale: .autoupdatingCurrent, power.aneWatts),
-                    tint: PanelMetricColor.mint(for: colorScheme)
-                )
-                powerRailTile(
-                    label: "ANE %",
-                    value: String(format: "%.0f%%", locale: .autoupdatingCurrent, power.aneActivityPercent),
-                    tint: PanelMetricColor.yellow(for: colorScheme)
-                )
+                if Self.showsANETiles(power) {
+                    powerRailTile(
+                        label: "ANE",
+                        value: String(format: "%.1f W", locale: .autoupdatingCurrent, power.aneWatts),
+                        tint: PanelMetricColor.mint(for: colorScheme)
+                    )
+                    powerRailTile(
+                        label: "ANE %",
+                        value: String(format: "%.0f%%", locale: .autoupdatingCurrent, power.aneActivityPercent),
+                        tint: PanelMetricColor.yellow(for: colorScheme)
+                    )
+                }
             }
         }
         .padding(DesignSpace.sm)
@@ -533,6 +535,14 @@ struct SystemSection: View {
             RoundedRectangle(cornerRadius: DesignRadius.innerGroup, style: .continuous)
                 .fill(Color.primary.opacity(0.045))
         )
+    }
+
+    private static func showsANETiles(_ power: AppleSiliconPowerSnapshot) -> Bool {
+        #if arch(arm64)
+        return true
+        #else
+        return power.aneWatts > 0.01 || power.aneActivityPercent > 0.1
+        #endif
     }
 
     private func powerRailTile(label: String, value: String, tint: Color) -> some View {
@@ -638,31 +648,34 @@ struct SystemSection: View {
 
     @ViewBuilder
     private var clusterBreakdownView: some View {
-        let rawLoads: [Double] = !monitor.latestCoreLoads.isEmpty
-            ? monitor.latestCoreLoads
-            : monitor.snapshot.cpuCoreUsage.compactMap { $0.map { min(100.0, max(0.0, $0 * 100.0)) } }
-        let gpuPct = (monitor.snapshot.gpuUsage ?? 0) * 100.0
-        let cluster: AppleSiliconClusterEstimator.Breakdown? = !rawLoads.isEmpty
-            ? AppleSiliconClusterEstimator.estimate(
-                coreLoads: rawLoads,
-                efficiencyCoreCount: monitor.efficiencyCoreCount,
-                gpuLoad: gpuPct
-            )
-            : monitor.snapshot.cpuUsage.map { cpu in
-                AppleSiliconClusterEstimator.estimate(
-                    coreLoads: Array(repeating: cpu * 100.0, count: max(2, monitor.efficiencyCoreCount + 2)),
+        // Only Apple Silicon heterogeneous topologies expose genuine E-Core / P-Core / ANE clusters.
+        if monitor.efficiencyCoreCount > 0 {
+            let rawLoads: [Double] = !monitor.latestCoreLoads.isEmpty
+                ? monitor.latestCoreLoads
+                : monitor.snapshot.cpuCoreUsage.compactMap { $0.map { min(100.0, max(0.0, $0 * 100.0)) } }
+            let gpuPct = (monitor.snapshot.gpuUsage ?? 0) * 100.0
+            let cluster: AppleSiliconClusterEstimator.Breakdown? = !rawLoads.isEmpty
+                ? AppleSiliconClusterEstimator.estimate(
+                    coreLoads: rawLoads,
                     efficiencyCoreCount: monitor.efficiencyCoreCount,
                     gpuLoad: gpuPct
                 )
+                : monitor.snapshot.cpuUsage.map { cpu in
+                    AppleSiliconClusterEstimator.estimate(
+                        coreLoads: Array(repeating: cpu * 100.0, count: max(2, monitor.efficiencyCoreCount + 2)),
+                        efficiencyCoreCount: monitor.efficiencyCoreCount,
+                        gpuLoad: gpuPct
+                    )
+                }
+            if let cluster {
+                VStack(alignment: .leading, spacing: 4) {
+                    clusterBarRow(label: "E-Core", percent: cluster.eCorePercent, color: PanelMetricColor.mint(for: colorScheme))
+                    clusterBarRow(label: "P-Core", percent: cluster.pCorePercent, color: .accentColor)
+                    clusterBarRow(label: "ANE", percent: cluster.aneActivityPercent, color: PanelMetricColor.cyan(for: colorScheme))
+                }
+                .padding(.leading, 14)
+                .padding(.vertical, 2)
             }
-        if let cluster {
-            VStack(alignment: .leading, spacing: 4) {
-                clusterBarRow(label: "E-Core", percent: cluster.eCorePercent, color: PanelMetricColor.mint(for: colorScheme))
-                clusterBarRow(label: "P-Core", percent: cluster.pCorePercent, color: .accentColor)
-                clusterBarRow(label: "ANE", percent: cluster.aneActivityPercent, color: PanelMetricColor.cyan(for: colorScheme))
-            }
-            .padding(.leading, 14)
-            .padding(.vertical, 2)
         }
     }
 

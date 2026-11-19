@@ -194,6 +194,9 @@ struct BrightnessSection: View {
                     Divider()
                     Toggle(wave4Strings.ambientSyncLabel, isOn: $ambientSyncEnabled)
                         .onChange(of: ambientSyncEnabled) { _, on in
+                            if on, service.solarSyncEnabled {
+                                service.solarSyncEnabled = false
+                            }
                             AmbientLightSyncService.shared.isEnabled = on
                             service.syncWithPreferences()
                         }
@@ -239,7 +242,11 @@ struct BrightnessSection: View {
                             formattedValue: String(format: "%.2fx", locale: Locale.current, xdrUpscale.boostAmount)
                         )
                     }
-                    xdrPerAppRulesGroup
+                    if xdrUpscale.isXDRCapable || !xdrUpscale.xdrAutoBoostBundleIDs.isEmpty {
+                        xdrPerAppRulesGroup
+                            .disabled(!xdrUpscale.isXDRCapable)
+                            .opacity(xdrUpscale.isXDRCapable ? 1.0 : 0.55)
+                    }
                     if !ddcDisplays.isEmpty {
                         Divider()
                         ForEach(ddcDisplays) { display in

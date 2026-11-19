@@ -9,6 +9,8 @@ import IOKit.ps
 /// desktop may expose no SMC power key, so the UI shows only what is real.
 struct PowerReading {
     var systemWatts: Double?       // total the Mac is consuming (SMC PSTR)
+    var cpuWatts: Double?          // CPU package/rail power (SMC PC0R / PCPT / PCPC)
+    var gpuWatts: Double?          // GPU rail power (SMC PG0R / PCPG)
     var adapterWatts: Double?      // adapter input, including connected devices (SMC PDTR or desktop PD0R)
     var adapterMaxWatts: Double?   // the charger's rated wattage
     var batteryWatts: Double?      // + charging, - discharging
@@ -49,7 +51,10 @@ final class PowerSampler {
 
     private let smc: SMCClient?
     private var systemKey: SMCClient.Key?
+    private var cpuRailKey: SMCClient.Key?
+    private var cpuPackageTotalKey: SMCClient.Key?
     private var cpuPackageKey: SMCClient.Key?
+    private var discreteGPUKey: SMCClient.Key?
     private var gpuPackageKey: SMCClient.Key?
     private var adapterKey: SMCClient.Key?
     private var dcInRailKey: SMCClient.Key?
@@ -61,7 +66,10 @@ final class PowerSampler {
     /// `PD0R` is the DC-In rail. The Mac Studio (Mac17,15) reports 0 W for PDTR,
     /// so a Mac without a battery can use the rail as an adapter-input fallback.
     private static let systemPowerKey = "PSTR"
+    private static let cpuRailPowerKey = "PC0R"
+    private static let cpuPackageTotalPowerKey = "PCPT"
     private static let cpuPackagePowerKey = "PCPC"
+    private static let discreteGPUPowerKey = "PG0R"
     private static let gpuPackagePowerKey = "PCPG"
     private static let adapterPowerKey = "PDTR"
     private static let dcInRailPowerKey = "PD0R"
@@ -84,16 +92,29 @@ final class PowerSampler {
             if !resolvedKeys {
                 resolvedKeys = true
                 systemKey = smc.key(named: Self.systemPowerKey)
+                cpuRailKey = smc.key(named: Self.cpuRailPowerKey)
+                cpuPackageTotalKey = smc.key(named: Self.cpuPackageTotalPowerKey)
                 cpuPackageKey = smc.key(named: Self.cpuPackagePowerKey)
+                discreteGPUKey = smc.key(named: Self.discreteGPUPowerKey)
                 gpuPackageKey = smc.key(named: Self.gpuPackagePowerKey)
                 adapterKey = smc.key(named: Self.adapterPowerKey)
                 if !Self.hasInternalBattery {
                     dcInRailKey = smc.key(named: Self.dcInRailPowerKey)
                 }
             }
+            reading.cpuWatts = plausibleWatts(cpuRailKey)
+                ?? plausibleWatts(cpuPackageTotalKey)
+                ?? plausibleWatts(cpuPackageKey)
+            let discreteGPUWatts = plausibleWatts(discreteGPUKey)
+            let integratedGPUWatts = plausibleWatts(gpuPackageKey)
+            if let dgpu = discreteGPUWatts, let igpu = integratedGPUWatts {
+                reading.gpuWatts = dgpu + igpu
+            } else {
+                reading.gpuWatts = discreteGPUWatts ?? integratedGPUWatts
+            }
             reading.systemWatts = plausibleWatts(systemKey)
-            if reading.systemWatts == nil, let cpuW = plausibleWatts(cpuPackageKey) {
-                reading.systemWatts = cpuW + (plausibleWatts(gpuPackageKey) ?? 0)
+            if reading.systemWatts == nil, let cpuW = reading.cpuWatts {
+                reading.systemWatts = cpuW + (reading.gpuWatts ?? 0)
             }
             reading.adapterWatts = plausibleWatts(adapterKey)
             if reading.adapterWatts == nil {

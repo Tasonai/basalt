@@ -279,7 +279,7 @@ final class WindowPreviewProvider {
         }
     }
 
-    private static let rectifyContext = CIContext()
+    private static let rectifyContext = MetalDeviceProvider.lowPowerCIContext()
 
     /// Recovers an upright preview from Stage Manager's tilted strip artwork:
     /// finds the opaque quadrilateral and reverses the perspective transform.

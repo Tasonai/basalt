@@ -71,21 +71,108 @@ enum DDCPacketBuilder {
     }
 }
 
-/// Reads the built-in Apple ambient light sensor via `AppleLMUController`.
+/// Reads the built-in Apple ambient light sensor via `AppleLMUController`,
+/// falling back on T2 Intel and Apple Silicon Macs to the HID ambient light
+/// sensor service (`PrimaryUsagePage` 0x20 / 0x41 or 0xFF00 / 4).
 /// Safely returns `nil` on desktop Macs, clamshell setups without ALS, or VMs.
 enum AppleLMUSensorReader {
     private static let serviceName = "AppleLMUController"
     private static let getSensorReadingSelector: UInt32 = 0
 
+    private enum HIDAmbientLightBridge {
+        typealias CreateClientFn = @convention(c) (CFAllocator?) -> Unmanaged<CFTypeRef>?
+        typealias SetMatchingFn = @convention(c) (CFTypeRef, CFDictionary) -> Void
+        typealias CopyServicesFn = @convention(c) (CFTypeRef) -> Unmanaged<CFArray>?
+        typealias CopyEventFn = @convention(c) (CFTypeRef, Int64, Int32, Int64) -> Unmanaged<CFTypeRef>?
+        typealias GetFloatValueFn = @convention(c) (CFTypeRef, UInt32) -> Double
+
+        private static let handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY)
+        static let createClient: CreateClientFn? = symbol("IOHIDEventSystemClientCreate")
+        static let setMatching: SetMatchingFn? = symbol("IOHIDEventSystemClientSetMatching")
+        static let copyServices: CopyServicesFn? = symbol("IOHIDEventSystemClientCopyServices")
+        static let copyEvent: CopyEventFn? = symbol("IOHIDServiceClientCopyEvent")
+        static let getFloatValue: GetFloatValueFn? = symbol("IOHIDEventGetFloatValue")
+
+        private static let usagePairs: [(page: Int, usage: Int)] = [
+            (0x20, 0x41),   // kHIDPage_Sensor / kHIDUsage_Snsr_Light_AmbientLight (T2 Intel Macs)
+            (0xFF00, 0x04), // kHIDPage_AppleVendor / Apple ALS (Apple Silicon / legacy HID)
+        ]
+
+        private static func symbol<T>(_ name: String) -> T? {
+            guard let handle, let ptr = dlsym(handle, name) else { return nil }
+            return unsafeBitCast(ptr, to: T.self)
+        }
+
+        static func hasSensor() -> Bool {
+            guard let createClient, let setMatching, let copyServices,
+                  let client = createClient(kCFAllocatorDefault)?.takeRetainedValue() else {
+                return false
+            }
+            for pair in usagePairs {
+                let matching: NSDictionary = [
+                    "PrimaryUsagePage": pair.page,
+                    "PrimaryUsage": pair.usage,
+                ]
+                setMatching(client, matching)
+                if let services = copyServices(client)?.takeRetainedValue() as? [AnyObject],
+                   !services.isEmpty {
+                    return true
+                }
+            }
+            return false
+        }
+
+        static func readLux() -> Double? {
+            guard let createClient, let setMatching, let copyServices,
+                  let copyEvent, let getFloatValue,
+                  let client = createClient(kCFAllocatorDefault)?.takeRetainedValue() else {
+                return nil
+            }
+            // kIOHIDEventTypeAmbientLightSensor = 12, kIOHIDEventFieldAmbientLightSensorLevel = 12 << 16
+            let eventType: Int64 = 12
+            let levelField: UInt32 = 12 << 16
+            for pair in usagePairs {
+                let matching: NSDictionary = [
+                    "PrimaryUsagePage": pair.page,
+                    "PrimaryUsage": pair.usage,
+                ]
+                setMatching(client, matching)
+                guard let services = copyServices(client)?.takeRetainedValue() as? [AnyObject] else {
+                    continue
+                }
+                for service in services {
+                    guard let event = copyEvent(service, eventType, 0, 0)?.takeRetainedValue() else {
+                        continue
+                    }
+                    let lux = getFloatValue(event, levelField)
+                    if lux.isFinite, lux >= 0 {
+                        return min(max(lux, 0), 10_000)
+                    }
+                }
+            }
+            return nil
+        }
+    }
+
     static var isAvailable: Bool {
-        guard let matching = IOServiceMatching(serviceName) else { return false }
-        let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
-        guard service != IO_OBJECT_NULL else { return false }
-        IOObjectRelease(service)
-        return true
+        if let matching = IOServiceMatching(serviceName) {
+            let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+            if service != IO_OBJECT_NULL {
+                IOObjectRelease(service)
+                return true
+            }
+        }
+        return HIDAmbientLightBridge.hasSensor()
     }
 
     static func readNormalizedLux() -> Double? {
+        if let lmuLux = readLMULux() {
+            return lmuLux
+        }
+        return HIDAmbientLightBridge.readLux()
+    }
+
+    private static func readLMULux() -> Double? {
         guard let matching = IOServiceMatching(serviceName) else { return nil }
         let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
         guard service != IO_OBJECT_NULL else { return nil }
@@ -332,7 +419,9 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
     static let presets: [ScaledPreset] = [
         ScaledPreset(id: "1080p-hidpi", logicalWidth: 1920, logicalHeight: 1080, scaleFactor: 2),
         ScaledPreset(id: "1440p-hidpi", logicalWidth: 2560, logicalHeight: 1440, scaleFactor: 2),
+        ScaledPreset(id: "uw1080-hidpi", logicalWidth: 2560, logicalHeight: 1080, scaleFactor: 2),
         ScaledPreset(id: "3k-hidpi", logicalWidth: 3008, logicalHeight: 1692, scaleFactor: 2),
+        ScaledPreset(id: "uwqhd-hidpi", logicalWidth: 3440, logicalHeight: 1440, scaleFactor: 2),
         ScaledPreset(id: "4k-hidpi", logicalWidth: 3840, logicalHeight: 2160, scaleFactor: 2),
     ]
 
@@ -394,17 +483,19 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
     }
 
     func activatePreset(_ preset: ScaledPreset) {
-        if !activePresetIDs.contains(preset.id) {
-            activePresetIDs.append(preset.id)
-        }
         stateLock.lock()
         let existingDisplay = virtualDisplays[preset.id]
         stateLock.unlock()
 
-        guard existingDisplay == nil else { return }
+        guard existingDisplay == nil else {
+            if !activePresetIDs.contains(preset.id) {
+                activePresetIDs.append(preset.id)
+            }
+            return
+        }
         let presetIndex = Self.presets.firstIndex(of: preset) ?? 0
         let spec = VirtualDisplaySpec(
-            name: "Vorssaint Virtual \(preset.logicalWidth)x\(preset.logicalHeight)",
+            name: "Basalt Virtual \(preset.logicalWidth)x\(preset.logicalHeight)",
             logicalWidth: preset.logicalWidth,
             logicalHeight: preset.logicalHeight,
             scaleFactor: preset.scaleFactor,
@@ -413,15 +504,18 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
             serialNum: UInt32(presetIndex + 1),
             sizeInMillimeters: nil
         )
-        if let created = createRuntimeVirtualDisplay(spec: spec) {
-            let stillActive = activePresetIDs.contains(preset.id)
-            if stillActive {
-                stateLock.lock()
-                virtualDisplays[preset.id] = created.display
-                stateLock.unlock()
-                virtualDisplayIDs[preset.id] = created.id
-            }
+        guard let created = createRuntimeVirtualDisplay(spec: spec) else {
+            activePresetIDs.removeAll { $0 == preset.id }
+            virtualDisplayIDs.removeValue(forKey: preset.id)
+            return
         }
+        if !activePresetIDs.contains(preset.id) {
+            activePresetIDs.append(preset.id)
+        }
+        stateLock.lock()
+        virtualDisplays[preset.id] = created.display
+        stateLock.unlock()
+        virtualDisplayIDs[preset.id] = created.id
     }
 
     func deactivatePreset(_ preset: ScaledPreset) {
@@ -558,7 +652,7 @@ final class VirtualDisplayManager: ObservableObject, @unchecked Sendable {
         let sizeMM = (screenSize.width > 0 && screenSize.height > 0) ? screenSize : nil
 
         return VirtualDisplaySpec(
-            name: "Vorssaint HiDPI Mirror \(width)x\(height)",
+            name: "Basalt HiDPI Mirror \(width)x\(height)",
             logicalWidth: width,
             logicalHeight: height,
             scaleFactor: scaleFactor,

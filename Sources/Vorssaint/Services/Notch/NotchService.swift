@@ -3734,6 +3734,14 @@ final class NotchService: ObservableObject {
         updateFullscreenVisibility(displayID: screen.notchDisplayID)
     }
 
+    private static var fallbackStatusBarThickness: CGFloat {
+        let reported = NSStatusBar.system.thickness
+        if #available(macOS 26.0, *) {
+            return max(reported, 30)
+        }
+        return reported
+    }
+
     /// The island's geometry on a display, before its menus are measured.
     private func baseGeometry(for screen: NSScreen) -> NotchGeometry {
         let cameraWidth: CGFloat
@@ -3746,7 +3754,7 @@ final class NotchService: ObservableObject {
                              menuBarHeight: menuBarMeasurements.height(
                                 displayID: screen.notchDisplayID, frame: screen.frame,
                                 visibleTop: screen.visibleFrame.maxY, scale: screen.backingScaleFactor,
-                                statusBarThickness: NSStatusBar.system.thickness),
+                                statusBarThickness: Self.fallbackStatusBarThickness),
                              customWidth: UserDefaults.standard.double(forKey: DefaultsKey.notchCustomWidth),
                              customHeight: UserDefaults.standard.double(forKey: DefaultsKey.notchCustomHeight),
                              cameraFit: NotchCameraFit.current(), silhouette: NotchSilhouette.current(),

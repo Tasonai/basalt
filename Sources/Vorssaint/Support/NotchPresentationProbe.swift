@@ -313,10 +313,14 @@ enum NotchPresentationProbe {
             screen.auxiliaryTopLeftArea.map { max(0, right.minX - $0.maxX) }
         } ?? 0
         var measurements = NotchMenuBarMeasurements()
+        let fallbackBarThickness: CGFloat = {
+            if #available(macOS 26.0, *) { return max(NSStatusBar.system.thickness, 30) }
+            return NSStatusBar.system.thickness
+        }()
         let geometry = NotchGeometry(screen: screen.frame, safeAreaTop: screen.safeAreaInsets.top,
             cameraWidth: cameraWidth, menuBarHeight: measurements.height(
                 displayID: screen.notchDisplayID, frame: screen.frame, visibleTop: screen.visibleFrame.maxY,
-                scale: screen.backingScaleFactor, statusBarThickness: NSStatusBar.system.thickness))
+                scale: screen.backingScaleFactor, statusBarThickness: fallbackBarThickness))
         let notice = NotchNotice(event: .accessory, title: FeatureStrings.notchActivities(L10n.shared.language).connected,
                                 detail: title, symbol: NotchAccessorySupport.symbol(name: title, majorClass: 0x04, minorClass: 0x06))
         let size = geometry.noticeSize(wings: notice.wings(in: geometry))

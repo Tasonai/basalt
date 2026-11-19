@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 /// capture's pixels per point, keeping stroke weights and text sizes visually
 /// constant across 1x and Retina captures.
 enum ScreenshotRenderer {
-    private static let blurContext = CIContext(options: [.cacheIntermediates: false])
+    private static let blurContext = MetalDeviceProvider.lowPowerCIContext(options: [.cacheIntermediates: false])
 
     static func color(_ id: ScreenshotSupport.ColorID, alpha: CGFloat = 1) -> CGColor {
         let c = id.components

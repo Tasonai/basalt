@@ -6,6 +6,31 @@ import CoreImage
 import Metal
 import simd
 
+/// Picks the integrated low-power GPU on dual-GPU Intel Macs so background
+/// overlays, screenshot effects, and CoreImage filters never wake the discrete
+/// Radeon GPU needlessly.
+enum MetalDeviceProvider {
+    static func lowPowerDevice() -> MTLDevice? {
+        #if os(macOS)
+        let devices = MTLCopyAllDevices()
+        if let integrated = devices.first(where: { $0.isLowPower && !$0.isHeadless }) {
+            return integrated
+        }
+        if let anyLowPower = devices.first(where: { $0.isLowPower }) {
+            return anyLowPower
+        }
+        #endif
+        return MTLCreateSystemDefaultDevice()
+    }
+
+    static func lowPowerCIContext(options: [CIContextOption: Any] = [:]) -> CIContext {
+        if let device = lowPowerDevice() {
+            return CIContext(mtlDevice: device, options: options)
+        }
+        return CIContext(options: options)
+    }
+}
+
 /// Compiles lightweight GPU kernels from embedded Metal source at runtime via
 /// `makeLibrary(source:)` so hosts without the offline `metallib` CLI still run
 /// hardware-accelerated TPDF gradient dithering and directional motion blur,
@@ -17,6 +42,7 @@ final class VorssaintMetalShaders: @unchecked Sendable {
     private let device: MTLDevice?
     private let commandQueue: MTLCommandQueue?
     private let library: MTLLibrary?
+    private let cachedCIContext: CIContext?
     private var ditherPipeline: MTLComputePipelineState?
     private var motionBlurPipeline: MTLComputePipelineState?
 
@@ -79,10 +105,11 @@ final class VorssaintMetalShaders: @unchecked Sendable {
     """
 
     private init() {
-        let dev = MTLCreateSystemDefaultDevice()
+        let dev = MetalDeviceProvider.lowPowerDevice()
         self.device = dev
         self.commandQueue = dev?.makeCommandQueue()
         self.library = try? dev?.makeLibrary(source: Self.shaderSource, options: nil)
+        self.cachedCIContext = dev.map { CIContext(mtlDevice: $0, options: [.cacheIntermediates: false]) }
     }
 
     var isMetalAvailable: Bool {
@@ -172,6 +199,10 @@ final class VorssaintMetalShaders: @unchecked Sendable {
         let grid = MTLSize(width: width, height: height, depth: 1)
         enc.dispatchThreads(grid, threadsPerThreadgroup: tg)
         enc.endEncoding()
+        if tex.storageMode == .managed, let blit = cmd.makeBlitCommandEncoder() {
+            blit.synchronize(resource: tex)
+            blit.endEncoding()
+        }
         cmd.commit()
         cmd.waitUntilCompleted()
         guard cmd.status == .completed else { return nil }
@@ -208,7 +239,7 @@ final class VorssaintMetalShaders: @unchecked Sendable {
            let queue = commandQueue,
            let pipeline = ensureMotionBlurPipeline(),
            w > 0, h > 0, w <= 8192, h <= 8192,
-           let ciContext = CIContext(mtlDevice: device) as CIContext?,
+           let ciContext = cachedCIContext,
            let blurred = renderMetalMotionBlur(image: image, extent: extent, width: w, height: h,
                                                velocity: velocity, samples: samples,
                                                device: device, queue: queue,

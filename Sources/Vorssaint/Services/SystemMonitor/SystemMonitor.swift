@@ -1029,7 +1029,7 @@ final class SystemMonitor: ObservableObject {
                 }
                 guard !loads.isEmpty else { return nil }
                 let resolvedECount = eIndices.isEmpty
-                    ? max(1, loads.count / 2)
+                    ? 0
                     : max(1, eIndices.filter { $0 >= 0 && $0 < next.cpuCoreUsage.count && next.cpuCoreUsage[$0] != nil }.count)
                 return (loads, resolvedECount)
             }()
@@ -1041,11 +1041,35 @@ final class SystemMonitor: ObservableObject {
             if plan.needPower || plan.needCPU || plan.needGPUUsage {
                 if self.lastPowerSnapshot == nil
                     || now - self.lastPowerSnapshotAt >= TimeInterval(max(1, intervalSeconds)) {
-                    let sampledPower = AppleSiliconIOReportSampler.shared.sample()
+                    var sampledPower = AppleSiliconIOReportSampler.shared.sample()
+                    if !sampledPower.isHardwareBacked, let smcPower = next.power,
+                       (smcPower.systemWatts != nil || smcPower.cpuWatts != nil || smcPower.gpuWatts != nil) {
+                        let cpuW = max(0, smcPower.cpuWatts ?? 0)
+                        let gpuW = max(0, smcPower.gpuWatts ?? 0)
+                        let pkgW = max(0, smcPower.systemWatts ?? (cpuW + gpuW))
+                        sampledPower = AppleSiliconPowerSnapshot(
+                            cpuWatts: cpuW,
+                            gpuWatts: gpuW,
+                            aneWatts: 0,
+                            packageWatts: pkgW,
+                            aneActivityPercent: 0,
+                            isHardwareBacked: true
+                        )
+                    }
+                    let previous = self.lastPowerSnapshot
+                    let changed = previous == nil
+                        || previous?.isHardwareBacked != sampledPower.isHardwareBacked
+                        || abs((previous?.packageWatts ?? -1) - sampledPower.packageWatts) >= 0.05
+                        || abs((previous?.cpuWatts ?? -1) - sampledPower.cpuWatts) >= 0.05
+                        || abs((previous?.gpuWatts ?? -1) - sampledPower.gpuWatts) >= 0.05
+                        || abs((previous?.aneWatts ?? -1) - sampledPower.aneWatts) >= 0.05
+                        || abs((previous?.aneActivityPercent ?? -1) - sampledPower.aneActivityPercent) >= 0.5
                     self.lastPowerSnapshot = sampledPower
                     self.lastPowerSnapshotAt = now
                     nextPowerSnapshot = sampledPower
-                    updatedAuxTelemetry = true
+                    if changed {
+                        updatedAuxTelemetry = true
+                    }
                 }
             }
 
@@ -1053,10 +1077,12 @@ final class SystemMonitor: ObservableObject {
                 if self.lastSmartSnapshot == nil
                     || now - self.lastSmartSnapshotAt >= self.smartSampleStrideSeconds {
                     let sampledSmart = NVMeSMARTHealthReader.readPrimaryDisk()
+                    if sampledSmart != self.lastSmartSnapshot {
+                        updatedAuxTelemetry = true
+                    }
                     self.lastSmartSnapshot = sampledSmart
                     self.lastSmartSnapshotAt = now
                     nextSmartSnapshot = sampledSmart
-                    updatedAuxTelemetry = true
                 }
             }
 
@@ -1075,7 +1101,10 @@ final class SystemMonitor: ObservableObject {
                     case .normal, .unknown: return 40
                     }
                 }()
-                let watts = nextPowerSnapshot?.packageWatts ?? next.power?.systemWatts ?? 0
+                let hardwarePackageWatts = nextPowerSnapshot?.isHardwareBacked == true
+                    ? nextPowerSnapshot?.packageWatts
+                    : nil
+                let watts = hardwarePackageWatts ?? next.power?.systemWatts ?? 0
                 TelemetryHistoryRing.shared.record(
                     cpuPercent: cpuPct,
                     gpuPercent: gpuPct,

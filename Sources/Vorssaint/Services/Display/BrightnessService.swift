@@ -3,6 +3,7 @@
 
 import AppKit
 import IOKit.graphics
+import IOKit.i2c
 import ObjectiveC.runtime
 import os
 
@@ -99,6 +100,14 @@ final class BrightnessService: ObservableObject {
         didSet {
             guard oldValue != solarSyncEnabled else { return }
             UserDefaults.standard.set(solarSyncEnabled, forKey: Self.solarSyncDefaultsKey)
+            if solarSyncEnabled {
+                if UserDefaults.standard.bool(forKey: DefaultsKey.displayAmbientSyncEnabled) {
+                    UserDefaults.standard.set(false, forKey: DefaultsKey.displayAmbientSyncEnabled)
+                }
+                if AmbientLightSyncService.shared.isEnabled {
+                    AmbientLightSyncService.shared.isEnabled = false
+                }
+            }
             syncSolarSyncTimer()
         }
     }
@@ -125,6 +134,21 @@ final class BrightnessService: ObservableObject {
         case lastActive
         case failed
         case closedLid
+    }
+
+    private final class IOI2CInterfaceBox: NSObject, @unchecked Sendable {
+        let interface: io_service_t
+
+        init(_ interface: io_service_t) {
+            self.interface = interface
+            super.init()
+        }
+
+        deinit {
+            if interface != IO_OBJECT_NULL {
+                IOObjectRelease(interface)
+            }
+        }
     }
 
     private struct Route {
@@ -2635,9 +2659,29 @@ final class BrightnessService: ObservableObject {
     }
 
     private func ddcSend(to id: CGDirectDisplayID, service: CFTypeRef, packet: [UInt8]) -> Bool {
-        guard let write = BrightnessBridge.writeI2C else { return false }
         paceDDCCommand(for: id)
         defer { recordDDCCommandEnd(for: id) }
+        if let box = service as? IOI2CInterfaceBox {
+            var connect: IOI2CConnectRef?
+            guard IOI2CInterfaceOpen(box.interface, 0, &connect) == KERN_SUCCESS,
+                  let connect else { return false }
+            defer { IOI2CInterfaceClose(connect, 0) }
+            var wireData: [UInt8] = [UInt8(BrightnessSupport.dataAddress)] + packet
+            var success = false
+            for attempt in 0...BrightnessSupport.retryAttempts {
+                for _ in 0..<BrightnessSupport.writeCycles {
+                    usleep(BrightnessSupport.writePauseMicroseconds)
+                    let accepted = Self.sendIntelI2CWrite(connect: connect, wireData: &wireData)
+                    success = accepted || success
+                }
+                if success { return true }
+                if attempt < BrightnessSupport.retryAttempts {
+                    usleep(BrightnessSupport.retryPauseMicroseconds)
+                }
+            }
+            return success
+        }
+        guard let write = BrightnessBridge.writeI2C else { return false }
         var bytes = packet
         var success = false
         for attempt in 0...BrightnessSupport.retryAttempts {
@@ -2654,6 +2698,61 @@ final class BrightnessService: ObservableObject {
             }
         }
         return success
+    }
+
+    private static func sendIntelI2CWrite(connect: IOI2CConnectRef,
+                                          wireData: inout [UInt8]) -> Bool {
+        var request = IOI2CRequest()
+        request.sendAddress = UInt32(BrightnessSupport.chipAddress << 1)
+        request.sendTransactionType = IOOptionBits(kIOI2CSimpleTransactionType)
+        request.replyTransactionType = IOOptionBits(kIOI2CNoTransactionType)
+        request.commFlags = 0
+        request.minReplyDelay = 0
+        let status = wireData.withUnsafeMutableBufferPointer { buf -> IOReturn in
+            request.sendBuffer = vm_address_t(bitPattern: buf.baseAddress)
+            request.sendBytes = UInt32(buf.count)
+            return IOI2CSendRequest(connect, 0, &request)
+        }
+        return status == KERN_SUCCESS && request.result == KERN_SUCCESS
+    }
+
+    private static func sendIntelI2CRead(connect: IOI2CConnectRef,
+                                         wireRequest: inout [UInt8],
+                                         reply: inout [UInt8]) -> (writeAccepted: Bool, readSucceeded: Bool) {
+        let replyModes: [IOOptionBits] = [
+            IOOptionBits(kIOI2CDDCciReplyTransactionType),
+            IOOptionBits(kIOI2CSimpleTransactionType),
+        ]
+        var writeAccepted = false
+        for replyType in replyModes {
+            var request = IOI2CRequest()
+            request.sendAddress = UInt32(BrightnessSupport.chipAddress << 1)
+            request.sendTransactionType = IOOptionBits(kIOI2CSimpleTransactionType)
+            request.minReplyDelay = UInt64(BrightnessSupport.readPauseMicroseconds) * 1_000
+            request.replyAddress = UInt32((BrightnessSupport.chipAddress << 1) | 1)
+            request.replyTransactionType = replyType
+            request.commFlags = 0
+            for idx in reply.indices { reply[idx] = 0 }
+            let status = wireRequest.withUnsafeMutableBufferPointer { sBuf in
+                reply.withUnsafeMutableBufferPointer { rBuf in
+                    request.sendBuffer = vm_address_t(bitPattern: sBuf.baseAddress)
+                    request.sendBytes = UInt32(sBuf.count)
+                    request.replyBuffer = vm_address_t(bitPattern: rBuf.baseAddress)
+                    request.replyBytes = UInt32(rBuf.count)
+                    return IOI2CSendRequest(connect, 0, &request)
+                }
+            }
+            if status == KERN_SUCCESS && request.result == KERN_SUCCESS {
+                return (true, true)
+            }
+            if request.result != kIOReturnUnsupportedMode {
+                // Verify whether a plain write is accepted so write-only DDC monitors still get sliders.
+                if sendIntelI2CWrite(connect: connect, wireData: &wireRequest) {
+                    writeAccepted = true
+                }
+            }
+        }
+        return (writeAccepted, false)
     }
 
     private enum DDCProbe {
@@ -2784,36 +2883,61 @@ final class BrightnessService: ObservableObject {
     private func ddcProbeLuminance(for id: CGDirectDisplayID,
                                    service: CFTypeRef,
                                    classifyingChannel: Bool = false) -> DDCProbe {
-        guard let write = BrightnessBridge.writeI2C,
-              let read = BrightnessBridge.readI2C else { return .dead }
         paceDDCCommand(for: id)
         defer { recordDDCCommandEnd(for: id) }
         var request = BrightnessSupport.readRequestPacket(code: BrightnessSupport.luminanceCode)
         var writeAccepted = false
         let attempts = BrightnessSupport.ddcProbeAttempts()
-        for attempt in 0..<attempts {
-            let writeCycles = BrightnessSupport.ddcProbeWriteCycles(
-                classifyingChannel: classifyingChannel,
-                isFinalAttempt: attempt + 1 == attempts)
-            for _ in 0..<writeCycles {
+
+        if let box = service as? IOI2CInterfaceBox {
+            var connect: IOI2CConnectRef?
+            guard IOI2CInterfaceOpen(box.interface, 0, &connect) == KERN_SUCCESS,
+                  let connect else { return .dead }
+            defer { IOI2CInterfaceClose(connect, 0) }
+            var wireRequest: [UInt8] = [UInt8(BrightnessSupport.dataAddress)] + request
+            var reply = [UInt8](repeating: 0, count: BrightnessSupport.replyLength)
+            for attempt in 0..<attempts {
                 usleep(BrightnessSupport.writePauseMicroseconds)
-                if write(service, BrightnessSupport.chipAddress,
-                         BrightnessSupport.dataAddress,
-                         &request, UInt32(request.count)) == KERN_SUCCESS {
-                    writeAccepted = true
+                let outcome = Self.sendIntelI2CRead(connect: connect,
+                                                    wireRequest: &wireRequest,
+                                                    reply: &reply)
+                if outcome.writeAccepted { writeAccepted = true }
+                if outcome.readSucceeded,
+                   let parsed = BrightnessSupport.parseReply(reply, code: BrightnessSupport.luminanceCode) {
+                    return .replied(current: parsed.current, maximum: parsed.maximum)
+                }
+                if attempt + 1 < attempts {
+                    usleep(BrightnessSupport.retryPauseMicroseconds)
                 }
             }
-            usleep(BrightnessSupport.readPauseMicroseconds)
-            var reply = [UInt8](repeating: 0, count: BrightnessSupport.replyLength)
-            if read(service, BrightnessSupport.chipAddress, 0,
-                    &reply, UInt32(reply.count)) == KERN_SUCCESS,
-               let parsed = BrightnessSupport.parseReply(reply, code: BrightnessSupport.luminanceCode) {
-                return .replied(current: parsed.current, maximum: parsed.maximum)
-            }
-            if attempt + 1 < attempts {
-                usleep(BrightnessSupport.retryPauseMicroseconds)
+        } else {
+            guard let write = BrightnessBridge.writeI2C,
+                  let read = BrightnessBridge.readI2C else { return .dead }
+            for attempt in 0..<attempts {
+                let writeCycles = BrightnessSupport.ddcProbeWriteCycles(
+                    classifyingChannel: classifyingChannel,
+                    isFinalAttempt: attempt + 1 == attempts)
+                for _ in 0..<writeCycles {
+                    usleep(BrightnessSupport.writePauseMicroseconds)
+                    if write(service, BrightnessSupport.chipAddress,
+                             BrightnessSupport.dataAddress,
+                             &request, UInt32(request.count)) == KERN_SUCCESS {
+                        writeAccepted = true
+                    }
+                }
+                usleep(BrightnessSupport.readPauseMicroseconds)
+                var reply = [UInt8](repeating: 0, count: BrightnessSupport.replyLength)
+                if read(service, BrightnessSupport.chipAddress, 0,
+                        &reply, UInt32(reply.count)) == KERN_SUCCESS,
+                   let parsed = BrightnessSupport.parseReply(reply, code: BrightnessSupport.luminanceCode) {
+                    return .replied(current: parsed.current, maximum: parsed.maximum)
+                }
+                if attempt + 1 < attempts {
+                    usleep(BrightnessSupport.retryPauseMicroseconds)
+                }
             }
         }
+
         switch BrightnessSupport.channelOutcome(writeAccepted: writeAccepted, replyParsed: false) {
         case .writeOnly: return .writeOnly
         case .live, .dead: return .dead
@@ -2862,54 +2986,112 @@ final class BrightnessService: ObservableObject {
         var service: CFTypeRef
     }
 
-    /// External displays hang off the IORegistry as a framebuffer entry
-    /// (identity: EDID UUID, product attributes) followed by its AV service
-    /// proxy (the I2C endpoint, tagged with its location). Only proxies
-    /// marked External accept DDC; the built-in panel's proxy is Embedded.
+    /// External displays hang off the IORegistry either as Apple Silicon DCP
+    /// `DCPAVServiceProxy` nodes or, on Intel x86_64 Macs, as `IOFramebuffer`
+    /// nodes exposing an `IOFramebufferI2CInterface` (`IOI2CInterface`).
     private static func externalServices() -> [ExternalService] {
-        guard let createWithService = BrightnessBridge.createWithService else { return [] }
         var results: [ExternalService] = []
-        let root = IORegistryGetRootEntry(kIOMainPortDefault)
-        defer { IOObjectRelease(root) }
+        if let createWithService = BrightnessBridge.createWithService {
+            let root = IORegistryGetRootEntry(kIOMainPortDefault)
+            defer { IOObjectRelease(root) }
+            var iterator = io_iterator_t()
+            if IORegistryEntryCreateIterator(root, kIOServicePlane,
+                                             IOOptionBits(kIORegistryIterateRecursively),
+                                             &iterator) == KERN_SUCCESS {
+                defer { IOObjectRelease(iterator) }
+                var pending = BrightnessSupport.ServiceIdentity()
+                var ordinal = 0
+                while true {
+                    let entry = IOIteratorNext(iterator)
+                    guard entry != IO_OBJECT_NULL else { break }
+                    defer { IOObjectRelease(entry) }
+                    var nameBuffer = [CChar](repeating: 0, count: 128)
+                    guard IORegistryEntryGetName(entry, &nameBuffer) == KERN_SUCCESS else { continue }
+                    let name = String(cString: nameBuffer)
+
+                    if name.contains("AppleCLCD2") || name.contains("IOMobileFramebufferShim") {
+                        ordinal += 1
+                        pending = BrightnessSupport.ServiceIdentity()
+                        pending.ordinal = ordinal
+                        if let uuid = Self.property(entry, "EDID UUID") as? String {
+                            pending.edidUUID = uuid
+                        }
+                        var path = [CChar](repeating: 0, count: 512)
+                        if IORegistryEntryGetPath(entry, kIOServicePlane, &path) == KERN_SUCCESS {
+                            pending.ioDisplayLocation = String(cString: path)
+                        }
+                        if let attributes = Self.property(entry, "DisplayAttributes") as? NSDictionary,
+                           let product = attributes["ProductAttributes"] as? NSDictionary {
+                            pending.productName = product["ProductName"] as? String ?? ""
+                            pending.serialNumber = (product["SerialNumber"] as? NSNumber)?.int64Value ?? 0
+                        }
+                    } else if name == "DCPAVServiceProxy" {
+                        guard let location = Self.property(entry, "Location") as? String,
+                              location == "External",
+                              let service = createWithService(kCFAllocatorDefault, entry)?.takeRetainedValue()
+                        else { continue }
+                        results.append(ExternalService(identity: pending, service: service))
+                    }
+                }
+            }
+        }
+        if results.isEmpty {
+            results = intelExternalServices()
+        }
+        return results
+    }
+
+    /// Intel x86_64 I2C discovery over `IOFramebuffer` + `IOFBCopyI2CInterfaceForBus`.
+    private static func intelExternalServices() -> [ExternalService] {
+        var results: [ExternalService] = []
         var iterator = io_iterator_t()
-        guard IORegistryEntryCreateIterator(root, kIOServicePlane,
-                                            IOOptionBits(kIORegistryIterateRecursively),
-                                            &iterator) == KERN_SUCCESS else { return [] }
+        guard IOServiceGetMatchingServices(kIOMainPortDefault,
+                                           IOServiceMatching("IOFramebuffer"),
+                                           &iterator) == KERN_SUCCESS else { return [] }
         defer { IOObjectRelease(iterator) }
 
-        var pending = BrightnessSupport.ServiceIdentity()
         var ordinal = 0
-        while true {
-            let entry = IOIteratorNext(iterator)
-            guard entry != IO_OBJECT_NULL else { break }
-            defer { IOObjectRelease(entry) }
-            var nameBuffer = [CChar](repeating: 0, count: 128)
-            guard IORegistryEntryGetName(entry, &nameBuffer) == KERN_SUCCESS else { continue }
-            let name = String(cString: nameBuffer)
-
-            if name.contains("AppleCLCD2") || name.contains("IOMobileFramebufferShim") {
-                ordinal += 1
-                pending = BrightnessSupport.ServiceIdentity()
-                pending.ordinal = ordinal
-                if let uuid = Self.property(entry, "EDID UUID") as? String {
-                    pending.edidUUID = uuid
-                }
-                var path = [CChar](repeating: 0, count: 512)
-                if IORegistryEntryGetPath(entry, kIOServicePlane, &path) == KERN_SUCCESS {
-                    pending.ioDisplayLocation = String(cString: path)
-                }
-                if let attributes = Self.property(entry, "DisplayAttributes") as? NSDictionary,
-                   let product = attributes["ProductAttributes"] as? NSDictionary {
-                    pending.productName = product["ProductName"] as? String ?? ""
-                    pending.serialNumber = (product["SerialNumber"] as? NSNumber)?.int64Value ?? 0
-                }
-            } else if name == "DCPAVServiceProxy" {
-                guard let location = Self.property(entry, "Location") as? String,
-                      location == "External",
-                      let service = createWithService(kCFAllocatorDefault, entry)?.takeRetainedValue()
-                else { continue }
-                results.append(ExternalService(identity: pending, service: service))
+        var fb = IOIteratorNext(iterator)
+        while fb != IO_OBJECT_NULL {
+            defer {
+                IOObjectRelease(fb)
+                fb = IOIteratorNext(iterator)
             }
+            var busCount: IOItemCount = 0
+            guard IOFBGetI2CInterfaceCount(fb, &busCount) == KERN_SUCCESS, busCount > 0 else {
+                continue
+            }
+            guard let info = IODisplayCreateInfoDictionary(
+                fb, IOOptionBits(kIODisplayOnlyPreferredName)
+            )?.takeRetainedValue() as? [String: Any] else {
+                continue
+            }
+            let location = (info[kIODisplayLocationKey] as? String) ?? ""
+            guard !location.isEmpty,
+                  location != "unknown",
+                  !location.contains("AppleBacklightDisplay") else {
+                continue
+            }
+            let vendorID = (info[kDisplayVendorID] as? NSNumber)?.int64Value ?? 0
+            let productID = (info[kDisplayProductID] as? NSNumber)?.int64Value ?? 0
+            guard vendorID > 0 || productID > 0 else { continue }
+
+            var i2cInterface: io_service_t = IO_OBJECT_NULL
+            guard IOFBCopyI2CInterfaceForBus(fb, 0, &i2cInterface) == KERN_SUCCESS,
+                  i2cInterface != IO_OBJECT_NULL else {
+                continue
+            }
+            ordinal += 1
+            var identity = BrightnessSupport.ServiceIdentity()
+            identity.ordinal = ordinal
+            identity.ioDisplayLocation = location
+            if let names = info["DisplayProductName"] as? [String: String],
+               let productName = names["en_US"] ?? names.first?.value {
+                identity.productName = productName
+            }
+            identity.serialNumber = (info[kDisplaySerialNumber] as? NSNumber)?.int64Value ?? 0
+            results.append(ExternalService(identity: identity,
+                                           service: IOI2CInterfaceBox(i2cInterface)))
         }
         return results
     }
@@ -2964,7 +3146,11 @@ enum BrightnessBridge {
         symbol(coreDisplayHandle, "IOAVServiceReadI2C")
 
     static var ddcAvailable: Bool {
-        createWithService != nil && writeI2C != nil && readI2C != nil
+        #if arch(x86_64)
+        return true
+        #else
+        return createWithService != nil && writeI2C != nil && readI2C != nil
+        #endif
     }
 
     private static func symbol<T>(_ handle: UnsafeMutableRawPointer?, _ name: String) -> T? {
