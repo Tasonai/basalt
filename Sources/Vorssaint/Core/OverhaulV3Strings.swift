@@ -935,15 +935,15 @@ struct CustomForkAttribution {
         case .ru:
             return CustomForkAttribution(
                 badge: "Basalt · Intel Mac Fork",
-                aboutSummary: "Basalt — независимая кастомная навайбкоженная альтернатива для Mac на процессорах Intel (x86_64) с собственным именем, иконкой и Bundle ID. Оригинальный Vorssaint работает только на Apple Silicon — Basalt создан на базе отличной работы автора @vorssaint.",
-                donateCreditNote: "Ссылка на донат ведёт напрямую оригинальному автору Vorssaint (@vorssaint) — он проделал огромную работу, на которой основан Basalt.",
+                aboutSummary: "Basalt – независимая кастомная навайбкоженная альтернатива для Mac на процессорах Intel (x86_64) с собственным именем, иконкой и Bundle ID. Оригинальный Vorssaint работает только на Apple Silicon; Basalt создан на базе отличной работы автора @vorssaint.",
+                donateCreditNote: "Ссылка на донат ведёт напрямую оригинальному автору Vorssaint (@vorssaint): он проделал огромную работу, на которой основан Basalt.",
                 originalRepoLabel: "Оригинальный Vorssaint",
                 customForkRepoLabel: "Репозиторий Basalt"
             )
         case .uk:
             return CustomForkAttribution(
                 badge: "Basalt · Intel Mac Fork",
-                aboutSummary: "Basalt — незалежна кастомна навайбкоджена альтернатива для Mac на процесорах Intel (x86_64) із власним ім’ям, іконкою та Bundle ID. Оригінальний Vorssaint працює лише на Apple Silicon — Basalt створено на основі чудової роботи автора @vorssaint.",
+                aboutSummary: "Basalt – незалежна кастомна навайбкоджена альтернатива для Mac на процесорах Intel (x86_64) із власним ім’ям, іконкою та Bundle ID. Оригінальний Vorssaint працює лише на Apple Silicon; Basalt створено на основі чудової роботи автора @vorssaint.",
                 donateCreditNote: "Посилання на донат веде напряму до оригінального автора Vorssaint (@vorssaint), чия чудова робота лежить в основі Basalt.",
                 originalRepoLabel: "Оригінальний Vorssaint",
                 customForkRepoLabel: "Репозиторій Basalt"
@@ -951,7 +951,7 @@ struct CustomForkAttribution {
         case .de:
             return CustomForkAttribution(
                 badge: "Custom Intel Mac Fork",
-                aboutSummary: "Inoffizielle, per Vibe-Coding angepasste Alternative für Intel-Macs (x86_64). Das offizielle Vorssaint läuft nur auf Apple Silicon — dieser Fork baut auf der großartigen Arbeit von @vorssaint auf.",
+                aboutSummary: "Inoffizielle, per Vibe-Coding angepasste Alternative für Intel-Macs (x86_64). Das offizielle Vorssaint läuft nur auf Apple Silicon; dieser Fork baut auf der großartigen Arbeit von @vorssaint auf.",
                 donateCreditNote: "Spenden über Buy Me a Coffee gehen direkt an den ursprünglichen Vorssaint-Autor (@vorssaint), auf dessen Arbeit dieser Intel-Fork basiert.",
                 originalRepoLabel: "Original Vorssaint",
                 customForkRepoLabel: "Intel-Fork"
@@ -959,7 +959,7 @@ struct CustomForkAttribution {
         case .fr:
             return CustomForkAttribution(
                 badge: "Fork Custom · Intel Mac",
-                aboutSummary: "Alternative personnalisée et non officielle (vibe-codée) pour Mac Intel (x86_64). L’application officielle Vorssaint ne fonctionne que sur Apple Silicon — ce fork repose sur l’excellent travail de @vorssaint.",
+                aboutSummary: "Alternative personnalisée et non officielle (vibe-codée) pour Mac Intel (x86_64). L’application officielle Vorssaint ne fonctionne que sur Apple Silicon ; ce fork repose sur l’excellent travail de @vorssaint.",
                 donateCreditNote: "Le lien de don soutient directement l’auteur original de Vorssaint (@vorssaint), dont l’excellent travail est à la base de cette version Intel.",
                 originalRepoLabel: "Vorssaint original",
                 customForkRepoLabel: "Fork Intel"
@@ -975,7 +975,7 @@ struct CustomForkAttribution {
         case .ptBR:
             return CustomForkAttribution(
                 badge: "Fork Custom · Intel Mac",
-                aboutSummary: "Alternativa personalizada não oficial (vibe-coded) para Macs Intel (x86_64). O Vorssaint oficial funciona apenas no Apple Silicon — este fork é baseado no ótimo trabalho de @vorssaint.",
+                aboutSummary: "Alternativa personalizada não oficial (vibe-coded) para Macs Intel (x86_64). O Vorssaint oficial funciona apenas no Apple Silicon; este fork é baseado no ótimo trabalho de @vorssaint.",
                 donateCreditNote: "As doações vão diretamente para o autor original do Vorssaint (@vorssaint), cujo excelente trabalho serve de base para esta edição Intel.",
                 originalRepoLabel: "Vorssaint original",
                 customForkRepoLabel: "Fork Intel"
@@ -999,7 +999,7 @@ struct CustomForkAttribution {
         case .sk:
             return CustomForkAttribution(
                 badge: "Vlastný Intel Mac Fork",
-                aboutSummary: "Neoficiálna vlastná (vibe-coded) alternatíva pre Intel Mac (x86_64). Oficiálny Vorssaint funguje iba na Apple Silicon — tento fork stavia na skvelej práci autora @vorssaint.",
+                aboutSummary: "Neoficiálna vlastná (vibe-coded) alternatíva pre Intel Mac (x86_64). Oficiálny Vorssaint funguje iba na Apple Silicon; tento fork stavia na skvelej práci autora @vorssaint.",
                 donateCreditNote: "Odkaz na podporu smeruje priamo k pôvodnému autorovi Vorssaint (@vorssaint), na ktorého skvelej práci táto Intel verzia stojí.",
                 originalRepoLabel: "Pôvodný Vorssaint",
                 customForkRepoLabel: "Intel fork"
@@ -1024,7 +1024,7 @@ struct CustomForkAttribution {
             return CustomForkAttribution(
                 badge: "定制版 · Intel Mac",
                 aboutSummary: "面向 Intel Mac (x86_64) 的非官方定制（vibe-coded）替代版本。官方 Vorssaint 仅支持 Apple Silicon，本分支基于原作者 @vorssaint 的出色作品构建。",
-                donateCreditNote: "赞助链接直接指向 Vorssaint 原作者（@vorssaint）——感谢他打造了如此优秀的基础项目。",
+                donateCreditNote: "赞助链接直接指向 Vorssaint 原作者（@vorssaint），感谢他打造了如此优秀的基础项目。",
                 originalRepoLabel: "原版 Vorssaint",
                 customForkRepoLabel: "Intel 定制分支"
             )
@@ -1032,14 +1032,14 @@ struct CustomForkAttribution {
             return CustomForkAttribution(
                 badge: "客製版 · Intel Mac",
                 aboutSummary: "專為 Intel Mac (x86_64) 打造的非官方客製（vibe-coded）替代版本。官方 Vorssaint 僅支援 Apple Silicon，本分支基於原作者 @vorssaint 的優秀作品延伸。",
-                donateCreditNote: "贊助連結直接導向 Vorssaint 原作者（@vorssaint）——感謝他奠定了如此出色的基礎。",
+                donateCreditNote: "贊助連結直接導向 Vorssaint 原作者（@vorssaint），感謝他奠定了如此出色的基礎。",
                 originalRepoLabel: "原版 Vorssaint",
                 customForkRepoLabel: "Intel 客製分支"
             )
         case .enUS:
             return CustomForkAttribution(
                 badge: "Basalt · Intel Mac Fork",
-                aboutSummary: "Basalt is an independent, custom vibe-coded alternative for Intel Macs (x86_64) with its own name, icon, and bundle ID. Official Vorssaint runs on Apple Silicon only — Basalt builds on @vorssaint’s great work.",
+                aboutSummary: "Basalt is an independent, custom vibe-coded alternative for Intel Macs (x86_64) with its own name, icon, and bundle ID. Official Vorssaint runs on Apple Silicon only; Basalt builds on @vorssaint’s great work.",
                 donateCreditNote: "Donations go directly to the original Vorssaint author (@vorssaint), whose great work Basalt is built on.",
                 originalRepoLabel: "Original Vorssaint",
                 customForkRepoLabel: "Basalt Fork"
@@ -1048,7 +1048,7 @@ struct CustomForkAttribution {
     }
 }
 
-/// Localized copy for Basalt's Monolith-class Dynamic Island Daily Planner (Calendar + Apple Reminders + ⌘N Quick Capture).
+/// Localized copy for Basalt’s Monolith-class Dynamic Island Daily Planner (Calendar + Apple Reminders + ⌘N Quick Capture).
 struct NotchPlannerStrings {
     let remindersTitle: String
     let calendarTitle: String

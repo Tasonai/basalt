@@ -60,6 +60,7 @@ enum CleanerPolicy {
     /// loss, blank Settings panels, service sign outs, plugin licensing),
     /// each learned the hard way by the cleaners that came before.
     private static let hiddenCachePrefixes = [
+        "com.tasonai.basalt",
         "com.vorssaint",
         "CloudKit", "com.apple.bird",
         "com.apple.coreaudio", "com.apple.audio.", "coreaudiod",
@@ -84,6 +85,10 @@ enum CleanerPolicy {
         // A localization name is not evidence of disposable data. Keep the
         // leftover exclusion when the same entry is visited as caches or logs.
         if lowered.hasSuffix(".localized") { return true }
+        if let ownID = Bundle.main.bundleIdentifier?.lowercased(), !ownID.isEmpty,
+           lowered.hasPrefix(ownID) {
+            return true
+        }
         return hiddenCachePrefixes.contains { lowered.hasPrefix($0.lowercased()) }
     }
 

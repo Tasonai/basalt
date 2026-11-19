@@ -113,8 +113,10 @@ struct VorssaintPillToggleStyle: ToggleStyle {
 }
 
 /// Compact 30x17 trailing pill toggle for `SettingsRow` and table accessories without forcing `maxWidth: .infinity`.
+/// Automatically renders `configuration.label` beside the switch unless `.labelsHidden()` is applied (macOS 15+) or `showsLabel == false`.
 struct VorssaintCompactSwitchStyle: ToggleStyle {
     var tone: SemanticCategoryTone = .brand
+    var showsLabel: Bool = true
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -125,28 +127,34 @@ struct VorssaintCompactSwitchStyle: ToggleStyle {
         let highContrast = colorSchemeContrast == .increased
         let tint = tone.color(scheme: colorScheme, highContrast: highContrast)
         let offTrack = Color.primary.opacity(colorScheme == .dark ? (highContrast ? 0.28 : 0.18) : (highContrast ? 0.24 : 0.13))
-        Button {
+        let switchTrack = ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+            Capsule(style: .continuous)
+                .fill(configuration.isOn ? tint : offTrack)
+                .frame(width: 30, height: 17)
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(Color.primary.opacity(highContrast ? 0.35 : 0.08), lineWidth: 0.5)
+                )
+            Circle()
+                .fill(Color.white)
+                .shadow(color: Color.black.opacity(0.24), radius: 1.5, x: 0, y: 0.5)
+                .frame(width: 13, height: 13)
+                .padding(2)
+        }
+        .scaleEffect(isEnabled ? 1.0 : 0.98)
+        .opacity(appearsActive ? 1.0 : 0.86)
+        .animation(reduceMotion ? nil : DesignMotion.emilPress, value: configuration.isOn)
+        .contentShape(Capsule())
+
+        return Button {
             VorssaintHaptics.generic()
             configuration.isOn.toggle()
         } label: {
-            ZStack(alignment: configuration.isOn ? .trailing : .leading) {
-                Capsule(style: .continuous)
-                    .fill(configuration.isOn ? tint : offTrack)
-                    .frame(width: 30, height: 17)
-                    .overlay(
-                        Capsule(style: .continuous)
-                            .strokeBorder(Color.primary.opacity(highContrast ? 0.35 : 0.08), lineWidth: 0.5)
-                    )
-                Circle()
-                    .fill(Color.white)
-                    .shadow(color: Color.black.opacity(0.24), radius: 1.5, x: 0, y: 0.5)
-                    .frame(width: 13, height: 13)
-                    .padding(2)
-            }
-            .scaleEffect(isEnabled ? 1.0 : 0.98)
-            .opacity(appearsActive ? 1.0 : 0.86)
-            .animation(reduceMotion ? nil : DesignMotion.emilPress, value: configuration.isOn)
-            .contentShape(Capsule())
+            VorssaintCompactSwitchLabelRow(
+                configuration: configuration,
+                showsLabel: showsLabel,
+                switchTrack: switchTrack
+            )
         }
         .buttonStyle(VorssaintScalePressButtonStyle(cornerRadius: 9))
         .opacity(isEnabled ? 1.0 : 0.45)
@@ -154,6 +162,48 @@ struct VorssaintCompactSwitchStyle: ToggleStyle {
             Toggle(isOn: configuration.$isOn) {
                 configuration.label
             }
+        }
+    }
+}
+
+private struct VorssaintCompactSwitchLabelRow<Track: View>: View {
+    let configuration: ToggleStyleConfiguration
+    let showsLabel: Bool
+    let switchTrack: Track
+
+    var body: some View {
+        if #available(macOS 15.0, *) {
+            VorssaintCompactSwitchVisibilityRow(
+                configuration: configuration,
+                showsLabel: showsLabel,
+                switchTrack: switchTrack
+            )
+        } else if showsLabel {
+            HStack(spacing: 8) {
+                configuration.label
+                switchTrack
+            }
+        } else {
+            switchTrack
+        }
+    }
+}
+
+@available(macOS 15.0, *)
+private struct VorssaintCompactSwitchVisibilityRow<Track: View>: View {
+    let configuration: ToggleStyleConfiguration
+    let showsLabel: Bool
+    let switchTrack: Track
+    @Environment(\.labelsVisibility) private var labelsVisibility
+
+    var body: some View {
+        if showsLabel && labelsVisibility != .hidden {
+            HStack(spacing: 8) {
+                configuration.label
+                switchTrack
+            }
+        } else {
+            switchTrack
         }
     }
 }

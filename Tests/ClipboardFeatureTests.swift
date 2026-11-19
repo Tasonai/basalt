@@ -1643,6 +1643,7 @@ enum ClipboardFeatureTests {
 enum ClipboardPreviewContract {
     class Fixture {
         func pruneQuickBatchSelection() {}
+        func syncSQLiteRemoval(ids: [UUID], clearAllUnpinned: Bool = false) {}
         var latestPasteboardEntry: ClipboardHistoryEntry?
         var entriesStamp = 0
         var searchCache = ClipboardHistorySearchCache()

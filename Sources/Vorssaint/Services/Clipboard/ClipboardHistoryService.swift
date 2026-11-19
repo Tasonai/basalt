@@ -416,8 +416,13 @@ final class ClipboardHistoryService: ObservableObject {
     /// that copies a counted entry again, and the count shown is the count
     /// removed.
     func clearRecent(_ confirmed: [UUID: Date]) {
+        let removedIDs = entries.compactMap { entry -> UUID? in
+            (!entry.isPinned && confirmed[entry.id] == entry.copiedAt) ? entry.id : nil
+        }
         entries.removeAll { !$0.isPinned && confirmed[$0.id] == $0.copiedAt }
+        let hasRemainingUnpinned = entries.contains { !$0.isPinned }
         pruneQuickBatchSelection()
+        syncSQLiteRemoval(ids: removedIDs, clearAllUnpinned: !hasRemainingUnpinned)
         save()
     }
 
@@ -1056,7 +1061,22 @@ final class ClipboardHistoryService: ObservableObject {
                                                               retentionDays: retentionDays,
                                                               ageExemptIDs: Set([editingEntryID].compactMap { $0 }))
         if trimmed != entries {
+            let keptIDs = Set(trimmed.map(\.id))
+            let expiredOrTrimmedIDs = entries.compactMap { entry -> UUID? in
+                guard !keptIDs.contains(entry.id) else { return nil }
+                // Privacy: retention-expired entries must be purged from SQLite/FTS5 too;
+                // limit-evicted entries remain searchable in the 50k SQLite archive unless
+                // retentionDays expired them.
+                if retentionDays > 0 {
+                    let cutoff = Date().addingTimeInterval(-TimeInterval(retentionDays) * 86_400)
+                    if !entry.isPinned && entry.copiedAt < cutoff { return entry.id }
+                }
+                return nil
+            }
             entries = trimmed
+            if !expiredOrTrimmedIDs.isEmpty {
+                syncSQLiteRemoval(ids: expiredOrTrimmedIDs)
+            }
             save()
         }
     }
@@ -1771,6 +1791,20 @@ final class ClipboardHistoryService: ObservableObject {
         if !batch.isEmpty { return batch }
         guard let entry = selectedQuickEntry else { return [] }
         return [entry]
+    }
+
+    private func syncSQLiteRemoval(ids: [UUID], clearAllUnpinned: Bool = false) {
+        guard let store = sqliteStore, clearAllUnpinned || !ids.isEmpty else { return }
+        Self.persistQueue.async { [weak self, weak store] in
+            guard let store else { return }
+            if clearAllUnpinned {
+                store.clearNonPinned()
+            } else {
+                store.deleteBatch(ids: ids)
+            }
+            let count = store.totalCount()
+            DispatchQueue.main.async { self?.ftsIndexedCount = count }
+        }
     }
 
     private func pruneQuickBatchSelection() {

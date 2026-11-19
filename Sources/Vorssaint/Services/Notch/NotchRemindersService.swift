@@ -13,10 +13,27 @@ struct NotchPlannerBanner: Equatable {
 }
 
 /// Thread-safe holder for cancelling an in-flight `EKEventStore.fetchReminders` request on Task cancellation.
+/// Guarantees that the Swift `CheckedContinuation` is resumed exactly once even when EventKit
+/// drops the completion callback after `cancelFetchRequest(_:)`.
 private final class RemindersFetchHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var token: Any?
+    private var continuation: CheckedContinuation<[NotchReminderItem], Never>?
     private var cancelled = false
+    private var resumed = false
+
+    func install(continuation: CheckedContinuation<[NotchReminderItem], Never>) -> Bool {
+        lock.lock()
+        if cancelled || resumed {
+            resumed = true
+            lock.unlock()
+            continuation.resume(returning: [])
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
 
     func store(_ token: Any?, cancel: (Any) -> Void) {
         lock.lock()
@@ -26,13 +43,36 @@ private final class RemindersFetchHandle: @unchecked Sendable {
         if shouldCancel, let token { cancel(token) }
     }
 
+    func resume(_ items: [NotchReminderItem]) {
+        lock.lock()
+        guard !resumed else {
+            lock.unlock()
+            return
+        }
+        resumed = true
+        token = nil
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume(returning: items)
+    }
+
     func cancel(_ cancelFn: (Any) -> Void) {
         lock.lock()
         cancelled = true
         let active = token
         token = nil
+        let cont: CheckedContinuation<[NotchReminderItem], Never>?
+        if !resumed {
+            resumed = true
+            cont = continuation
+            continuation = nil
+        } else {
+            cont = nil
+        }
         lock.unlock()
         if let active { cancelFn(active) }
+        cont?.resume(returning: [])
     }
 }
 
@@ -61,6 +101,7 @@ private actor NotchRemindersStore {
         let storeRef = store
         let items: [NotchReminderItem] = await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
+                guard handle.install(continuation: continuation) else { return }
                 let token = storeRef.fetchReminders(matching: predicate) { reminders in
                     let cal = Calendar.current
                     let mapped = (reminders ?? []).map { reminder -> NotchReminderItem in
@@ -80,7 +121,7 @@ private actor NotchRemindersStore {
                             notes: reminder.notes ?? ""
                         )
                     }
-                    continuation.resume(returning: mapped)
+                    handle.resume(mapped)
                 }
                 handle.store(token) { storeRef.cancelFetchRequest($0) }
             }

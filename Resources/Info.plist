@@ -92,6 +92,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>basalt</string>
+				<string>vorssaint</string>
 			</array>
 		</dict>
 	</array>

@@ -107,6 +107,21 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
         _ = executeTransactionLocked(db: db) {
             try deleteByIDLocked(idString: idString, db: db)
         }
+        enforcePrivatePermissionsLocked()
+    }
+
+    func deleteBatch(ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        guard let db else { return }
+
+        _ = executeTransactionLocked(db: db) {
+            for id in ids {
+                try deleteByIDLocked(idString: id.uuidString, db: db)
+            }
+        }
+        enforcePrivatePermissionsLocked()
     }
 
     func clearNonPinned() {
@@ -121,6 +136,7 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
             )
             try executeSQL("DELETE FROM clipboard_items WHERE is_pinned = 0;", db: db)
         }
+        enforcePrivatePermissionsLocked()
     }
 
     func totalCount() -> Int {
@@ -270,15 +286,19 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
                 db: handle
             )
             self.db = handle
-            if databaseURL.isFileURL {
-                try? FileManager.default.setAttributes(
-                    [.posixPermissions: 0o600],
-                    ofItemAtPath: databaseURL.path
-                )
-            }
+            enforcePrivatePermissionsLocked()
         } catch {
             Self.logger.error("Failed configuring SQLite schema: \(error.localizedDescription, privacy: .public)")
             sqlite3_close_v2(handle)
+        }
+    }
+
+    private func enforcePrivatePermissionsLocked() {
+        guard databaseURL.isFileURL else { return }
+        let fm = FileManager.default
+        let basePath = databaseURL.path
+        for path in [basePath, basePath + "-wal", basePath + "-shm"] where fm.fileExists(atPath: path) {
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
         }
     }
 
@@ -287,6 +307,7 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
             try executeSQL("BEGIN IMMEDIATE TRANSACTION;", db: db)
             try work()
             try executeSQL("COMMIT TRANSACTION;", db: db)
+            enforcePrivatePermissionsLocked()
             return true
         } catch {
             _ = sqlite3_exec(db, "ROLLBACK TRANSACTION;", nil, nil, nil)
