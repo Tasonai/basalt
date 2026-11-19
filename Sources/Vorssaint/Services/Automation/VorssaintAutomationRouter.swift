@@ -26,7 +26,8 @@ final class VorssaintAutomationRouter {
 
     nonisolated static func parseCommand(from url: URL) -> VorssaintAutomationCommand? {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.scheme?.lowercased() == "vorssaint" else {
+              let scheme = components.scheme?.lowercased(),
+              scheme == "basalt" || scheme == "vorssaint" else {
             return nil
         }
 

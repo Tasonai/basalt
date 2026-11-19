@@ -5,15 +5,15 @@
   </picture>
 </p>
 
-<h1 align="center">Vorssaint (Custom Intel Mac Fork)</h1>
+<h1 align="center">Basalt</h1>
 
 <p align="center">
   One menu bar icon doing the job of a dozen paid Mac apps.<br>
-  Install only what you use.
+  Independent custom Intel Mac (<code>x86_64</code>) fork based on <a href="https://github.com/vorssaint/vorssaint-utils">Vorssaint</a>.
 </p>
 
 > [!NOTE]
-> **Unofficial Custom Fork for Intel Macs (`x86_64`):** This repository is a custom, vibe-coded community alternative adapted for **Intel Macs** (with additional UI & pro workflow customizations), created because the official [vorssaint/vorssaint-utils](https://github.com/vorssaint/vorssaint-utils) app targets **Apple Silicon only**.
+> **Independent Custom Fork for Intel Macs (`x86_64`):** **Basalt** (`com.tasonai.basalt`) is an unofficial, custom vibe-coded alternative adapted for **Intel Macs** (with its own name, icon, bundle ID, and extended pro workflows to respect [TRADEMARKS.md](TRADEMARKS.md)), created because the official [vorssaint/vorssaint-utils](https://github.com/vorssaint/vorssaint-utils) app targets **Apple Silicon only**.
 >
 > All credit for the original architecture and concept belongs to **[@vorssaint](https://github.com/vorssaint)**. The **Buy Me a Coffee** donation link below is intentionally kept pointing directly to the original author — he did an awesome job building Vorssaint.
 

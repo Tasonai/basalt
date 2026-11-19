@@ -21,10 +21,10 @@
 # Run this only to get the same permission-preserving behavior for local builds.
 set -euo pipefail
 
-IDENTITY="Vorssaint Utils Signing"
-KC="$HOME/Library/Keychains/vorssaint-signing.keychain-db"
-FALLBACK_KCPASS="vorssaint-signing"
-SECRET_DIR="$HOME/Library/Application Support/Vorssaint"
+IDENTITY="Basalt Local Signing"
+KC="$HOME/Library/Keychains/basalt-signing.keychain-db"
+FALLBACK_KCPASS="basalt-signing"
+SECRET_DIR="$HOME/Library/Application Support/Basalt"
 SECRET_FILE="$SECRET_DIR/signing-keychain.secret"
 KCPASS=""
 

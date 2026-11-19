@@ -934,19 +934,19 @@ struct CustomForkAttribution {
         switch language {
         case .ru:
             return CustomForkAttribution(
-                badge: "Кастомная версия · Intel Mac",
-                aboutSummary: "Неофициальная кастомная навайбкоженная альтернатива для Mac на процессорах Intel (x86_64). Оригинальный Vorssaint работает только на Apple Silicon — этот форк создан на базе отличной работы автора @vorssaint.",
-                donateCreditNote: "Ссылка на донат ведёт напрямую оригинальному автору Vorssaint (@vorssaint) — он проделал огромную работу, на которой основана эта кастомная Intel-сборка.",
+                badge: "Basalt · Intel Mac Fork",
+                aboutSummary: "Basalt — независимая кастомная навайбкоженная альтернатива для Mac на процессорах Intel (x86_64) с собственным именем, иконкой и Bundle ID. Оригинальный Vorssaint работает только на Apple Silicon — Basalt создан на базе отличной работы автора @vorssaint.",
+                donateCreditNote: "Ссылка на донат ведёт напрямую оригинальному автору Vorssaint (@vorssaint) — он проделал огромную работу, на которой основан Basalt.",
                 originalRepoLabel: "Оригинальный Vorssaint",
-                customForkRepoLabel: "Этот Intel-форк"
+                customForkRepoLabel: "Репозиторий Basalt"
             )
         case .uk:
             return CustomForkAttribution(
-                badge: "Кастомна версія · Intel Mac",
-                aboutSummary: "Неофіційна кастомна навайбкоджена альтернатива для Mac на процесорах Intel (x86_64). Оригінальний Vorssaint працює лише на Apple Silicon — цей форк створено на основі чудової роботи автора @vorssaint.",
-                donateCreditNote: "Посилання на донат веде напряму до оригінального автора Vorssaint (@vorssaint), чия чудова робота лежить в основі цієї кастомної Intel-збірки.",
+                badge: "Basalt · Intel Mac Fork",
+                aboutSummary: "Basalt — незалежна кастомна навайбкоджена альтернатива для Mac на процесорах Intel (x86_64) із власним ім’ям, іконкою та Bundle ID. Оригінальний Vorssaint працює лише на Apple Silicon — Basalt створено на основі чудової роботи автора @vorssaint.",
+                donateCreditNote: "Посилання на донат веде напряму до оригінального автора Vorssaint (@vorssaint), чия чудова робота лежить в основі Basalt.",
                 originalRepoLabel: "Оригінальний Vorssaint",
-                customForkRepoLabel: "Цей Intel-форк"
+                customForkRepoLabel: "Репозиторій Basalt"
             )
         case .de:
             return CustomForkAttribution(
@@ -1038,11 +1038,11 @@ struct CustomForkAttribution {
             )
         case .enUS:
             return CustomForkAttribution(
-                badge: "Custom Intel Mac Fork",
-                aboutSummary: "Unofficial custom vibe-coded alternative for Intel Macs (x86_64). Official Vorssaint runs on Apple Silicon only — this custom fork builds on @vorssaint’s great work.",
-                donateCreditNote: "Donations go directly to the original Vorssaint author (@vorssaint), whose great work this custom Intel Mac build is based on.",
+                badge: "Basalt · Intel Mac Fork",
+                aboutSummary: "Basalt is an independent, custom vibe-coded alternative for Intel Macs (x86_64) with its own name, icon, and bundle ID. Official Vorssaint runs on Apple Silicon only — Basalt builds on @vorssaint’s great work.",
+                donateCreditNote: "Donations go directly to the original Vorssaint author (@vorssaint), whose great work Basalt is built on.",
                 originalRepoLabel: "Original Vorssaint",
-                customForkRepoLabel: "Intel Fork"
+                customForkRepoLabel: "Basalt Fork"
             )
         }
     }

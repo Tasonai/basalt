@@ -14,8 +14,8 @@ cd "$(dirname "$0")"
 # the script ends.
 ICON_TMP=""
 STAGE_TMP=""
-SIGNING_KC="$HOME/Library/Keychains/vorssaint-signing.keychain-db"
-SIGNING_SECRET_FILE="$HOME/Library/Application Support/Vorssaint/signing-keychain.secret"
+SIGNING_KC="$HOME/Library/Keychains/basalt-signing.keychain-db"
+SIGNING_SECRET_FILE="$HOME/Library/Application Support/Basalt/signing-keychain.secret"
 
 cleanup() {
     [[ -n "$ICON_TMP" ]] && rm -rf "$ICON_TMP"
@@ -46,16 +46,16 @@ for arg in "$@"; do
 done
 
 if (( DEV )); then
-    APP_NAME="Vorssaint (Developer)"
-    EXECUTABLE="VorssaintDeveloper"
-    APP_BUNDLE_ID="com.vorssaint.utils.dev"
+    APP_NAME="Basalt (Developer)"
+    EXECUTABLE="BasaltDeveloper"
+    APP_BUNDLE_ID="com.tasonai.basalt.dev"
     BUILD_VARIANT_FLAGS=(-D VORSSAINT_DEVELOPMENT)
     APP_OPTIMIZATION_FLAGS=(-Onone)
     BUILD_CONFIGURATION="debug"
 else
-    APP_NAME="Vorssaint"
-    EXECUTABLE="Vorssaint"
-    APP_BUNDLE_ID="com.vorssaint.utils"
+    APP_NAME="Basalt"
+    EXECUTABLE="Basalt"
+    APP_BUNDLE_ID="com.tasonai.basalt"
     BUILD_VARIANT_FLAGS=()
     APP_OPTIMIZATION_FLAGS=(-O)
     BUILD_CONFIGURATION="release"
@@ -68,7 +68,7 @@ NOW_PLAYING_ADAPTER="libVorssaintNowPlaying.dylib"
 HOST_ARCH="${VORSSAINT_ARCH:-$(uname -m)}"
 TARGET="${HOST_ARCH}-apple-macosx14.0"
 ENTITLEMENTS="Resources/Vorssaint.entitlements"
-LEGACY_IDENTITY="Vorssaint Utils Signing"
+LEGACY_IDENTITY="Basalt Local Signing"
 
 developer_id_identity() {
     security find-identity -v -p codesigning 2>/dev/null \
@@ -757,7 +757,7 @@ mkdir -p "$STAGE/Contents/Frameworks"
 cp "build/$NOW_PLAYING_ADAPTER" "$STAGE/Contents/Frameworks/$NOW_PLAYING_ADAPTER"
 cp Resources/now-playing.pl "$STAGE/Contents/Resources/now-playing.pl"
 cp Resources/agent-prices.json "$STAGE/Contents/Resources/agent-prices.json"
-cp Resources/com.vorssaint.utils.fan-control.plist \
+cp Resources/com.tasonai.basalt.fan-control.plist \
     "$STAGE/Contents/Library/LaunchDaemons/$FAN_HELPER_ID.plist"
 cp Resources/Info.plist "$STAGE/Contents/Info.plist"
 cp CHANGELOG.md "$STAGE/Contents/Resources/CHANGELOG.md"
@@ -774,7 +774,7 @@ if (( DEV )); then
     FAN_PLIST="$STAGE/Contents/Library/LaunchDaemons/$FAN_HELPER_ID.plist"
     /usr/libexec/PlistBuddy -c "Set :Label $FAN_HELPER_ID" "$FAN_PLIST"
     /usr/libexec/PlistBuddy -c "Set :BundleProgram Contents/Library/LaunchServices/$FAN_HELPER_ID" "$FAN_PLIST"
-    /usr/libexec/PlistBuddy -c "Delete :MachServices:com.vorssaint.utils.fan-control" "$FAN_PLIST"
+    /usr/libexec/PlistBuddy -c "Delete :MachServices:com.tasonai.basalt.fan-control" "$FAN_PLIST"
     /usr/libexec/PlistBuddy -c "Add :MachServices:$FAN_HELPER_ID bool true" "$FAN_PLIST"
     # Stamp the source commit + build time so the running dev app shows (in About)
     # exactly which code it was compiled from. Lets you verify it matches HEAD before
