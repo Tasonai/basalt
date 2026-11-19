@@ -15,6 +15,7 @@ enum ScreenshotCanvasModelTests {
         var color: ScreenshotSupport.ColorID = .red
         var stroke: ScreenshotSupport.StrokeID = .medium
         var arrowStyle: ScreenshotSupport.ArrowStyleID = .filled
+        var counterStyle: ScreenshotCounterBadgeStyle = .numeric
         var sticker: ScreenshotSupport.StickerID = .check
         var textSize = 24
         var blurLevel = ScreenshotSupport.BlurStrength.defaultLevel
