@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint, parola sormadan kapak kapalı modunu açıp kapatmak için kısıtlı bir kural oluşturacak (yalnızca pmset disablesleep). Parolanın gerektiği tek zaman bu.",
         adminPromptSudoersRemove: "Vorssaint, parolasız kapak kapalı kuralını kaldıracak.",
 
-        settingsTitle: "Vorssaint Ayarları",
+        settingsTitle: "Basalt Ayarları",
         tabGeneral: "Genel",
         tabEnergy: "Enerji",
         tabMouse: "Fare ve izleme dörtgeni",

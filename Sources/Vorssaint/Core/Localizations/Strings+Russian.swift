@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint создаст ограниченное правило (только pmset disablesleep), чтобы переключать режим закрытой крышки без запроса пароля. Пароль понадобится только сейчас.",
         adminPromptSudoersRemove: "Vorssaint удалит правило для режима закрытой крышки без пароля.",
 
-        settingsTitle: "Настройки Vorssaint",
+        settingsTitle: "Настройки Basalt",
         tabGeneral: "Основное",
         tabEnergy: "Питание",
         tabMouse: "Мышь и трекпад",

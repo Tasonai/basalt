@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint creerà una regola limitata (solo pmset disablesleep) per attivare la modalità a coperchio chiuso senza chiedere la password. È l’unica volta che la password è necessaria.",
         adminPromptSudoersRemove: "Vorssaint rimuoverà la regola del coperchio chiuso senza password.",
 
-        settingsTitle: "Impostazioni di Vorssaint",
+        settingsTitle: "Impostazioni di Basalt",
         tabGeneral: "Generali",
         tabEnergy: "Energia",
         tabMouse: "Mouse e trackpad",

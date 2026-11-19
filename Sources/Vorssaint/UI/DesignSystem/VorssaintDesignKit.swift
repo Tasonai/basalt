@@ -159,22 +159,54 @@ struct VorssaintCompactSwitchStyle: ToggleStyle {
 }
 
 /// Tactile rounded-square checkbox replacement matching VorssaintDesignKit surfaces and focus semantics.
+/// Automatically hides its trailing label when `.labelsHidden()` is applied (macOS 15+) or `showsLabel == false`.
 struct VorssaintCheckPillStyle: ToggleStyle {
     var tone: SemanticCategoryTone = .brand
+    var showsLabel: Bool = true
+
+    func makeBody(configuration: Configuration) -> some View {
+        if #available(macOS 15.0, *) {
+            VorssaintCheckPillMacOS15Body(configuration: configuration, tone: tone, showsLabel: showsLabel)
+        } else {
+            VorssaintCheckPillLegacyBody(configuration: configuration, tone: tone, showsLabel: showsLabel)
+        }
+    }
+}
+
+@available(macOS 15.0, *)
+private struct VorssaintCheckPillMacOS15Body: View {
+    let configuration: ToggleStyleConfiguration
+    let tone: SemanticCategoryTone
+    let showsLabel: Bool
+    @Environment(\.labelsVisibility) private var labelsVisibility
+
+    var body: some View {
+        VorssaintCheckPillLegacyBody(
+            configuration: configuration,
+            tone: tone,
+            showsLabel: showsLabel && labelsVisibility != .hidden
+        )
+    }
+}
+
+private struct VorssaintCheckPillLegacyBody: View {
+    let configuration: ToggleStyleConfiguration
+    let tone: SemanticCategoryTone
+    let showsLabel: Bool
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appearsActive) private var appearsActive
     @Environment(\.isEnabled) private var isEnabled
 
-    func makeBody(configuration: Configuration) -> some View {
+    var body: some View {
         let highContrast = colorSchemeContrast == .increased
         let tint = tone.color(scheme: colorScheme, highContrast: highContrast)
         Button {
             VorssaintHaptics.generic()
             configuration.isOn.toggle()
         } label: {
-            HStack(spacing: DesignSpace.xs + 3) {
+            HStack(spacing: showsLabel ? DesignSpace.xs + 3 : 0) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(configuration.isOn ? tint : Color.primary.opacity(colorScheme == .dark ? 0.10 : 0.06))
@@ -192,7 +224,9 @@ struct VorssaintCheckPillStyle: ToggleStyle {
                     }
                 }
                 .animation(reduceMotion ? nil : DesignMotion.emilPress, value: configuration.isOn)
-                configuration.label
+                if showsLabel {
+                    configuration.label
+                }
             }
             .contentShape(Rectangle())
         }

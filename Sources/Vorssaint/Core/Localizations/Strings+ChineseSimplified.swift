@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint 将创建一条受限规则（仅限 pmset disablesleep），用于切换合盖模式时无需输入密码。这是唯一一次需要您输入密码。",
         adminPromptSudoersRemove: "Vorssaint 将为您移除免密码的合盖规则。",
 
-        settingsTitle: "Vorssaint 设置",
+        settingsTitle: "Basalt 设置",
         tabGeneral: "通用",
         tabEnergy: "能源",
         tabMouse: "鼠标与触控板",

@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint va créer une règle restreinte (pmset disablesleep uniquement) pour basculer le mode écran rabattu sans demander de mot de passe. C’est la seule fois où le mot de passe est nécessaire.",
         adminPromptSudoersRemove: "Vorssaint va supprimer la règle d’écran rabattu sans mot de passe.",
 
-        settingsTitle: "Réglages de Vorssaint",
+        settingsTitle: "Réglages de Basalt",
         tabGeneral: "Général",
         tabEnergy: "Énergie",
         tabMouse: "Souris et trackpad",

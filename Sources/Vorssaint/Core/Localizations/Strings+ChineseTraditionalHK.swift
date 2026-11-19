@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint 會建立一條受限規則（僅限 pmset disablesleep），用來切換合上機蓋模式時免於輸入密碼。這是唯一一次需要輸入密碼。",
         adminPromptSudoersRemove: "Vorssaint 會移除免密碼的合上機蓋規則。",
 
-        settingsTitle: "Vorssaint 設定",
+        settingsTitle: "Basalt 設定",
         tabGeneral: "通用",
         tabEnergy: "電源",
         tabMouse: "滑鼠與觸控板",

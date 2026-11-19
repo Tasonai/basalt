@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint legt eine eingeschränkte Regel an (nur pmset disablesleep), um den Modus bei geschlossenem Display ohne Passwortabfrage umzuschalten. Nur dieses eine Mal wird das Passwort benötigt.",
         adminPromptSudoersRemove: "Vorssaint entfernt die passwortfreie Regel für das geschlossene Display.",
 
-        settingsTitle: "Vorssaint-Einstellungen",
+        settingsTitle: "Basalt-Einstellungen",
         tabGeneral: "Allgemein",
         tabEnergy: "Energie",
         tabMouse: "Maus & Trackpad",

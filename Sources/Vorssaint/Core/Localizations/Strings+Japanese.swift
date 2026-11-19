@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "ふたを閉じたモードをパスワードなしで切り替えられるよう、Vorssaint が制限付きルール（pmset disablesleep のみ）を作成します。パスワードが必要なのはこの一度きりです。",
         adminPromptSudoersRemove: "パスワード不要のふたを閉じたモードのルールを Vorssaint が削除します。",
 
-        settingsTitle: "Vorssaint 設定",
+        settingsTitle: "Basalt 設定",
         tabGeneral: "一般",
         tabEnergy: "省エネルギー",
         tabMouse: "マウスとトラックパッド",

@@ -1432,7 +1432,7 @@ extension Strings {
         adminPromptSudoersInstall: "O Vorssaint vai criar uma regra restrita (somente pmset disablesleep) para alternar a tampa fechada sem pedir senha. Esta é a única vez que a senha será necessária.",
         adminPromptSudoersRemove: "O Vorssaint vai remover a regra de tampa fechada sem senha.",
 
-        settingsTitle: "Ajustes do Vorssaint",
+        settingsTitle: "Ajustes do Basalt",
         tabGeneral: "Geral",
         tabEnergy: "Energia",
         tabMouse: "Mouse e Trackpad",
@@ -2550,7 +2550,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint will create a restricted rule (pmset disablesleep only) to toggle closed-lid mode without asking for a password. This is the only time the password is needed.",
         adminPromptSudoersRemove: "Vorssaint will remove the password-free closed-lid rule.",
 
-        settingsTitle: "Vorssaint Settings",
+        settingsTitle: "Basalt Settings",
         tabGeneral: "General",
         tabEnergy: "Energy",
         tabMouse: "Mouse & Trackpad",

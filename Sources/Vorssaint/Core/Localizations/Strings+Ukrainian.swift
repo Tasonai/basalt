@@ -104,7 +104,7 @@ extension Strings {
         adminPromptUpdate: "Vorssaint потрібен ваш пароль, щоб встановити оновлення.",
         adminPromptSudoersInstall: "Vorssaint створить обмежене правило (лише pmset disablesleep), щоб перемикати режим закритої кришки без запиту пароля. Пароль потрібен лише цього разу.",
         adminPromptSudoersRemove: "Vorssaint видалить правило закритої кришки без пароля.",
-        settingsTitle: "Налаштування Vorssaint",
+        settingsTitle: "Налаштування Basalt",
         tabGeneral: "Загальне",
         tabEnergy: "Живлення",
         tabMouse: "Миша та трекпед",

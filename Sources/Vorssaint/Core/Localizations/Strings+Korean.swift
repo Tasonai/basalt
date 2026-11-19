@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "덮개 닫힘 모드를 암호 없이 전환할 수 있도록 Vorssaint가 제한된 규칙(pmset disablesleep만)을 만듭니다. 암호는 이번 한 번만 필요합니다.",
         adminPromptSudoersRemove: "Vorssaint가 암호 없이 사용하는 덮개 닫힘 모드 규칙을 제거합니다.",
 
-        settingsTitle: "Vorssaint 설정",
+        settingsTitle: "Basalt 설정",
         tabGeneral: "일반",
         tabEnergy: "에너지",
         tabMouse: "마우스 및 트랙패드",

@@ -292,7 +292,7 @@ struct NotchSectionListRow: View {
                 // A section whose feature is off cannot show, whatever was chosen.
                 Toggle(title, isOn: available ? $included : .constant(false))
                     .labelsHidden()
-                    .toggleStyle(VorssaintCheckPillStyle())
+                    .toggleStyle(VorssaintCheckPillStyle(showsLabel: false))
                     .disabled(!available)
                 Button(action: select) {
                     HStack(spacing: 8) {
@@ -300,8 +300,8 @@ struct NotchSectionListRow: View {
                         Text(title)
                             .font(.system(size: 12.5, weight: selected ? .semibold : .regular))
                             .foregroundStyle(available ? .primary : .secondary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         Spacer(minLength: 2)
                     }
                     .padding(.vertical, 5)

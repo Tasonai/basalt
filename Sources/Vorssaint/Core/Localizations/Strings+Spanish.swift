@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint creará una regla restringida (solo pmset disablesleep) para alternar el modo de tapa cerrada sin pedir contraseña. Esta es la única vez que se necesita la contraseña.",
         adminPromptSudoersRemove: "Vorssaint eliminará la regla de tapa cerrada sin contraseña.",
 
-        settingsTitle: "Ajustes de Vorssaint",
+        settingsTitle: "Ajustes de Basalt",
         tabGeneral: "General",
         tabEnergy: "Energía",
         tabMouse: "Ratón y trackpad",

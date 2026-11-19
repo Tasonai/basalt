@@ -110,7 +110,7 @@ extension Strings {
         adminPromptSudoersInstall: "Vorssaint vytvorí obmedzené pravidlo (iba pmset disablesleep), aby sa režim zatvoreného veka prepínal bez hesla. Heslo je potrebné len teraz.",
         adminPromptSudoersRemove: "Vorssaint odstráni pravidlo pre režim zatvoreného veka bez hesla.",
 
-        settingsTitle: "Nastavenia Vorssaintu",
+        settingsTitle: "Nastavenia Basalt",
         tabGeneral: "Všeobecné",
         tabEnergy: "Energia",
         tabMouse: "Myš a trackpad",
