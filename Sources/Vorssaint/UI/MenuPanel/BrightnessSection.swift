@@ -255,6 +255,7 @@ struct BrightnessSection: View {
                     }
                     Divider()
                     hidpiMirrorCard
+                        .proOnlyDetail()
                     Divider()
                     HStack(spacing: 6) {
                         Image(systemName: "rectangle.badge.plus")

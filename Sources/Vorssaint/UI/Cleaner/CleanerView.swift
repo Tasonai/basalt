@@ -125,6 +125,7 @@ struct CleanerView: View {
     @State private var duplicatesRootURL: URL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Downloads", isDirectory: true)
     @State private var duplicateGroups: [DuplicateFileGroup] = []
+    @State private var pendingDuplicateTrashGroup: DuplicateFileGroup? = nil
     @State private var duplicatesScanning = false
     @State private var duplicatesHasScanned = false
     @State private var duplicatesScanTask: Task<Void, Never>? = nil
@@ -950,9 +951,7 @@ struct CleanerView: View {
             selectedSpaceTileID = nil
             return
         }
-        if tile.isDirectory, let url = tile.url {
-            drillIntoDirectory(url, title: tile.title)
-        }
+        // Single tap selects (matching Sunburst); double tap drills into directories.
     }
 
     private func resetSpaceLensRoot() {
@@ -1586,12 +1585,12 @@ struct CleanerView: View {
                 Spacer(minLength: DesignSpace.xs)
                 if group.urls.count > 1 {
                     VorssaintActionChip(
-                        title: v3(\OverhaulV3Strings.spaceLensCollectTrashAll),
+                        title: "\(l10n.s.cleanerClean) (-\(group.urls.count - 1))",
                         symbol: "trash",
                         tone: .tools,
                         destructive: true
                     ) {
-                        trashDuplicateCopies(in: group)
+                        pendingDuplicateTrashGroup = group
                     }
                 }
             }
@@ -1623,6 +1622,27 @@ struct CleanerView: View {
             RoundedRectangle(cornerRadius: DesignRadius.pill, style: .continuous)
                 .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
         )
+        .confirmationDialog(
+            v3(\OverhaulV3Strings.duplicatesTitle),
+            isPresented: Binding(
+                get: { pendingDuplicateTrashGroup?.id == group.id },
+                set: { shown in if !shown { pendingDuplicateTrashGroup = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(l10n.s.cleanerClean, role: .destructive) {
+                let target = group
+                pendingDuplicateTrashGroup = nil
+                trashDuplicateCopies(in: target)
+            }
+            Button(l10n.s.uninstallerCancel, role: .cancel) {
+                pendingDuplicateTrashGroup = nil
+            }
+        } message: {
+            let copiesCount = max(0, group.urls.count - 1)
+            let name = group.urls.first?.lastPathComponent ?? ""
+            Text("\(name) (×\(copiesCount)) · \(Self.byteString(group.reclaimableBytes))")
+        }
     }
 
     private func chooseDuplicatesFolder() {

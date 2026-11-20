@@ -561,19 +561,15 @@ struct NotchView: View {
         }
         let overshoot = NotchFluidKinematics.hudOvershootScale(normalizedLevel: level, delta: delta)
         guard overshoot > 1.0001 else { return }
+        // Drive the elastic overshoot purely through the window host's physical
+        // CoreAnimation silhouette pulse so SwiftUI `.scaleEffect` does not
+        // double-scale and fight the layer transform on compact HUD updates.
         let scaleX: CGFloat = level <= 0.01 ? 0.962 : min(1.05, overshoot)
         let scaleY: CGFloat = level <= 0.01 ? 0.985 : 1.014
         service.pulseIsland(scaleX: scaleX, scaleY: scaleY)
         stretchResetTask?.cancel()
-        withAnimation(DesignMotion.fluidX) {
-            stretchX = overshoot
-        }
-        stretchResetTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(140))
-            guard !Task.isCancelled else { return }
-            withAnimation(DesignMotion.fluidX) {
-                stretchX = 1.0
-            }
+        if stretchX != 1.0 {
+            stretchX = 1.0
         }
     }
 

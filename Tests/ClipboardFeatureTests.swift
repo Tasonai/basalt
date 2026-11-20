@@ -1644,6 +1644,7 @@ enum ClipboardPreviewContract {
     class Fixture {
         func pruneQuickBatchSelection() {}
         func syncSQLiteRemoval(ids: [UUID], clearAllUnpinned: Bool = false) {}
+        func appendSQLiteArchiveMatches(query: String, to base: [ClipboardHistoryEntry]) -> [ClipboardHistoryEntry] { base }
         var latestPasteboardEntry: ClipboardHistoryEntry?
         var entriesStamp = 0
         var searchCache = ClipboardHistorySearchCache()

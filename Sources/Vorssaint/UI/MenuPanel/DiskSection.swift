@@ -9,6 +9,7 @@ struct DiskSection: View {
     @ObservedObject private var monitor = SystemMonitor.shared
     @ObservedObject private var protection = DiskProtectionService.shared
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.menuPanelDensity) private var panelDensity
     var collapsible = true
     @AppStorage(DefaultsKey.monitorGraphDisk) private var showGraph = true
     @AppStorage(DefaultsKey.monitorDiskUsage) private var diskUsage = true
@@ -117,7 +118,7 @@ struct DiskSection: View {
         switch block {
         case .usage: return diskUsage
         case .activity: return diskActivity
-        case .smart: return diskSMART
+        case .smart: return diskSMART && panelDensity == .pro
         case .protection: return diskProtection
         case .tools: return diskTools
         }

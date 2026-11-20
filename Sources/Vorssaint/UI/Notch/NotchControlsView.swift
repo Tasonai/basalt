@@ -54,6 +54,7 @@ struct NotchControlsView: View {
 
     private var showsSystemPulseCard: Bool {
         size.width >= 392
+            && service.modules.contains(.system)
             && (AppFeature.monitorCPU.isAvailable
                 || AppFeature.monitorMemory.isAvailable
                 || AppFeature.monitorPower.isAvailable)
@@ -746,7 +747,7 @@ private struct NotchSystemPulseBentoCard: View {
             service.pulseIsland(scaleX: 1.022, scaleY: 1.012)
             service.select(.system)
         } label: {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 3) {
                 if AppFeature.monitorCPU.isAvailable {
                     pulseRow(
                         label: l10n.s.cpuLabel,
@@ -772,8 +773,8 @@ private struct NotchSystemPulseBentoCard: View {
                     )
                 }
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .frame(maxWidth: .infinity)
             .frame(height: cardHeight)
             .modifier(NotchControlSurface(cornerRadius: 18))
@@ -785,20 +786,20 @@ private struct NotchSystemPulseBentoCard: View {
     }
 
     private func pulseRow(label: String, value: String, fraction: Double, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2.5) {
+        VStack(alignment: .leading, spacing: 1.5) {
             HStack(spacing: 4) {
                 Text(label)
-                    .font(.system(size: 9.5, weight: .medium))
+                    .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.white.opacity(0.66))
                     .lineLimit(1)
                 Spacer(minLength: 2)
                 Text(value)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.white)
                     .lineLimit(1)
             }
-            NotchMeter(value: fraction, height: 3.5, tint: tint)
+            NotchMeter(value: fraction, height: 3, tint: tint)
         }
     }
 }

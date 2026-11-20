@@ -546,8 +546,9 @@ final class ClipboardHistoryService: ObservableObject {
                                                 imageLabel: imageLabel)
         let result = ClipboardHistorySearch.rankedIndexes(candidates: candidates, matching: query)
             .compactMap { entries.indices.contains($0) ? entries[$0] : nil }
-        filterCache = (query, entriesStamp, imageLabel, result)
-        return result
+        let merged = appendSQLiteArchiveMatches(query: trimmedQuery, to: result)
+        filterCache = (query, entriesStamp, imageLabel, merged)
+        return merged
     }
 
     func copyQuickEntry(at index: Int) {
@@ -2091,6 +2092,30 @@ final class ClipboardHistoryService: ObservableObject {
 
     func searchSQLiteHistory(query: String, limit: Int = 200) -> [ClipboardSQLiteRow] {
         sqliteStore?.search(query: query, limit: limit) ?? []
+    }
+
+    private func appendSQLiteArchiveMatches(query: String, to base: [ClipboardHistoryEntry]) -> [ClipboardHistoryEntry] {
+        guard !query.isEmpty, let store = sqliteStore else { return base }
+        let hits = store.search(query: query, limit: 80)
+        guard !hits.isEmpty else { return base }
+        var seenIDs = Set(base.map(\.id))
+        var seenTexts = Set(base.compactMap { $0.kind == .text ? $0.text : nil })
+        var merged = base
+        for row in hits where row.contentKind == "text" && !row.plainText.isEmpty {
+            guard seenIDs.insert(row.id).inserted else { continue }
+            guard seenTexts.insert(row.plainText).inserted else { continue }
+            var archived = ClipboardHistoryEntry(
+                id: row.id,
+                text: row.plainText,
+                copiedAt: row.createdAt,
+                pinnedAt: row.isPinned ? row.createdAt : nil,
+                kind: .text
+            )
+            archived.sourceBundleID = row.sourceAppBundleID
+            merged.append(archived)
+            if merged.count >= base.count + 60 { break }
+        }
+        return merged
     }
 
     private func setupSQLiteStore() {

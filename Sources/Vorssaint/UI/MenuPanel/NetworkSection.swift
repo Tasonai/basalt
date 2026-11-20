@@ -11,6 +11,7 @@ struct NetworkSection: View {
     @ObservedObject private var speed = SpeedTest.shared
     @StateObject private var addresses = NetworkAddressService()
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.menuPanelDensity) private var panelDensity
     var collapsible = true
     var panelVisible = true
     @AppStorage(DefaultsKey.monitorGraphNetwork) private var showGraph = true
@@ -122,9 +123,9 @@ struct NetworkSection: View {
     private func isVisible(_ block: Block) -> Bool {
         switch block {
         case .speed: return netSpeed
-        case .apps: return netApps
+        case .apps: return netApps && panelDensity == .pro
         case .totals: return netTotals
-        case .addresses: return netAddresses
+        case .addresses: return netAddresses && panelDensity == .pro
         case .test: return netTest
         }
     }

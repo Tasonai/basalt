@@ -395,6 +395,25 @@ final class MixerRealtimeAUChainProcessor: @unchecked Sendable {
         }
     }
 
+    /// Processes only the 3-slot AUv3 insert chain (without shared loudness EQ),
+    /// allowing each `TapGainEngine` to run its own per-stream loudness biquad
+    /// at its native sample rate without cross-app IIR filter state bleed.
+    @discardableResult
+    func processAUChainOnly(
+        _ bufferList: UnsafeMutableAudioBufferListPointer,
+        frames: Int,
+        sampleRate: Double = 48_000
+    ) -> Bool {
+        guard frames > 0, !bufferList.isEmpty else { return true }
+        guard hasActiveSlots else { return true }
+        if os_unfair_lock_trylock(&renderLock) {
+            processAUChainLocked(bufferList, frames: frames, sampleRate: sampleRate)
+            os_unfair_lock_unlock(&renderLock)
+            return true
+        }
+        return false
+    }
+
     /// Processes an `AudioBufferList` (interleaved or non-interleaved Float32) through up to
     /// 3 serial AUv3 slots followed by Fletcher-Munson loudness EQ with zero heap allocations.
     @discardableResult
@@ -405,16 +424,7 @@ final class MixerRealtimeAUChainProcessor: @unchecked Sendable {
     ) -> Bool {
         guard frames > 0, !bufferList.isEmpty else { return true }
 
-        var auSucceeded = true
-        if hasActiveSlots {
-            if os_unfair_lock_trylock(&renderLock) {
-                processAUChainLocked(bufferList, frames: frames, sampleRate: sampleRate)
-                os_unfair_lock_unlock(&renderLock)
-            } else {
-                auSucceeded = false
-            }
-        }
-
+        let auSucceeded = processAUChainOnly(bufferList, frames: frames, sampleRate: sampleRate)
         let loudnessSucceeded = loudnessProcessor.processAudioBufferList(bufferList, frames: frames)
         return auSucceeded && loudnessSucceeded
     }
@@ -824,7 +834,11 @@ final class MixerAudioUnitHost: ObservableObject {
         isLoading = slotLoadingStates.contains(true)
         lastError = nil
 
-        AVAudioUnit.instantiate(with: item.componentDescription, options: []) { [weak self] audioUnit, error in
+        let instantiationOptions: AudioComponentInstantiationOptions =
+            item.componentDescription.componentManufacturer == kAudioUnitManufacturer_Apple
+            ? [.loadInProcess]
+            : []
+        AVAudioUnit.instantiate(with: item.componentDescription, options: instantiationOptions) { [weak self] audioUnit, error in
             DispatchQueue.main.async {
                 guard let self, self.slotLoadGenerations[slot] == generation else { return }
                 self.slotLoadingStates[slot] = false

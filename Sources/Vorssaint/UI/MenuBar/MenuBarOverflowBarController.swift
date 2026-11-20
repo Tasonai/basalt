@@ -219,7 +219,7 @@ private struct MenuBarOverflowBarView: View {
                     Image(systemName: "menubar.rectangle")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
-                    Text(l10n.s.disclosureCollapsed)
+                    Text(l10n.s.searchNoResults)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }

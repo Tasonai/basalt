@@ -536,14 +536,25 @@ struct NotchPlannerQuickCaptureBar: View {
                     .buttonStyle(.plain)
                     .disabled(NotchRemindersSupport.sanitizedTitle(title) == nil || isSubmitting)
                 } else {
+                    let isDeniedOrRestricted = kind == .reminder
+                        ? (permissions.remindersAccess == .denied || permissions.remindersAccess == .restricted)
+                        : (permissions.calendarAccess == .denied || permissions.calendarAccess == .restricted)
+                    let permissionButtonLabel: String = {
+                        if kind == .reminder {
+                            return isDeniedOrRestricted ? copy.openRemindersSettings : copy.allowReminders
+                        }
+                        return isDeniedOrRestricted
+                            ? L10n.shared.s.permissionOpenSettings
+                            : copy.calendarTitle
+                    }()
                     Button {
                         if kind == .reminder {
-                            permissions.remindersAccess == .denied ? permissions.openRemindersSettings() : permissions.requestReminders()
+                            isDeniedOrRestricted ? permissions.openRemindersSettings() : permissions.requestReminders()
                         } else {
-                            permissions.calendarAccess == .denied ? permissions.openCalendarSettings() : permissions.requestCalendar()
+                            isDeniedOrRestricted ? permissions.openCalendarSettings() : permissions.requestCalendar()
                         }
                     } label: {
-                        Text(kind == .reminder ? copy.allowReminders : copy.openRemindersSettings)
+                        Text(permissionButtonLabel)
                             .font(.system(size: 10, weight: .semibold))
                             .lineLimit(1)
                             .fixedSize()

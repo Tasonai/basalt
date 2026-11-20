@@ -601,6 +601,7 @@ struct MixerOptionsControls: View {
             headphoneDisconnectProtectionToggle
             preciseVolumeRollerToggle
             parametricEQAndMicControls
+                .proOnlyDetail()
             if includeSharedAudioFeatures, AppFeature.soundOutputSwitcher.isAvailable {
                 SoundOutputSwitcherControls()
             }
@@ -629,7 +630,7 @@ struct MixerOptionsControls: View {
             audioUnitHostControls
 
             VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
-                Toggle(isRussian ? "Live-монитор DSP микрофона" : "Live Mic DSP Monitor",
+                Toggle(isRussian ? "Live-монитор DSP микрофона (Запись и тест)" : "Live Mic DSP Monitor (Recorder & Preview)",
                        isOn: Binding(get: { inputManager.liveMicDSPEnabled },
                                      set: { inputManager.setLiveMicDSPEnabled($0) }))
                     .toggleStyle(VorssaintPillToggleStyle(tone: .sound))

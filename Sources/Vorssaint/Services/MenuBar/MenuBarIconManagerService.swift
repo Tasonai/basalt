@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Vorssaint
 
 import AppKit
+import ApplicationServices
 import Combine
 import CoreGraphics
 import Foundation
@@ -186,7 +187,8 @@ final class MenuBarIconManagerService: ObservableObject {
     }
 
     func refreshOverflowItems() {
-        let items = Self.captureStatusBarItems()
+        let dividerMinX: CGFloat? = isExpanded ? dividerStatusItem?.button?.window?.frame.minX : nil
+        let items = Self.captureStatusBarItems(leftOfX: dividerMinX)
         overflowItems = items
         if overflowBarVisible {
             MenuBarOverflowBarController.shared.update(items: items)
@@ -194,12 +196,58 @@ final class MenuBarIconManagerService: ObservableObject {
     }
 
     func activateOverflowItem(_ item: MenuBarOverflowItem) {
-        if let app = NSRunningApplication(processIdentifier: item.ownerPID), !app.isTerminated {
+        let pressedViaAX = Self.pressStatusItemViaAccessibility(item)
+        if !pressedViaAX,
+           let app = NSRunningApplication(processIdentifier: item.ownerPID),
+           !app.isTerminated {
             app.activate()
         }
         if !isOverflowBarPinned {
             setExpanded(false)
         }
+    }
+
+    private static func pressStatusItemViaAccessibility(_ item: MenuBarOverflowItem) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let appElement = AXUIElementCreateApplication(item.ownerPID)
+        AXUIElementSetMessagingTimeout(appElement, 0.2)
+        var extrasRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, "AXExtrasMenuBar" as CFString, &extrasRef) == .success,
+              let rawExtras = extrasRef,
+              CFGetTypeID(rawExtras) == AXUIElementGetTypeID() else {
+            return false
+        }
+        let extrasBar = unsafeBitCast(rawExtras, to: AXUIElement.self)
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(extrasBar, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement],
+              !children.isEmpty else {
+            return false
+        }
+        let target: AXUIElement? = children.first { element in
+            var posRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+               let rawPos = posRef,
+               CFGetTypeID(rawPos) == AXValueGetTypeID() {
+                var pt = CGPoint.zero
+                if AXValueGetValue(unsafeBitCast(rawPos, to: AXValue.self), .cgPoint, &pt),
+                   abs(pt.x - item.bounds.minX) <= 12 {
+                    return true
+                }
+            }
+            if !item.title.isEmpty {
+                var titleRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXDescriptionAttribute as CFString, &titleRef) == .success,
+                   let desc = titleRef as? String,
+                   desc.localizedCaseInsensitiveContains(item.title) {
+                    return true
+                }
+            }
+            return false
+        } ?? (children.count == 1 ? children.first : nil)
+
+        guard let target else { return false }
+        return AXUIElementPerformAction(target, kAXPressAction as CFString) == .success
     }
 
     func containsDividerStatusItem(at screenPoint: NSPoint) -> Bool {
@@ -312,7 +360,7 @@ final class MenuBarIconManagerService: ObservableObject {
         return min(autoHideRange.upperBound, max(autoHideRange.lowerBound, value))
     }
 
-    static func captureStatusBarItems() -> [MenuBarOverflowItem] {
+    static func captureStatusBarItems(leftOfX dividerMinX: CGFloat? = nil) -> [MenuBarOverflowItem] {
         guard let windowList = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements],
             kCGNullWindowID
@@ -322,7 +370,8 @@ final class MenuBarIconManagerService: ObservableObject {
 
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let statusLayer = Int(CGWindowLevelForKey(.statusWindow)) // 25
-        var items: [MenuBarOverflowItem] = []
+        let excludedSystemOwners: Set<String> = ["Window Server", "Control Center", "ControlCenter"]
+        var allItems: [MenuBarOverflowItem] = []
         var seen = Set<String>()
 
         for info in windowList {
@@ -336,7 +385,7 @@ final class MenuBarIconManagerService: ObservableObject {
             guard (info[kCGWindowAlpha as String] as? Double ?? 1.0) > 0 else { continue }
             guard let rawOwner = info[kCGWindowOwnerName as String] as? String else { continue }
             let ownerName = rawOwner.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !ownerName.isEmpty, ownerName != "Window Server" else { continue }
+            guard !ownerName.isEmpty, !excludedSystemOwners.contains(ownerName) else { continue }
 
             let rawTitle = (info[kCGWindowName as String] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -353,7 +402,7 @@ final class MenuBarIconManagerService: ObservableObject {
             }
             let dedupKey = "\(ownerPID)-\(windowID)"
             guard seen.insert(dedupKey).inserted else { continue }
-            items.append(MenuBarOverflowItem(
+            allItems.append(MenuBarOverflowItem(
                 id: dedupKey,
                 windowID: windowID,
                 ownerName: ownerName,
@@ -363,6 +412,13 @@ final class MenuBarIconManagerService: ObservableObject {
             ))
         }
 
-        return items.sorted { $0.bounds.minX < $1.bounds.minX }
+        let sorted = allItems.sorted { $0.bounds.minX < $1.bounds.minX }
+        if let dividerMinX, dividerMinX > 0 {
+            let leftItems = sorted.filter { $0.bounds.maxX <= dividerMinX + 4 }
+            if !leftItems.isEmpty {
+                return leftItems
+            }
+        }
+        return sorted
     }
 }

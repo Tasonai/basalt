@@ -103,6 +103,7 @@ struct SystemSection: View {
                         }
                         telemetryScrubBar
                     }
+                    .proOnlyDetail()
                 }
                 let currentBlocks = blocks(editing: editing)
                 ForEach(Array(currentBlocks.enumerated()), id: \.element) { index, block in
@@ -433,6 +434,7 @@ struct SystemSection: View {
                               onHoverNormalizedX: { hoveredTelemetryNormalizedX = $0 })
                         .frame(height: 30)
                         .graphCeilingLabel(MetricFormat.percent(1))
+                        .proOnlyDetail()
                 }
                 if expanded == .cpu {
                     clusterBreakdownView
@@ -477,6 +479,7 @@ struct SystemSection: View {
                               onHoverNormalizedX: { hoveredTelemetryNormalizedX = $0 })
                         .frame(height: 30)
                         .graphCeilingLabel(MetricFormat.percent(1))
+                        .proOnlyDetail()
                 }
                 breakdownList(for: .gpu)
             } else if editing, gpuAvailable {
@@ -486,6 +489,7 @@ struct SystemSection: View {
                let power = monitor.powerSnapshot,
                (power.isHardwareBacked || power.packageWatts > 0 || power.cpuWatts > 0 || power.gpuWatts > 0 || power.aneWatts > 0) {
                 powerWattsBlock(power)
+                    .proOnlyDetail()
             }
         }
     }

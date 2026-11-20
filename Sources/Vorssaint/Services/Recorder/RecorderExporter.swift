@@ -253,15 +253,17 @@ final class RecorderExporter {
 
         // The export preset is folded into the canvas the composer draws, so
         // the background is rendered at the size it ships at instead of being
-        // resampled afterwards.
-        let plan = RecorderComposer.makePlan(document: document,
-                                             track: track,
-                                             sourceSize: sourceSize,
-                                             frameRate: outputFrameRate,
-                                             duration: duration,
-                                             outputScale: outputScale,
-                                             cameraURL: cameraURL,
-                                             preservesTransparentBackdrop: preservesTransparentBackdrop)
+        // resampled afterwards. Use `makeStudioPlan` so Wave 6 Studio 3.0
+        // features (3D tilt, vertical 9:16/1:1 reframe, person blur, camera
+        // shape keyframes, and Whisper captions) carry into exported files.
+        let plan = RecorderComposer.makeStudioPlan(document: document,
+                                                   track: track,
+                                                   sourceSize: sourceSize,
+                                                   frameRate: outputFrameRate,
+                                                   duration: duration,
+                                                   outputScale: outputScale,
+                                                   cameraURL: cameraURL,
+                                                   preservesTransparentBackdrop: preservesTransparentBackdrop)
         let composer = plan.map { RecorderComposer(plan: $0) }
         let outputSize = composer?.canvasSize
             ?? sharingPlan?.size
@@ -303,9 +305,25 @@ final class RecorderExporter {
                     AVLinearPCMIsNonInterleaved: false,
                     AVLinearPCMIsBigEndianKey: false,
                 ])
-            output.audioMix = RecorderComposition.audioMix(trackIDs: result.audioTrackIDs,
-                                                           clickSFXTrackID: clickSFX?.trackID,
-                                                           document: document)
+            var micWaveform: [Float] = []
+            if document.micAutoDuckingEnabled,
+               document.keepsMicrophone,
+               document.keepsSystemAudio,
+               duration > 0 {
+                let sourceTracks = await RecorderAudioSource.tracks(in: asset)
+                if let micTrack = sourceTracks[.microphone] {
+                    let bucketCount = min(2_000, max(100, Int((duration * 20).rounded())))
+                    micWaveform = RecorderAudioWaveform.load(asset: asset,
+                                                             track: micTrack,
+                                                             duration: duration,
+                                                             count: bucketCount)
+                }
+            }
+            output.audioMix = RecorderComposer.audioMix(trackIDs: result.audioTrackIDs,
+                                                        clickSFXTrackID: clickSFX?.trackID,
+                                                        document: document,
+                                                        micWaveform: micWaveform,
+                                                        duration: duration)
             if document.exportTiming.speed != 1 {
                 // Decode scaled audio edits at their new duration while
                 // preserving speech pitch, rather than relabeling PCM times.
@@ -371,11 +389,13 @@ final class RecorderExporter {
         let counter = FrameCounter()
         let frameProgress = ProgressThrottle(progress)
 
+        let pumpAbort = Cancellation()
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { [cancelled] in
+            group.addTask { [cancelled, pumpAbort] in
                 await Self.pump(input: videoInput,
                                 label: "recorder.export.video",
-                                cancelled: cancelled) {
+                                cancelled: cancelled,
+                                abort: pumpAbort) {
                     videoOutput.copyNextSampleBuffer()
                 } onAppended: {
                     let done = counter.increment()
@@ -383,15 +403,20 @@ final class RecorderExporter {
                     // sound is still being written. It reaches one when the
                     // file is closed, and not before.
                     frameProgress.report(min(0.9, Double(done) / Double(expectedFrames) * 0.9))
+                } onFailure: {
+                    pumpAbort.cancel()
                 }
             }
             if let audioInput, let audioOutput {
-                group.addTask { [cancelled] in
+                group.addTask { [cancelled, pumpAbort] in
                     await Self.pump(input: audioInput,
                                     label: "recorder.export.audio",
-                                    cancelled: cancelled) {
+                                    cancelled: cancelled,
+                                    abort: pumpAbort) {
                         audioOutput.copyNextSampleBuffer()
-                    } onAppended: {}
+                    } onAppended: {} onFailure: {
+                        pumpAbort.cancel()
+                    }
                 }
             }
         }
@@ -401,6 +426,12 @@ final class RecorderExporter {
             writer.cancelWriting()
             try? FileManager.default.removeItem(at: destination)
             return .cancelled
+        }
+        if pumpAbort.isCancelled || writer.status == .failed {
+            reader.cancelReading()
+            writer.cancelWriting()
+            try? FileManager.default.removeItem(at: destination)
+            return .writeFailed
         }
         let readerStatus = reader.status
         guard readerStatus == .completed else {
@@ -424,8 +455,10 @@ final class RecorderExporter {
     private static func pump(input: AVAssetWriterInput,
                              label: String,
                              cancelled: Cancellation,
+                             abort: Cancellation,
                              next: @escaping () -> CMSampleBuffer?,
-                             onAppended: @escaping () -> Void) async {
+                             onAppended: @escaping () -> Void,
+                             onFailure: @escaping () -> Void) async {
         let queue = DispatchQueue(label: "com.vorssaint." + label, qos: .userInitiated)
         await withCheckedContinuation { continuation in
             let finished = OnceFlag()
@@ -433,7 +466,7 @@ final class RecorderExporter {
             nonisolated(unsafe) let serializedInput = input
             input.requestMediaDataWhenReady(on: queue) {
                 while serializedInput.isReadyForMoreMediaData {
-                    if cancelled.isCancelled {
+                    if cancelled.isCancelled || abort.isCancelled {
                         if finished.set() {
                             serializedInput.markAsFinished()
                             continuation.resume()
@@ -450,6 +483,7 @@ final class RecorderExporter {
                     if serializedInput.append(buffer) {
                         onAppended()
                     } else {
+                        onFailure()
                         if finished.set() {
                             serializedInput.markAsFinished()
                             continuation.resume()
@@ -614,12 +648,12 @@ final class RecorderExporter {
         // a smoothed pointer are in it too.
         let frameRate = Int(((try? await videoTrack.load(.nominalFrameRate)) ?? 60).rounded())
         let track = RecorderPointerTrack.decoded(try? Data(contentsOf: pointerURL))
-        let plan = RecorderComposer.makePlan(document: document,
-                                             track: track,
-                                             sourceSize: sourceSize,
-                                             frameRate: RecorderSupport.sanitizedFrameRate(frameRate),
-                                             duration: duration,
-                                             cameraURL: cameraURL)
+        let plan = RecorderComposer.makeStudioPlan(document: document,
+                                                   track: track,
+                                                   sourceSize: sourceSize,
+                                                   frameRate: RecorderSupport.sanitizedFrameRate(frameRate),
+                                                   duration: duration,
+                                                   cameraURL: cameraURL)
         let composer = plan.map { RecorderComposer(plan: $0) }
         let canvas = composer?.canvasSize ?? RecorderSupport.evenSize(sourceSize)
         let size = RecorderSupport.gifOutputSize(source: canvas, size: document.resolvedGIFSize)

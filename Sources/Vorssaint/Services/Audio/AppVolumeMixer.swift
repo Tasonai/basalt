@@ -232,6 +232,11 @@ final class AppVolumeMixer: ObservableObject {
         processMonitoringEnabled = AppFeature.mixer.isAvailable
         syncLoudnessProcessor(reconcileIfNeeded: false)
         installAUHostObserverIfNeeded()
+        Task { @MainActor in
+            if MixerAudioUnitHost.shared.slotSelectedIDs.contains(where: { $0 != nil }) {
+                MixerAudioUnitHost.shared.refreshAvailableEffects()
+            }
+        }
         if processMonitoringEnabled {
             publishHiddenApps()
             // Created here, on the main thread, before any refresh reads the
@@ -3464,6 +3469,7 @@ private final class TapGainEngine: GainEngine {
     private let appMeter = RealtimeAudioMeter()
     private var appEQ: MixerParametricEQ?
     private var masterEQ: MixerParametricEQ?
+    private var loudnessProcessor: FletcherMunsonLoudness.LoudnessBiquadProcessor?
     private(set) var sampleRate: Double = 48_000
     var renderCycles: UInt64 { cycleBox.value }
     var currentMeterLevel: Float { appMeter.normalizedLevel }
@@ -3476,6 +3482,14 @@ private final class TapGainEngine: GainEngine {
 
     func updateAppEQ(gainsDB: [Float], preampDB: Float) {
         appEQ?.update(gainsDB: gainsDB, preampDB: preampDB)
+    }
+
+    func updateMasterEQ(gainsDB: [Float], preampDB: Float) {
+        masterEQ?.update(gainsDB: gainsDB, preampDB: preampDB)
+    }
+
+    func updateLoudness(volume: Double, enabled: Bool) {
+        loudnessProcessor?.update(volume: volume, enabled: enabled, sampleRate: sampleRate)
     }
 
     init?(objects: [AudioObjectID], gain: Float, outputDeviceUID: String) {
@@ -3539,18 +3553,26 @@ private final class TapGainEngine: GainEngine {
         if let initialEQ = AppVolumeMixer.consumeInitialEQConfiguration(forObjects: objects) {
             perAppEQ.update(gainsDB: initialEQ.gainsDB, preampDB: initialEQ.preampDB)
         }
-        let sharedMasterEQ = AppVolumeMixer.sharedMasterEQ
+        // Dedicated per-stream master EQ and loudness biquad instances prevent
+        // cross-app IIR filter-state bleed and keep coefficients accurate at
+        // each device's true sample rate (e.g. 44.1 kHz vs 48 kHz vs 96 kHz).
+        let perEngineMasterEQ = MixerParametricEQ(sampleRate: sampleRate)
+        let initialMaster = AppVolumeMixer.currentMasterEQConfiguration()
+        perEngineMasterEQ.update(gainsDB: initialMaster.gainsDB, preampDB: initialMaster.preampDB)
+        let perEngineLoudness = FletcherMunsonLoudness.LoudnessBiquadProcessor()
+        let initialLoudness = AppVolumeMixer.currentLoudnessState()
+        perEngineLoudness.update(volume: initialLoudness.volume,
+                                 enabled: initialLoudness.enabled,
+                                 sampleRate: sampleRate)
         self.appEQ = perAppEQ
-        self.masterEQ = sharedMasterEQ
+        self.masterEQ = perEngineMasterEQ
+        self.loudnessProcessor = perEngineLoudness
         self.sampleRate = sampleRate
         let chainProcessor = MixerRealtimeAUChainProcessor.shared
         let chainSampleRate = sampleRate
-        // AppVolumeMixer creates one disjoint per-process TapGainEngine per routed app
-        // (no separate master mixdown tap exists), so running the shared AUv3 insert
-        // chain and Fletcher-Munson loudness here processes each routed stream once
-        // without double-processing.
         let postEQProcessor: (UnsafeMutableAudioBufferListPointer, Int) -> Void = { buffers, frames in
-            chainProcessor.processAudioBufferList(buffers, frames: frames, sampleRate: chainSampleRate)
+            chainProcessor.processAUChainOnly(buffers, frames: frames, sampleRate: chainSampleRate)
+            perEngineLoudness.processAudioBufferList(buffers, frames: frames)
         }
         // A boost pushes loud samples past full scale, and clamping the
         // overshoot flattens every peak into audible crackle (issue #326).
@@ -3559,7 +3581,7 @@ private final class TapGainEngine: GainEngine {
         let limiterBox = LimiterBox(
             channelCapacity: max(2, outputChannels.reduce(0, +)),
             appEQ: perAppEQ,
-            masterEQ: sharedMasterEQ,
+            masterEQ: perEngineMasterEQ,
             appMeter: appMeter,
             postEQProcessor: postEQProcessor)
         releaseBox.value = BoostLimiter.release(sampleRate: sampleRate)
@@ -4368,13 +4390,27 @@ extension AppVolumeMixer {
         }
     }
 
+    fileprivate static func currentMasterEQConfiguration() -> MixerEQConfiguration {
+        let state = shared.eqMeterState
+        return state.lock.withLock { state.masterConfig }
+    }
+
+    fileprivate static func currentLoudnessState() -> (volume: Double, enabled: Bool) {
+        let volume = shared.systemOutputVolume ?? 1.0
+        return (volume, shared.loudnessEnabled)
+    }
+
     fileprivate func syncLoudnessProcessor(reconcileIfNeeded: Bool = true) {
         let wasBypassed = MixerRealtimeAUChainProcessor.shared.isLoudnessBypassed
+        let currentVolume = systemOutputVolume ?? 1.0
         MixerRealtimeAUChainProcessor.shared.setLoudnessState(
-            volume: systemOutputVolume ?? 1.0,
+            volume: currentVolume,
             enabled: loudnessEnabled,
             sampleRate: currentChainSampleRate
         )
+        for engine in engines.values {
+            engine.updateLoudness(volume: currentVolume, enabled: loudnessEnabled)
+        }
         let isBypassed = MixerRealtimeAUChainProcessor.shared.isLoudnessBypassed
         if reconcileIfNeeded, wasBypassed != isBypassed, listenerInstalled, !stopped {
             reconcileEngines(with: apps)
@@ -4505,6 +4541,9 @@ extension AppVolumeMixer {
 
         let notifyAndReconcile = { [weak self] in
             guard let self else { return }
+            for engine in self.engines.values {
+                engine.updateMasterEQ(gainsDB: gainsDB, preampDB: preampDB)
+            }
             self.objectWillChange.send()
             if self.listenerInstalled, !self.stopped {
                 self.reconcileEngines(with: self.apps)

@@ -4468,6 +4468,12 @@ final class NotchService: ObservableObject {
         MicMuteService.shared.$isMuted.removeDuplicates().dropFirst().receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.syncIslandAmbientTint() }
             .store(in: &subscriptions)
+        ScreenRecorderService.shared.$isRecording.removeDuplicates().dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.syncIslandAmbientTint() }
+            .store(in: &subscriptions)
+        NotchTimerService.shared.$session.map(\.isRunning).removeDuplicates().dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.syncIslandAmbientTint() }
+            .store(in: &subscriptions)
         NotchMusicService.shared.$artworkTint.removeDuplicates().receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.syncIslandAmbientTint() }
             .store(in: &subscriptions)

@@ -158,6 +158,7 @@ struct PowerSection: View {
                                   showsZeroBaseline: true)
                             .frame(height: 30)
                             .graphCeilingLabel(MetricFormat.watts(peak))
+                            .proOnlyDetail()
                     }
                 }
             } else if editing && !pwrSystem {

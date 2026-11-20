@@ -246,6 +246,7 @@ final class RecorderMicrophoneCapture: NSObject,
     private let queue = DispatchQueue(label: "com.vorssaint.recorder.microphone",
                                       qos: .userInitiated)
     private let session = AVCaptureSession()
+    private let micDSP = AudioMicDSPProcessor()
     private var targetClock: CMClock?
     private var configured = false
 
@@ -310,7 +311,63 @@ final class RecorderMicrophoneCapture: NSObject,
         guard let synchronized = RecorderSampleTiming.converted(sampleBuffer,
             from: sourceClock, to: targetClock)
         else { return }
+        applyConfiguredMicDSPIfNeeded(synchronized)
         onSample?(synchronized)
+    }
+
+    private func applyConfiguredMicDSPIfNeeded(_ sampleBuffer: CMSampleBuffer) {
+        let defaults = UserDefaults.standard
+        let gateEnabled = defaults.bool(forKey: DefaultsKey.mixerMicNoiseGateEnabled)
+        let levelerEnabled = defaults.bool(forKey: DefaultsKey.mixerMicLevelerEnabled)
+        guard gateEnabled || levelerEnabled else { return }
+        guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format),
+              (asbd.pointee.mFormatFlags & kAudioFormatFlagIsFloat) != 0,
+              asbd.pointee.mBitsPerChannel == 32 else { return }
+
+        micDSP.noiseGateEnabled = gateEnabled
+        micDSP.levelerEnabled = levelerEnabled
+
+        var blockBuffer: CMBlockBuffer?
+        var listSizeNeeded = 0
+        let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &listSizeNeeded,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: 0,
+            blockBufferOut: nil
+        )
+        guard sizeStatus == noErr || sizeStatus == kCMSampleBufferError_ArrayTooSmall,
+              listSizeNeeded >= MemoryLayout<AudioBufferList>.size else { return }
+
+        let rawStorage = UnsafeMutableRawPointer.allocate(
+            byteCount: listSizeNeeded,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { rawStorage.deallocate() }
+        let ablPtr = rawStorage.assumingMemoryBound(to: AudioBufferList.self)
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: ablPtr,
+            bufferListSize: listSizeNeeded,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            blockBufferOut: &blockBuffer
+        ) == noErr else { return }
+
+        let buffers = UnsafeMutableAudioBufferListPointer(ablPtr)
+        for buf in buffers {
+            guard let ptr = buf.mData?.assumingMemoryBound(to: Float.self) else { continue }
+            let count = Int(buf.mDataByteSize) / MemoryLayout<Float>.size
+            if count > 0 {
+                micDSP.processInPlace(ptr, count: count)
+            }
+        }
     }
 
 }

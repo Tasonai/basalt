@@ -88,7 +88,7 @@ struct NotchCalendarView: View {
                         .foregroundStyle(.white.opacity(0.95))
                         .lineLimit(1)
                     if let undoItem = banner.undoReminder {
-                        Button(l10n.s.uninstallerCancel) {
+                        Button(l10n.s.menuUndo) {
                             reminders.undoCompletion(undoItem)
                         }
                         .font(.system(size: 10, weight: .semibold))

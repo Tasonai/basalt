@@ -385,9 +385,22 @@ struct ClipboardSettings: View {
                     ? "AES-256-GCM · \(ClipboardLiveVaultSyncService.defaultDirectoryURL().lastPathComponent)"
                     : v2Strings.clipboardVaultPassphraseLabel
             ) {
-                Toggle(v3(\OverhaulV3Strings.clipboardLiveSyncToggle), isOn: $history.liveVaultSyncEnabled)
+                Toggle(v3(\OverhaulV3Strings.clipboardLiveSyncToggle), isOn: Binding(
+                    get: { history.liveVaultSyncEnabled && hasStoredVaultPassphrase },
+                    set: { enabled in
+                        if enabled && !hasStoredVaultPassphrase {
+                            vaultStatusIsError = true
+                            vaultStatusMessage = v2Strings.clipboardVaultPassphraseLabel
+                            history.liveVaultSyncEnabled = false
+                        } else {
+                            vaultStatusIsError = false
+                            history.liveVaultSyncEnabled = enabled
+                        }
+                    }
+                ))
                     .labelsHidden()
                     .toggleStyle(VorssaintCompactSwitchStyle(tone: .clipboardFiles))
+                    .disabled(!hasStoredVaultPassphrase && !history.liveVaultSyncEnabled)
             }
 
             Divider()
@@ -414,6 +427,9 @@ struct ClipboardSettings: View {
                     } else if hasStoredVaultPassphrase {
                         VorssaintActionChip(title: text.delete, destructive: true) {
                             _ = vaultSecretStore.deleteSecret()
+                            if history.liveVaultSyncEnabled {
+                                history.liveVaultSyncEnabled = false
+                            }
                             refreshVaultPassphraseStatus()
                             vaultStatusIsError = false
                             vaultStatusMessage = "Vault passphrase removed from Keychain."
