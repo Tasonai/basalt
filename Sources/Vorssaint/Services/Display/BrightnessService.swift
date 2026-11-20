@@ -2673,6 +2673,7 @@ final class BrightnessService: ObservableObject {
     }
 
     private static func sendIntelI2CRead(connect: IOI2CConnectRef,
+                                         code: UInt8,
                                          wireRequest: inout [UInt8],
                                          reply: inout [UInt8]) -> (writeAccepted: Bool, readSucceeded: Bool) {
         let replyModes: [IOOptionBits] = [
@@ -2680,7 +2681,10 @@ final class BrightnessService: ObservableObject {
             IOOptionBits(kIOI2CSimpleTransactionType),
         ]
         var writeAccepted = false
-        for replyType in replyModes {
+        for (modeIndex, replyType) in replyModes.enumerated() {
+            if modeIndex > 0 {
+                usleep(BrightnessSupport.writePauseMicroseconds)
+            }
             var request = IOI2CRequest()
             request.sendAddress = UInt32(BrightnessSupport.chipAddress << 1)
             request.sendTransactionType = IOOptionBits(kIOI2CSimpleTransactionType)
@@ -2699,9 +2703,14 @@ final class BrightnessService: ObservableObject {
                 }
             }
             if status == KERN_SUCCESS && request.result == KERN_SUCCESS {
-                return (true, true)
+                writeAccepted = true
+                if BrightnessSupport.parseReply(reply, code: code) != nil {
+                    return (true, true)
+                }
+                continue
             }
             if request.result != kIOReturnUnsupportedMode {
+                usleep(BrightnessSupport.writePauseMicroseconds)
                 // Verify whether a plain write is accepted so write-only DDC monitors still get sliders.
                 if sendIntelI2CWrite(connect: connect, wireData: &wireRequest) {
                     writeAccepted = true
@@ -2855,6 +2864,7 @@ final class BrightnessService: ObservableObject {
             for attempt in 0..<attempts {
                 usleep(BrightnessSupport.writePauseMicroseconds)
                 let outcome = Self.sendIntelI2CRead(connect: connect,
+                                                    code: BrightnessSupport.luminanceCode,
                                                     wireRequest: &wireRequest,
                                                     reply: &reply)
                 if outcome.writeAccepted { writeAccepted = true }
@@ -3033,8 +3043,15 @@ final class BrightnessService: ObservableObject {
             guard vendorID > 0 || productID > 0 else { continue }
 
             var i2cInterface: io_service_t = IO_OBJECT_NULL
-            guard IOFBCopyI2CInterfaceForBus(fb, 0, &i2cInterface) == KERN_SUCCESS,
-                  i2cInterface != IO_OBJECT_NULL else {
+            for bus in 0..<busCount {
+                var candidate: io_service_t = IO_OBJECT_NULL
+                if IOFBCopyI2CInterfaceForBus(fb, bus, &candidate) == KERN_SUCCESS,
+                   candidate != IO_OBJECT_NULL {
+                    i2cInterface = candidate
+                    break
+                }
+            }
+            guard i2cInterface != IO_OBJECT_NULL else {
                 continue
             }
             ordinal += 1

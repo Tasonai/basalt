@@ -421,6 +421,7 @@ final class UpdateService: ObservableObject {
         // leaves first and returns if the prompt is declined; an approved
         // install quits.
         ExtraBrightnessService.shared.stop()
+        XDRUpscaleOverlayController.shared.tearDown()
         AdminShell.runInProcess(command, prompt: L10n.shared.s.adminPromptUpdate) { [weak self] granted in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -428,6 +429,7 @@ final class UpdateService: ObservableObject {
                     NSApp.terminate(nil)
                 } else {
                     ExtraBrightnessService.shared.syncWithPreferences()
+                    XDRUpscaleOverlayController.shared.syncOverlays()
                     // The user dismissed the admin prompt: keep the offer so
                     // the button simply works again.
                     self.abortInstall(dmgPath: dmgPath, offered: expectedVersion)

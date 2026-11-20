@@ -315,6 +315,7 @@ final class RecorderComposer {
     }
 
     var canvasSize: CGSize { plan.canvasSize }
+    var preservesTransparentBackdrop: Bool { plan.preservesTransparentBackdrop }
 
     func prepareAssets() async {
         await cameraSampler?.prepare()
@@ -341,11 +342,14 @@ final class RecorderComposer {
             let curr = plan.positions[index]
             let zoomFactor = plan.zoom.indices.contains(index) ? plan.zoom[index] : 1.0
             let strength = max(0, min(1, plan.motionBlurStrength)) * 2.5
-            let velocity = CGVector(
-                dx: (curr.x - prev.x) * zoomFactor * strength,
-                dy: (curr.y - prev.y) * zoomFactor * strength
-            )
-            if hypot(velocity.dx, velocity.dy) > 0.5 {
+            // `plan.positions` stores normalized top-down [0...1] coordinates;
+            // convert to Core Image bottom-up pixel velocity and clamp extreme jumps.
+            let rawDX = (curr.x - prev.x) * plan.sourceSize.width * zoomFactor * strength
+            let rawDY = -(curr.y - prev.y) * plan.sourceSize.height * zoomFactor * strength
+            let magnitude = hypot(rawDX, rawDY)
+            if magnitude > 0.5 {
+                let scale = magnitude > 80 ? (80 / magnitude) : 1.0
+                let velocity = CGVector(dx: rawDX * scale, dy: rawDY * scale)
                 content = VorssaintMetalShaders.shared.applyDirectionalMotionBlur(
                     to: content,
                     velocity: velocity,
@@ -1454,10 +1458,13 @@ private final class RecorderVideoCompositor: NSObject, AVVideoCompositing, @unch
         // including frames on either side of a cut.
         let seconds = instruction.timing.sourceTime(
             forOutputTime: CMTimeGetSeconds(request.compositionTime))
-        // Over black, as the Core Image handler drew it: a buffer from the
-        // pool still holds an earlier frame wherever this one draws nothing.
+        // Composite over clear when preserving ProRes 4444 alpha (still wiping
+        // stale recycled CVPixelBuffer bytes) and over black otherwise.
+        let canvasFill = instruction.composer.preservesTransparentBackdrop
+            ? CIImage(color: .clear)
+            : CIImage(color: .black)
         let frame = instruction.composer.render(source, at: seconds)
-            .composited(over: CIImage(color: .black)
+            .composited(over: canvasFill
                 .cropped(to: CGRect(origin: .zero, size: instruction.composer.canvasSize)))
         // Handed on only once the GPU has drawn it.
         do {

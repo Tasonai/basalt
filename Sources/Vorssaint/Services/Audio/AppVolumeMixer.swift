@@ -2900,6 +2900,8 @@ private protocol GainEngine: AnyObject {
     /// longer rendering, so the tap can only mute (issue #341).
     var renderCycles: UInt64 { get }
     var requiresRebuild: Bool { get }
+    var currentMeterLevel: Float { get }
+    var sampleRate: Double { get }
     /// Reads again the output the app plays to, in case a move went
     /// unannounced, and corrects the tap's level for it. Unless `immediately`,
     /// at most once a second, however often it is asked.

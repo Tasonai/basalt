@@ -3,6 +3,7 @@
 
 import AppKit
 import Combine
+import Darwin
 import Foundation
 import Metal
 import QuartzCore
@@ -15,10 +16,33 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
     static let minBoostAmount: Double = 1.0
     static let maxBoostAmount: Double = 2.0
     static let defaultBoostAmount: Double = 1.45
+    /// Minimum potential EDR headroom required on external displays when
+    /// `maximumReferenceExtendedDynamicRangeColorComponentValue <= 1.0`
+    /// (filters out DisplayHDR 400 SDR-mode monitors like PA348CGV at ~2.09).
+    static let externalHighHeadroomFloor: Double = 2.5
 
     private static let enabledDefaultsKey = "xdrUpscaleOverlayEnabled"
     private static let boostAmountDefaultsKey = "xdrUpscaleBoostAmount"
     private static let autoBoostBundleIDsDefaultsKey = "xdrAutoBoostBundleIDs"
+
+    private static let modelIdentifier: String? = {
+        var size = 0
+        guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 0 else { return nil }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("hw.model", &buffer, &size, nil, 0) == 0 else { return nil }
+        return String(cString: buffer)
+    }()
+
+    private static let overlayCollectionBehavior: NSWindow.CollectionBehavior = [
+        .ignoresCycle, .fullScreenAuxiliary, .canJoinAllApplications,
+        .canJoinAllSpaces, .stationary,
+    ]
+    private static let overlayWindowLevel = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+
+    /// Optional hooks wired by the app host so XDR Upscale respects Feature Hub
+    /// availability and never stacks on top of `ExtraBrightnessService`.
+    var isFeatureAvailable: (() -> Bool)?
+    var shouldYieldToPrimaryBoost: (() -> Bool)?
 
     private struct ScreenSpec: Equatable {
         let displayID: CGDirectDisplayID
@@ -27,8 +51,8 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
 
     private struct OverlayEntry {
         let screenSpec: ScreenSpec
-        let window: NSWindow
-        let layer: CAMetalLayer
+        let windows: [NSWindow]
+        let layers: [CAMetalLayer]
         let triggerWindow: NSWindow
         let triggerLayer: CAMetalLayer
     }
@@ -160,10 +184,70 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
         syncOverlays()
     }
 
+    /// Pure qualification rule shared by built-in and external displays:
+    /// built-in displays must match `ExtraBrightnessSupport.isSupportedPanel`;
+    /// external displays must expose genuine reference HDR headroom (> 1.0) or
+    /// high sustained EDR headroom (> 2.5), excluding DisplayHDR 400 monitors
+    /// running in SDR mode (which report ~2.09 potential / 0.0 reference EDR).
+    static func isQualifiedXDRDisplay(
+        isBuiltIn: Bool,
+        model: String?,
+        localizedName: String,
+        potentialEDR: Double,
+        referenceEDR: Double
+    ) -> Bool {
+        guard potentialEDR.isFinite, potentialEDR > ExtraBrightnessSupport.capabilityFloor else {
+            return false
+        }
+        if isBuiltIn {
+            return ExtraBrightnessSupport.isSupportedPanel(
+                model: model,
+                localizedName: localizedName,
+                potentialEDR: potentialEDR
+            )
+        }
+        if referenceEDR.isFinite, referenceEDR > 1.0 {
+            return true
+        }
+        return potentialEDR > externalHighHeadroomFloor
+    }
+
+    /// Pure boost factor calculation: never multiplies SDR content (> 1.0) when
+    /// macOS reports no active EDR headroom (`currentEDR <= 1.05`), preventing
+    /// highlight clipping above 87% white.
+    static func resolvedBoostFactor(
+        boostAmount: Double,
+        currentEDR: Double,
+        potentialEDR: Double
+    ) -> Double {
+        guard potentialEDR.isFinite, potentialEDR > ExtraBrightnessSupport.capabilityFloor,
+              currentEDR.isFinite, currentEDR > 1.05 else {
+            return 1.0
+        }
+        return min(clampBoost(boostAmount), max(1.0, currentEDR))
+    }
+
+    @MainActor
+    private static func systemAuthorizationUIIsActive() -> Bool {
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.SecurityAgent").isEmpty {
+            return true
+        }
+        return NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.AppStore"
+    }
+
     @MainActor
     static func hasXDRCapableScreen() -> Bool {
-        NSScreen.screens.contains {
-            $0.maximumPotentialExtendedDynamicRangeColorComponentValue > ExtraBrightnessSupport.capabilityFloor
+        NSScreen.screens.contains { screen in
+            guard let id = displayID(of: screen) else { return false }
+            let potEDR = Double(screen.maximumPotentialExtendedDynamicRangeColorComponentValue)
+            let refEDR = Double(screen.maximumReferenceExtendedDynamicRangeColorComponentValue)
+            return isQualifiedXDRDisplay(
+                isBuiltIn: CGDisplayIsBuiltin(id) != 0,
+                model: modelIdentifier,
+                localizedName: screen.localizedName,
+                potentialEDR: potEDR,
+                referenceEDR: refEDR
+            )
         }
     }
 
@@ -180,8 +264,16 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
     @MainActor
     private static func xdrScreens() -> [(screen: NSScreen, spec: ScreenSpec)] {
         NSScreen.screens.compactMap { screen in
-            guard screen.maximumPotentialExtendedDynamicRangeColorComponentValue > ExtraBrightnessSupport.capabilityFloor,
-                  let id = displayID(of: screen) else {
+            guard let id = displayID(of: screen) else { return nil }
+            let potEDR = Double(screen.maximumPotentialExtendedDynamicRangeColorComponentValue)
+            let refEDR = Double(screen.maximumReferenceExtendedDynamicRangeColorComponentValue)
+            guard isQualifiedXDRDisplay(
+                isBuiltIn: CGDisplayIsBuiltin(id) != 0,
+                model: modelIdentifier,
+                localizedName: screen.localizedName,
+                potentialEDR: potEDR,
+                referenceEDR: refEDR
+            ) else {
                 return nil
             }
             return (screen, ScreenSpec(displayID: id, frame: screen.frame))
@@ -203,7 +295,10 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
     @MainActor
     private func syncOverlaysOnMainActor() {
         isXDRCapable = Self.hasXDRCapableScreen()
-        guard isEffectiveBoostActive, isXDRCapable else {
+        let featureAllowed = isFeatureAvailable?() ?? true
+        let yielded = shouldYieldToPrimaryBoost?() ?? false
+        guard featureAllowed, !yielded, isEffectiveBoostActive, isXDRCapable,
+              !screensAsleep, !Self.systemAuthorizationUIIsActive() else {
             tearDownOnMainActor()
             return
         }
@@ -242,7 +337,9 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
 
         renderOverlays(waitUntilScheduled: true)
         for entry in entries {
-            entry.window.orderFrontRegardless()
+            for window in entry.windows {
+                window.orderFrontRegardless()
+            }
             entry.triggerWindow.orderFrontRegardless()
         }
         startHeartbeat()
@@ -254,8 +351,10 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
         heartbeatTimer = nil
 
         for entry in entries {
-            entry.window.orderOut(nil)
-            entry.window.close()
+            for window in entry.windows {
+                window.orderOut(nil)
+                window.close()
+            }
             entry.triggerWindow.orderOut(nil)
             entry.triggerWindow.close()
         }
@@ -273,12 +372,22 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
         let frame = screen.frame
         guard frame.width > 0, frame.height > 0 else { return nil }
 
-        let window = makeOverlayWindow(contentRect: frame)
-        let layer = makeEDRMetalLayer(device: device, frameSize: frame.size, drawableSize: CGSize(width: 2, height: 2), multiply: true)
-        let contentView = NSView(frame: NSRect(origin: .zero, size: frame.size))
-        contentView.wantsLayer = true
-        contentView.layer = layer
-        window.contentView = contentView
+        // Split multiply overlay into halves matching ExtraBrightnessService so
+        // macOS 26/27 Mission Control never blanks the desktop on a single
+        // full-screen overlay window.
+        let halfFrames = ExtraBrightnessSupport.overlayFrames(for: frame)
+        var windows: [NSWindow] = []
+        var layers: [CAMetalLayer] = []
+        for halfFrame in halfFrames {
+            let window = makeOverlayWindow(contentRect: halfFrame)
+            let layer = makeEDRMetalLayer(device: device, frameSize: halfFrame.size, drawableSize: CGSize(width: 2, height: 2), multiply: true)
+            let contentView = NSView(frame: NSRect(origin: .zero, size: halfFrame.size))
+            contentView.wantsLayer = true
+            contentView.layer = layer
+            window.contentView = contentView
+            windows.append(window)
+            layers.append(layer)
+        }
 
         let triggerFrame = NSRect(x: frame.maxX - 1, y: frame.minY, width: 1, height: 1)
         let triggerWindow = makeOverlayWindow(contentRect: triggerFrame)
@@ -290,8 +399,8 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
 
         return OverlayEntry(
             screenSpec: spec,
-            window: window,
-            layer: layer,
+            windows: windows,
+            layers: layers,
             triggerWindow: triggerWindow,
             triggerLayer: triggerLayer
         )
@@ -309,8 +418,8 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.level = .screenSaver
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        window.level = Self.overlayWindowLevel
+        window.collectionBehavior = Self.overlayCollectionBehavior
         window.sharingType = .none
         window.isReleasedWhenClosed = false
         window.animationBehavior = .none
@@ -352,7 +461,22 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
 
     @MainActor
     private func renderOverlays(waitUntilScheduled: Bool) {
+        if !(isFeatureAvailable?() ?? true) {
+            tearDownOnMainActor()
+            return
+        }
         guard isEffectiveBoostActive, !screensAsleep, !entries.isEmpty, let queue = commandQueue else { return }
+        if Self.systemAuthorizationUIIsActive() || (shouldYieldToPrimaryBoost?() ?? false) {
+            for entry in entries {
+                for window in entry.windows { window.orderOut(nil) }
+                entry.triggerWindow.orderOut(nil)
+            }
+            return
+        }
+        for entry in entries {
+            for window in entry.windows where !window.isVisible { window.orderFrontRegardless() }
+            if !entry.triggerWindow.isVisible { entry.triggerWindow.orderFrontRegardless() }
+        }
         let screensByID: [CGDirectDisplayID: NSScreen] = Dictionary(
             uniqueKeysWithValues: NSScreen.screens.compactMap { screen in
                 Self.displayID(of: screen).map { ($0, screen) }
@@ -367,30 +491,29 @@ final class XDRUpscaleOverlayController: ObservableObject, @unchecked Sendable {
             let currentEDR = Double(screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1.0)
             let potentialEDR = Double(screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1.0)
 
-            let factor: Double
-            if potentialEDR <= 1.0 {
-                factor = 1.0
-            } else if currentEDR <= 1.05 {
-                factor = min(boostAmount, 1.15)
-            } else {
-                factor = min(boostAmount, max(1.0, currentEDR))
-            }
+            let factor = Self.resolvedBoostFactor(
+                boostAmount: boostAmount,
+                currentEDR: currentEDR,
+                potentialEDR: potentialEDR
+            )
 
-            if let drawable = entry.layer.nextDrawable() {
-                let pass = MTLRenderPassDescriptor()
-                pass.colorAttachments[0].texture = drawable.texture
-                pass.colorAttachments[0].loadAction = .clear
-                pass.colorAttachments[0].storeAction = .store
-                pass.colorAttachments[0].clearColor = MTLClearColor(
-                    red: factor,
-                    green: factor,
-                    blue: factor,
-                    alpha: 1.0
-                )
-                if let encoder = commands.makeRenderCommandEncoder(descriptor: pass) {
-                    encoder.endEncoding()
-                    commands.present(drawable)
-                    presentedAny = true
+            for layer in entry.layers {
+                if let drawable = layer.nextDrawable() {
+                    let pass = MTLRenderPassDescriptor()
+                    pass.colorAttachments[0].texture = drawable.texture
+                    pass.colorAttachments[0].loadAction = .clear
+                    pass.colorAttachments[0].storeAction = .store
+                    pass.colorAttachments[0].clearColor = MTLClearColor(
+                        red: factor,
+                        green: factor,
+                        blue: factor,
+                        alpha: 1.0
+                    )
+                    if let encoder = commands.makeRenderCommandEncoder(descriptor: pass) {
+                        encoder.endEncoding()
+                        commands.present(drawable)
+                        presentedAny = true
+                    }
                 }
             }
 

@@ -75,6 +75,40 @@ enum Wave4V3DisplayHiDPIAndSolarContract {
         suite.expect(!controller.isAutoBoostTriggeredByFrontmostApp,
                      "XDRUpscaleOverlayController clears per-app trigger when unfocused app is frontmost")
 
+        // Qualification rejects built-in Intel non-XDR LCD (potEDR=2.0) and
+        // external DisplayHDR 400 SDR-mode monitors (PA348CGV potEDR=2.0885, refEDR=0.0),
+        // while accepting true Pro Display XDR and Apple Silicon XDR MacBooks.
+        suite.expect(!XDRUpscaleOverlayController.isQualifiedXDRDisplay(
+                        isBuiltIn: true, model: "MacBookPro16,1",
+                        localizedName: "Built-in Retina Display",
+                        potentialEDR: 2.0, referenceEDR: 0.0)
+                     && !XDRUpscaleOverlayController.isQualifiedXDRDisplay(
+                        isBuiltIn: false, model: "MacBookPro16,1",
+                        localizedName: "PA348CGV",
+                        potentialEDR: 2.0885, referenceEDR: 0.0)
+                     && XDRUpscaleOverlayController.isQualifiedXDRDisplay(
+                        isBuiltIn: false, model: "MacBookPro16,1",
+                        localizedName: "Pro Display XDR",
+                        potentialEDR: 4.0, referenceEDR: 3.2)
+                     && XDRUpscaleOverlayController.isQualifiedXDRDisplay(
+                        isBuiltIn: true, model: "Mac15,6",
+                        localizedName: "Built-in Retina Display",
+                        potentialEDR: 16.0, referenceEDR: 2.0),
+                     "XDRUpscaleOverlayController qualifies only genuine XDR/HDR displays and rejects DisplayHDR 400 SDR monitors")
+
+        // Never clips SDR highlights when currentEDR <= 1.05.
+        suite.expect(XDRUpscaleOverlayController.resolvedBoostFactor(boostAmount: 1.6, currentEDR: 1.0, potentialEDR: 2.0885) == 1.0
+                     && abs(XDRUpscaleOverlayController.resolvedBoostFactor(boostAmount: 1.45, currentEDR: 2.0, potentialEDR: 4.0) - 1.45) < 0.001,
+                     "XDRUpscaleOverlayController never multiplies SDR content when currentEDR <= 1.05")
+
+        // Rejects all-zero unpopulated T2 HID ALS events (even when ReportInterval
+        // is set), while accepting readings with non-zero raw channels or lux > 0.
+        suite.expect(AppleLMUSensorReader.sanitizedHIDLux(level: 0, rawChannels: [0, 0, 0, 0], reportInterval: nil) == nil
+                     && AppleLMUSensorReader.sanitizedHIDLux(level: 0, rawChannels: [0, 0, 0, 0], reportInterval: 500_000) == nil
+                     && AppleLMUSensorReader.sanitizedHIDLux(level: 0, rawChannels: [2, 0, 0, 0], reportInterval: 500_000) == 0.0
+                     && AppleLMUSensorReader.sanitizedHIDLux(level: 185.5, rawChannels: [12, 34, 56, 78], reportInterval: 500_000) == 185.5,
+                     "AppleLMUSensorReader rejects all-zero unpopulated T2 HID events while accepting live ALS readings")
+
         let brightnessService = (try? String(contentsOfFile: "Sources/Vorssaint/Services/Display/BrightnessService.swift", encoding: .utf8)) ?? ""
         let brightnessSection = (try? String(contentsOfFile: "Sources/Vorssaint/UI/MenuPanel/BrightnessSection.swift", encoding: .utf8)) ?? ""
         let displaySupport = (try? String(contentsOfFile: "Sources/Vorssaint/Services/Display/DisplayProSupport.swift", encoding: .utf8)) ?? ""

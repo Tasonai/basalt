@@ -85,6 +85,9 @@ enum AppleLMUSensorReader {
         typealias CopyServicesFn = @convention(c) (CFTypeRef) -> Unmanaged<CFArray>?
         typealias CopyEventFn = @convention(c) (CFTypeRef, Int64, Int32, Int64) -> Unmanaged<CFTypeRef>?
         typealias GetFloatValueFn = @convention(c) (CFTypeRef, UInt32) -> Double
+        typealias GetIntegerValueFn = @convention(c) (CFTypeRef, UInt32) -> Int64
+        typealias CopyPropertyFn = @convention(c) (CFTypeRef, CFString) -> Unmanaged<CFTypeRef>?
+        typealias SetPropertyFn = @convention(c) (CFTypeRef, CFString, CFTypeRef) -> Bool
 
         private static let handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY)
         static let createClient: CreateClientFn? = symbol("IOHIDEventSystemClientCreate")
@@ -92,22 +95,28 @@ enum AppleLMUSensorReader {
         static let copyServices: CopyServicesFn? = symbol("IOHIDEventSystemClientCopyServices")
         static let copyEvent: CopyEventFn? = symbol("IOHIDServiceClientCopyEvent")
         static let getFloatValue: GetFloatValueFn? = symbol("IOHIDEventGetFloatValue")
+        static let getIntegerValue: GetIntegerValueFn? = symbol("IOHIDEventGetIntegerValue")
+        static let copyProperty: CopyPropertyFn? = symbol("IOHIDServiceClientCopyProperty")
+        static let setProperty: SetPropertyFn? = symbol("IOHIDServiceClientSetProperty")
 
         private static let usagePairs: [(page: Int, usage: Int)] = [
             (0x20, 0x41),   // kHIDPage_Sensor / kHIDUsage_Snsr_Light_AmbientLight (T2 Intel Macs)
             (0xFF00, 0x04), // kHIDPage_AppleVendor / Apple ALS (Apple Silicon / legacy HID)
         ]
 
+        private static let activeReportIntervalMicroseconds: Int64 = 500_000
+        private static let sessionLock = NSLock()
+        private static var sessionClient: CFTypeRef?
+        private static var sessionServices: [AnyObject] = []
+        private static var sessionRefCount = 0
+
         private static func symbol<T>(_ name: String) -> T? {
             guard let handle, let ptr = dlsym(handle, name) else { return nil }
             return unsafeBitCast(ptr, to: T.self)
         }
 
-        static func hasSensor() -> Bool {
-            guard let createClient, let setMatching, let copyServices,
-                  let client = createClient(kCFAllocatorDefault)?.takeRetainedValue() else {
-                return false
-            }
+        private static func matchedServices(using client: CFTypeRef) -> [AnyObject] {
+            guard let setMatching, let copyServices else { return [] }
             for pair in usagePairs {
                 let matching: NSDictionary = [
                     "PrimaryUsagePage": pair.page,
@@ -116,42 +125,144 @@ enum AppleLMUSensorReader {
                 setMatching(client, matching)
                 if let services = copyServices(client)?.takeRetainedValue() as? [AnyObject],
                    !services.isEmpty {
-                    return true
+                    return services
                 }
             }
-            return false
+            return []
+        }
+
+        /// Opens a persistent HID ALS client and requests a non-zero
+        /// `ReportInterval` while Ambient Light Sync is active, so T2 Intel
+        /// ALS sensors report live lux even when macOS Auto-Brightness is idle.
+        static func beginSession() {
+            sessionLock.lock()
+            defer { sessionLock.unlock() }
+            sessionRefCount += 1
+            guard sessionClient == nil,
+                  let createClient,
+                  let client = createClient(kCFAllocatorDefault)?.takeRetainedValue() else {
+                return
+            }
+            let services = matchedServices(using: client)
+            if let setProperty {
+                let interval = NSNumber(value: activeReportIntervalMicroseconds)
+                for service in services {
+                    _ = setProperty(service, "ReportInterval" as CFString, interval)
+                }
+            }
+            sessionClient = client
+            sessionServices = services
+        }
+
+        /// Releases the persistent HID ALS client and resets `ReportInterval`
+        /// when Ambient Light Sync stops.
+        static func endSession() {
+            sessionLock.lock()
+            defer { sessionLock.unlock() }
+            guard sessionRefCount > 0 else { return }
+            sessionRefCount -= 1
+            guard sessionRefCount == 0 else { return }
+            if let setProperty {
+                let zero = NSNumber(value: 0)
+                for service in sessionServices {
+                    _ = setProperty(service, "ReportInterval" as CFString, zero)
+                }
+            }
+            sessionServices.removeAll()
+            sessionClient = nil
+        }
+
+        static func hasSensor() -> Bool {
+            sessionLock.lock()
+            if !sessionServices.isEmpty {
+                sessionLock.unlock()
+                return true
+            }
+            sessionLock.unlock()
+            guard let createClient,
+                  let client = createClient(kCFAllocatorDefault)?.takeRetainedValue() else {
+                return false
+            }
+            return !matchedServices(using: client).isEmpty
         }
 
         static func readLux() -> Double? {
-            guard let createClient, let setMatching, let copyServices,
-                  let copyEvent, let getFloatValue,
-                  let client = createClient(kCFAllocatorDefault)?.takeRetainedValue() else {
-                return nil
+            guard let copyEvent, let getFloatValue else { return nil }
+            let services: [AnyObject]
+            let retainedClient: CFTypeRef
+            sessionLock.lock()
+            if let activeClient = sessionClient {
+                if sessionServices.isEmpty {
+                    sessionServices = matchedServices(using: activeClient)
+                    if let setProperty {
+                        let interval = NSNumber(value: activeReportIntervalMicroseconds)
+                        for service in sessionServices {
+                            _ = setProperty(service, "ReportInterval" as CFString, interval)
+                        }
+                    }
+                }
+                services = sessionServices
+                retainedClient = activeClient
+                sessionLock.unlock()
+            } else {
+                sessionLock.unlock()
+                guard let createClient,
+                      let client = createClient(kCFAllocatorDefault)?.takeRetainedValue() else {
+                    return nil
+                }
+                retainedClient = client
+                services = matchedServices(using: client)
             }
-            // kIOHIDEventTypeAmbientLightSensor = 12, kIOHIDEventFieldAmbientLightSensorLevel = 12 << 16
+
+            // kIOHIDEventTypeAmbientLightSensor = 12
+            // field 0 = Level, fields 1...4 = RawChannel0...3
             let eventType: Int64 = 12
             let levelField: UInt32 = 12 << 16
-            for pair in usagePairs {
-                let matching: NSDictionary = [
-                    "PrimaryUsagePage": pair.page,
-                    "PrimaryUsage": pair.usage,
-                ]
-                setMatching(client, matching)
-                guard let services = copyServices(client)?.takeRetainedValue() as? [AnyObject] else {
-                    continue
-                }
+            return withExtendedLifetime(retainedClient) {
                 for service in services {
                     guard let event = copyEvent(service, eventType, 0, 0)?.takeRetainedValue() else {
                         continue
                     }
                     let lux = getFloatValue(event, levelField)
-                    if lux.isFinite, lux >= 0 {
-                        return min(max(lux, 0), 10_000)
+                    var rawChannels: [Int64] = []
+                    if let getIntegerValue {
+                        rawChannels = (1...4).map { idx in
+                            getIntegerValue(event, (12 << 16) | UInt32(idx))
+                        }
+                    }
+                    let reportInterval = (copyProperty?(service, "ReportInterval" as CFString)?.takeRetainedValue() as? NSNumber)?.int64Value
+                    if let validLux = AppleLMUSensorReader.sanitizedHIDLux(
+                        level: lux,
+                        rawChannels: rawChannels,
+                        reportInterval: reportInterval
+                    ) {
+                        return validLux
                     }
                 }
+                return nil
             }
+        }
+    }
+
+    static func beginHIDSession() {
+        HIDAmbientLightBridge.beginSession()
+    }
+
+    static func endHIDSession() {
+        HIDAmbientLightBridge.endSession()
+    }
+
+    /// Rejects unpopulated/all-zero T2 HID ALS events (`Level == 0` with every
+    /// raw photodiode channel `CH0...3 == 0`), preventing external DDC monitors
+    /// from being slammed to 12% brightness when the T2 bridge does not feed
+    /// live sensor readings to userspace.
+    static func sanitizedHIDLux(level: Double, rawChannels: [Int64], reportInterval: Int64?) -> Double? {
+        guard level.isFinite, level >= 0 else { return nil }
+        let allChannelsZero = rawChannels.allSatisfy { $0 == 0 }
+        if level == 0 && allChannelsZero {
             return nil
         }
+        return min(max(level, 0), 10_000)
     }
 
     static var isAvailable: Bool {
@@ -231,9 +342,13 @@ final class AmbientLightSyncService: ObservableObject, @unchecked Sendable {
 
     private var pollTimer: Timer?
     private var hasDispatchedSinceEnable = false
+    private var hidSessionActive = false
 
     deinit {
         pollTimer?.invalidate()
+        if hidSessionActive {
+            AppleLMUSensorReader.endHIDSession()
+        }
     }
 
     func update(lux: Double) {
@@ -285,7 +400,15 @@ final class AmbientLightSyncService: ObservableObject, @unchecked Sendable {
             self.pollTimer = nil
             guard self.isEnabled else {
                 self.hasDispatchedSinceEnable = false
+                if self.hidSessionActive {
+                    self.hidSessionActive = false
+                    AppleLMUSensorReader.endHIDSession()
+                }
                 return
+            }
+            if !self.hidSessionActive {
+                self.hidSessionActive = true
+                AppleLMUSensorReader.beginHIDSession()
             }
             self.hasDispatchedSinceEnable = false
             self.pollNow()
@@ -311,6 +434,10 @@ final class AmbientLightSyncService: ObservableObject, @unchecked Sendable {
         pollTimer?.invalidate()
         pollTimer = nil
         hasDispatchedSinceEnable = false
+        if hidSessionActive {
+            hidSessionActive = false
+            AppleLMUSensorReader.endHIDSession()
+        }
     }
 }
 

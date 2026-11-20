@@ -365,7 +365,12 @@ final class FeatureRuntime: ObservableObject {
             HotkeyManager.shared.syncWithPreferences()
         },
         .brightness: { BrightnessService.shared.syncWithPreferences() },
-        .extraBrightness: { ExtraBrightnessService.shared.syncWithPreferences() },
+        .extraBrightness: {
+            ExtraBrightnessService.shared.syncWithPreferences()
+            XDRUpscaleOverlayController.shared.isFeatureAvailable = { AppFeature.extraBrightness.isAvailable }
+            XDRUpscaleOverlayController.shared.shouldYieldToPrimaryBoost = { ExtraBrightnessService.shared.boosting }
+            XDRUpscaleOverlayController.shared.syncOverlays()
+        },
         .bluetoothSleep: { BluetoothSleepService.shared.syncWithPreferences() },
         .quickLauncher: { QuickLauncherService.shared.syncWithPreferences() },
         .colorPicker: {

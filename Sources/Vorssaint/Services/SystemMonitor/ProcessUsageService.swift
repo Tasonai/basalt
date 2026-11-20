@@ -797,7 +797,8 @@ final class ProcessUsageService {
 
                 if let usageRef = IORegistryEntryCreateCFProperty(
                           client, "AppUsage" as CFString, kCFAllocatorDefault, 0),
-                   let usage = usageRef.takeRetainedValue() as? [[String: Any]] {
+                   let usage = usageRef.takeRetainedValue() as? [[String: Any]],
+                   !usage.isEmpty {
                     for entry in usage {
                         if let time = entry["accumulatedGPUTime"] as? Double {
                             perPid[pid, default: 0] += time
