@@ -1063,7 +1063,7 @@ final class AppSwitcher: ObservableObject {
         }
         guard Permissions.shared.accessibility,
               AXIsProcessTrusted(),
-              lifecycleLock.withLock({ tap != nil && !shouldStopTapThread })
+              lifecycleLock.withLock({ tap != nil })
         else {
             discardPendingSessionStart(generation: generation,
                                        reason: "accessibility_or_tap_unavailable")

@@ -1623,7 +1623,7 @@ struct CleanerView: View {
                 .fill(DesignSurfaceTier.card.fillColor(for: colorScheme))
         )
         .confirmationDialog(
-            v3(\OverhaulV3Strings.duplicatesTitle),
+            v3(\OverhaulV3Strings.duplicatesFinderTitle),
             isPresented: Binding(
                 get: { pendingDuplicateTrashGroup?.id == group.id },
                 set: { shown in if !shown { pendingDuplicateTrashGroup = nil } }
@@ -1641,7 +1641,8 @@ struct CleanerView: View {
         } message: {
             let copiesCount = max(0, group.urls.count - 1)
             let name = group.urls.first?.lastPathComponent ?? ""
-            Text("\(name) (×\(copiesCount)) · \(Self.byteString(group.reclaimableBytes))")
+            let reclaimable = Int64(copiesCount) * group.byteSize
+            Text("\(name) (×\(copiesCount)) · \(Self.byteString(reclaimable))")
         }
     }
 

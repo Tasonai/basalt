@@ -2904,6 +2904,9 @@ private protocol GainEngine: AnyObject {
     /// unannounced, and corrects the tap's level for it. Unless `immediately`,
     /// at most once a second, however often it is asked.
     func refreshLevelCompensation(immediately: Bool)
+    func updateAppEQ(gainsDB: [Float], preampDB: Float)
+    func updateMasterEQ(gainsDB: [Float], preampDB: Float)
+    func updateLoudness(volume: Double, enabled: Bool)
     func stop()
 }
 
@@ -2912,6 +2915,8 @@ private extension GainEngine {
     var currentMeterLevel: Float { 0 }
     var sampleRate: Double { 48_000 }
     func updateAppEQ(gainsDB: [Float], preampDB: Float) {}
+    func updateMasterEQ(gainsDB: [Float], preampDB: Float) {}
+    func updateLoudness(volume: Double, enabled: Bool) {}
 }
 
 /// Keeps a tap's level correct for the outputs its processes play to.

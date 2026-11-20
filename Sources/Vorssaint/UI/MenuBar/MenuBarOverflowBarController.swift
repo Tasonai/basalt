@@ -219,7 +219,7 @@ private struct MenuBarOverflowBarView: View {
                     Image(systemName: "menubar.rectangle")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.secondary)
-                    Text(l10n.s.searchNoResults)
+                    Text(FeatureStrings.commandBar(l10n.language).noResultsTitle)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
