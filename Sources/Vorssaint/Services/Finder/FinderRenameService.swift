@@ -21,10 +21,6 @@ final class FinderRenameService {
     private let lifecycleLock = NSLock()
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var tapRunLoop: CFRunLoop?
-    private var tapThread: Thread?
-    private var shouldStopTapThread = false
-    private var pendingStartAfterStop = false
 
     private init() {
         SessionActivity.shared.onChange { [weak self] _ in self?.syncWithPreferences() }
@@ -54,20 +50,36 @@ final class FinderRenameService {
     }
 
     private func installTap() {
-        let thread = lifecycleLock.withLock { () -> Thread? in
-            if tapThread != nil {
-                if shouldStopTapThread { pendingStartAfterStop = true }
-                return nil
-            }
-            shouldStopTapThread = false
-            pendingStartAfterStop = false
-            let thread = Thread { [weak self] in self?.runEventTap() }
-            thread.name = "Vorssaint Finder Rename"
-            thread.qualityOfService = .userInteractive
-            tapThread = thread
-            return thread
+        guard lifecycleLock.withLock({ tap == nil }) else { return }
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            // The Super Key decorates shortcuts before this tap sees them.
+            place: .tailAppendEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let service = Unmanaged<FinderRenameService>
+                    .fromOpaque(userInfo).takeUnretainedValue()
+                return service.route(type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            // Without a tap nobody answers a taken-over key, so give it
+            // back rather than leaving the shortcut dead.
+            SystemShortcutTakeover.release(DefaultsKey.finderRenameShortcut)
+            return
         }
-        thread?.start()
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        lifecycleLock.withLock {
+            self.tap = tap
+            runLoopSource = source
+        }
+        if let source {
+            KeyboardTapRunLoop.add(source)
+        }
+        CGEvent.tapEnable(tap: tap, enable: true)
     }
 
     private func removeTap() {
@@ -75,92 +87,19 @@ final class FinderRenameService {
         // longer listening — switched off, or suspended for an uninstall —
         // goes back to macOS.
         SystemShortcutTakeover.release(DefaultsKey.finderRenameShortcut)
-        let snapshot = lifecycleLock.withLock {
-            () -> (runLoop: CFRunLoop?, tap: CFMachPort?, threadExists: Bool) in
-            shouldStopTapThread = true
-            pendingStartAfterStop = false
-            return (tapRunLoop, tap, tapThread != nil)
-        }
-        if let tap = snapshot.tap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-        }
-        if let runLoop = snapshot.runLoop {
-            CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) {
-                CFRunLoopStop(runLoop)
-            }
-            CFRunLoopWakeUp(runLoop)
-        } else if !snapshot.threadExists {
-            lifecycleLock.withLock {
-                shouldStopTapThread = false
-                tapThread = nil
-            }
-        }
-    }
-
-    private func runEventTap() {
-        autoreleasepool {
-            let runLoop = CFRunLoopGetCurrent()
-            lifecycleLock.withLock { tapRunLoop = runLoop }
-
-            let shouldStop = lifecycleLock.withLock { shouldStopTapThread }
-            guard !shouldStop else {
-                if clearEventTapThread() { installTap() }
-                return
-            }
-
-            let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
-            guard let tap = CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
-                // The Super Key decorates shortcuts before this tap sees them.
-                place: .tailAppendEventTap,
-                options: .defaultTap,
-                eventsOfInterest: mask,
-                callback: { _, type, event, userInfo in
-                    guard let userInfo else { return Unmanaged.passUnretained(event) }
-                    let service = Unmanaged<FinderRenameService>
-                        .fromOpaque(userInfo).takeUnretainedValue()
-                    return service.route(type: type, event: event)
-                },
-                userInfo: Unmanaged.passUnretained(self).toOpaque()
-            ) else {
-                _ = clearEventTapThread()
-                // Without a tap nobody answers a taken-over key, so give it
-                // back rather than leaving the shortcut dead.
-                DispatchQueue.main.async { SystemShortcutTakeover.release(DefaultsKey.finderRenameShortcut) }
-                return
-            }
-
-            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            lifecycleLock.withLock {
-                self.tap = tap
-                runLoopSource = source
-            }
-            CFRunLoopAddSource(runLoop, source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
-
-            if lifecycleLock.withLock({ shouldStopTapThread }) {
-                CGEvent.tapEnable(tap: tap, enable: false)
-            } else {
-                CFRunLoopRun()
-            }
-
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFRunLoopRemoveSource(runLoop, source, .commonModes)
-            CFMachPortInvalidate(tap)
-            if clearEventTapThread() { installTap() }
-        }
-    }
-
-    private func clearEventTapThread() -> Bool {
-        lifecycleLock.withLock {
-            let shouldRestart = pendingStartAfterStop
+        let (port, source) = lifecycleLock.withLock { () -> (CFMachPort?, CFRunLoopSource?) in
+            let current = (tap, runLoopSource)
             tap = nil
             runLoopSource = nil
-            tapRunLoop = nil
-            tapThread = nil
-            shouldStopTapThread = false
-            pendingStartAfterStop = false
-            return shouldRestart
+            return current
+        }
+        if let port {
+            CGEvent.tapEnable(tap: port, enable: false)
+        }
+        if let source {
+            KeyboardTapRunLoop.remove(source, invalidating: port)
+        } else if let port {
+            CFMachPortInvalidate(port)
         }
     }
 
@@ -172,7 +111,7 @@ final class FinderRenameService {
             // removeTap() switches the tap off itself, and that is reported
             // here like a disable by the system. A stop under way has nothing
             // to recover: syncing would start the tap again under a suspend().
-            let currentTap = lifecycleLock.withLock { shouldStopTapThread ? nil : tap }
+            let currentTap = lifecycleLock.withLock { tap }
             if SessionActivity.shared.isActive, AXIsProcessTrusted(), let currentTap {
                 CGEvent.tapEnable(tap: currentTap, enable: true)
             } else if currentTap != nil {

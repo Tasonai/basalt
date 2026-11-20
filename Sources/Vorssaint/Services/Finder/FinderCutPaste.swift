@@ -75,10 +75,7 @@ final class FinderCutPaste: ObservableObject {
     private let tapStateLock = NSLock()
     private var tapState = TapState()
     private var tap: CFMachPort?
-    private var tapRunLoop: CFRunLoop?
-    private var tapThread: Thread?
-    private var shouldStopTapThread = false
-    private var pendingTapRestart = false
+    private var runLoopSource: CFRunLoopSource?
     private var panel: NSPanel?
     private var resultDismiss: DispatchWorkItem?
     private var operationGeneration = 0
@@ -183,96 +180,45 @@ final class FinderCutPaste: ObservableObject {
     // MARK: - Event tap
 
     private func installTap() {
-        let thread = tapLifecycleLock.withLock { () -> Thread? in
-            if tapThread != nil {
-                if shouldStopTapThread { pendingTapRestart = true }
-                return nil
-            }
-            shouldStopTapThread = false
-            pendingTapRestart = false
-            let thread = Thread { [weak self] in self?.runEventTap() }
-            thread.name = "Vorssaint File Shortcuts"
-            thread.qualityOfService = .userInteractive
-            tapThread = thread
-            return thread
+        guard tapLifecycleLock.withLock({ tap == nil }) else { return }
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let service = Unmanaged<FinderCutPaste>.fromOpaque(userInfo).takeUnretainedValue()
+                return service.route(type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            return
         }
-        thread?.start()
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        tapLifecycleLock.withLock {
+            self.tap = tap
+            self.runLoopSource = source
+        }
+        if let source {
+            KeyboardTapRunLoop.add(source)
+        }
+        CGEvent.tapEnable(tap: tap, enable: true)
     }
 
     private func removeTap() {
-        let snapshot = tapLifecycleLock.withLock {
-            () -> (runLoop: CFRunLoop?, tap: CFMachPort?, threadExists: Bool) in
-            shouldStopTapThread = true
-            pendingTapRestart = false
-            return (tapRunLoop, tap, tapThread != nil)
-        }
-        if let tap = snapshot.tap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let runLoop = snapshot.runLoop {
-            CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) {
-                CFRunLoopStop(runLoop)
-            }
-            CFRunLoopWakeUp(runLoop)
-        } else if !snapshot.threadExists {
-            tapLifecycleLock.withLock {
-                shouldStopTapThread = false
-                tapThread = nil
-            }
-        }
-    }
-
-    private func runEventTap() {
-        autoreleasepool {
-            let runLoop = CFRunLoopGetCurrent()
-            tapLifecycleLock.withLock { tapRunLoop = runLoop }
-            guard !tapLifecycleLock.withLock({ shouldStopTapThread }) else {
-                if clearEventTapThread() { installTap() }
-                return
-            }
-
-            let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
-            guard let tap = CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
-                place: .headInsertEventTap,
-                options: .defaultTap,
-                eventsOfInterest: mask,
-                callback: { _, type, event, userInfo in
-                    guard let userInfo else { return Unmanaged.passUnretained(event) }
-                    let service = Unmanaged<FinderCutPaste>.fromOpaque(userInfo).takeUnretainedValue()
-                    return service.route(type: type, event: event)
-                },
-                userInfo: Unmanaged.passUnretained(self).toOpaque()
-            ) else {
-                _ = clearEventTapThread()
-                return
-            }
-
-            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            tapLifecycleLock.withLock { self.tap = tap }
-            CFRunLoopAddSource(runLoop, source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
-
-            if tapLifecycleLock.withLock({ shouldStopTapThread }) {
-                CGEvent.tapEnable(tap: tap, enable: false)
-            } else {
-                CFRunLoopRun()
-            }
-
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFRunLoopRemoveSource(runLoop, source, .commonModes)
-            CFMachPortInvalidate(tap)
-            if clearEventTapThread() { installTap() }
-        }
-    }
-
-    private func clearEventTapThread() -> Bool {
-        tapLifecycleLock.withLock {
-            let shouldRestart = pendingTapRestart
+        let (port, source) = tapLifecycleLock.withLock { () -> (CFMachPort?, CFRunLoopSource?) in
+            let current = (tap, runLoopSource)
             tap = nil
-            tapRunLoop = nil
-            tapThread = nil
-            shouldStopTapThread = false
-            pendingTapRestart = false
-            return shouldRestart
+            runLoopSource = nil
+            return current
+        }
+        if let port { CGEvent.tapEnable(tap: port, enable: false) }
+        if let source {
+            KeyboardTapRunLoop.remove(source, invalidating: port)
+        } else if let port {
+            CFMachPortInvalidate(port)
         }
     }
 
@@ -284,7 +230,7 @@ final class FinderCutPaste: ObservableObject {
             // removeTap() switches the tap off itself, and that is reported
             // here like a disable by the system. A stop under way has nothing
             // to recover: syncing would start the tap again under a suspend().
-            let currentTap = tapLifecycleLock.withLock { shouldStopTapThread ? nil : tap }
+            let currentTap = tapLifecycleLock.withLock { tap }
             if SessionActivity.shared.isActive, AXIsProcessTrusted(), let currentTap {
                 CGEvent.tapEnable(tap: currentTap, enable: true)
             } else if currentTap != nil {

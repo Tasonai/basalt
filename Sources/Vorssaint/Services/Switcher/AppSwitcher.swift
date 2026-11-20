@@ -92,10 +92,6 @@ final class AppSwitcher: ObservableObject {
     private let lifecycleLock = NSLock()
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var tapRunLoop: CFRunLoop?
-    private var tapThread: Thread?
-    private var shouldStopTapThread = false
-    private var pendingStartAfterStop = false
     /// Alive only while the Switcher's tap needs layout labels off main.
     private var keyboardLayoutObserver: NSObjectProtocol?
     /// Registered only while the switcher takes macOS's keys over.
@@ -376,25 +372,51 @@ final class AppSwitcher: ObservableObject {
     }
 
     private func installTap() {
-        // Thread creation and the tapThread assignment share one critical
-        // section with the decision, so a concurrent stop can never observe
-        // a committed start without its thread.
-        let thread = lifecycleLock.withLock { () -> Thread? in
-            if tapThread != nil {
-                if shouldStopTapThread { pendingStartAfterStop = true }
-                return nil
+        guard lifecycleLock.withLock({ tap == nil }) else { return }
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+            | CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+            | CGEventMask(1 << CGEventType.leftMouseDown.rawValue)
+            | CGEventMask(1 << CGEventType.rightMouseDown.rawValue)
+            | CGEventMask(1 << CGEventType.otherMouseDown.rawValue)
+            | CGEventMask(1 << CGEventType.otherMouseUp.rawValue)
+            | CGEventMask(1 << CGEventType.scrollWheel.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let switcher = Unmanaged<AppSwitcher>.fromOpaque(userInfo).takeUnretainedValue()
+                return switcher.route(type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            // Without a tap there is nothing to replace ⌘Tab, so give the
+            // system switcher back rather than leaving the shortcut dead.
+            if Thread.isMainThread {
+                restoreNativeHotkeys()
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.restoreNativeHotkeys() }
             }
-            shouldStopTapThread = false
-            pendingStartAfterStop = false
-            let thread = Thread { [weak self] in
-                self?.runEventTap()
-            }
-            thread.name = "Vorssaint Switcher"
-            thread.qualityOfService = .userInteractive
-            tapThread = thread
-            return thread
+            return
         }
-        thread?.start()
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        lifecycleLock.withLock {
+            self.tap = tap
+            runLoopSource = source
+        }
+        if let source {
+            KeyboardTapRunLoop.add(source)
+        }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        if Thread.isMainThread {
+            applyNativeHotkeySuppressionIfTapLive()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.applyNativeHotkeySuppressionIfTapLive()
+            }
+        }
     }
 
     private func removeTap() {
@@ -402,87 +424,19 @@ final class AppSwitcher: ObservableObject {
         routeLock.withLock { routePendingSessionStart = nil }
         invalidateSecureInputReplays()
         unregisterSecureInputActionHotKeys()
-        let snapshot = lifecycleLock.withLock {
-            () -> (runLoop: CFRunLoop?, tap: CFMachPort?, threadExists: Bool) in
-            shouldStopTapThread = true
-            pendingStartAfterStop = false
-            return (tapRunLoop, tap, tapThread != nil)
+        let (port, source) = lifecycleLock.withLock { () -> (CFMachPort?, CFRunLoopSource?) in
+            let current = (tap, runLoopSource)
+            tap = nil
+            runLoopSource = nil
+            return current
         }
-        if let tap = snapshot.tap {
-            CGEvent.tapEnable(tap: tap, enable: false)
+        if let port {
+            CGEvent.tapEnable(tap: port, enable: false)
         }
-        if let runLoop = snapshot.runLoop {
-            CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) {
-                CFRunLoopStop(runLoop)
-            }
-            CFRunLoopWakeUp(runLoop)
-        } else if !snapshot.threadExists {
-            lifecycleLock.withLock {
-                shouldStopTapThread = false
-                tapThread = nil
-            }
-        }
-    }
-
-    private func runEventTap() {
-        autoreleasepool {
-            let runLoop = CFRunLoopGetCurrent()
-            lifecycleLock.withLock { tapRunLoop = runLoop }
-
-            let shouldStopBeforeCreatingTap = lifecycleLock.withLock { shouldStopTapThread }
-            guard !shouldStopBeforeCreatingTap else {
-                if clearEventTapThread() { installTap() }
-                return
-            }
-
-            let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
-                | CGEventMask(1 << CGEventType.flagsChanged.rawValue)
-                | CGEventMask(1 << CGEventType.leftMouseDown.rawValue)
-                | CGEventMask(1 << CGEventType.rightMouseDown.rawValue)
-                | CGEventMask(1 << CGEventType.otherMouseDown.rawValue)
-                | CGEventMask(1 << CGEventType.otherMouseUp.rawValue)
-                | CGEventMask(1 << CGEventType.scrollWheel.rawValue)
-            guard let tap = CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
-                place: .headInsertEventTap,
-                options: .defaultTap,
-                eventsOfInterest: mask,
-                callback: { _, type, event, userInfo in
-                    guard let userInfo else { return Unmanaged.passUnretained(event) }
-                    let switcher = Unmanaged<AppSwitcher>.fromOpaque(userInfo).takeUnretainedValue()
-                    return switcher.route(type: type, event: event)
-                },
-                userInfo: Unmanaged.passUnretained(self).toOpaque()
-            ) else {
-                _ = clearEventTapThread()
-                // Without a tap there is nothing to replace ⌘Tab, so give the
-                // system switcher back rather than leaving the shortcut dead.
-                DispatchQueue.main.async { [weak self] in self?.restoreNativeHotkeys() }
-                return
-            }
-
-            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            lifecycleLock.withLock {
-                self.tap = tap
-                runLoopSource = source
-            }
-            CFRunLoopAddSource(runLoop, source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
-
-            let shouldStop = lifecycleLock.withLock { shouldStopTapThread }
-            if shouldStop {
-                CGEvent.tapEnable(tap: tap, enable: false)
-            } else {
-                DispatchQueue.main.async { [weak self] in
-                    self?.applyNativeHotkeySuppressionIfTapLive()
-                }
-                CFRunLoopRun()
-            }
-
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFRunLoopRemoveSource(runLoop, source, .commonModes)
-            CFMachPortInvalidate(tap)
-            if clearEventTapThread() { installTap() }
+        if let source {
+            KeyboardTapRunLoop.remove(source, invalidating: port)
+        } else if let port {
+            CFMachPortInvalidate(port)
         }
     }
 
@@ -692,7 +646,7 @@ final class AppSwitcher: ObservableObject {
     private func routeSecureInputHotKey(id: UInt32) {
         guard let shortcut = secureInputHotKeys[id]?.shortcut,
               IsSecureEventInputEnabled(),
-              let runLoop = lifecycleLock.withLock({ shouldStopTapThread ? nil : tapRunLoop }),
+              lifecycleLock.withLock({ tap != nil }),
               let event = CGEvent(keyboardEventSource: nil,
                                   virtualKey: CGKeyCode(shortcut.keyCode),
                                   keyDown: true)
@@ -718,6 +672,7 @@ final class AppSwitcher: ObservableObject {
             releaseSecureInputActionsIfIdle()
             return
         }
+        let runLoop = KeyboardTapRunLoop.cfRunLoop
         CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) { [weak self] in
             guard let self else { return }
             defer {
@@ -729,19 +684,6 @@ final class AppSwitcher: ObservableObject {
             _ = self.route(type: .keyDown, event: event, secureInputReplay: true)
         }
         CFRunLoopWakeUp(runLoop)
-    }
-
-    private func clearEventTapThread() -> Bool {
-        lifecycleLock.withLock {
-            let shouldRestart = pendingStartAfterStop
-            tap = nil
-            runLoopSource = nil
-            tapRunLoop = nil
-            tapThread = nil
-            shouldStopTapThread = false
-            pendingStartAfterStop = false
-            return shouldRestart
-        }
     }
 
     /// Runs on the tap thread. The window server holds every keystroke in
@@ -756,7 +698,7 @@ final class AppSwitcher: ObservableObject {
             // it switches the tap off itself, and that is reported here like
             // a disable by the system. Syncing then would start the tap again
             // under a suspend().
-            let currentTap = lifecycleLock.withLock { shouldStopTapThread ? nil : tap }
+            let currentTap = lifecycleLock.withLock { tap }
             if SessionActivity.shared.isActive, AXIsProcessTrusted(), let currentTap {
                 CGEvent.tapEnable(tap: currentTap, enable: true)
             } else if currentTap != nil {

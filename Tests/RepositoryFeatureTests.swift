@@ -1613,6 +1613,7 @@ enum RepositoryFeatureTests {
             tapOwners += 1
             let invalidations = code.components(separatedBy: "CFMachPortInvalidate").count - 1
                 + (code.components(separatedBy: "PointerTapRunLoop.remove(").count - 1)
+                + (code.components(separatedBy: "KeyboardTapRunLoop.remove(").count - 1)
             if invalidations < taps {
                 let file = String(path.dropFirst(appPrefix.count))
                 tapOwnersWithoutInvalidate.append("\(file) (\(taps) taps, \(invalidations) invalidated)")

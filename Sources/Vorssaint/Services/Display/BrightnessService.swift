@@ -192,10 +192,7 @@ final class BrightnessService: ObservableObject {
     /// stutter once already.
     private let keyThreadLock = NSLock()
     private var functionKeyTap: CFMachPort?
-    private var functionKeyRunLoop: CFRunLoop?
-    private var functionKeyThread: Thread?
-    private var shouldStopFunctionKeyThread = false
-    private var pendingFunctionKeyRestart = false
+    private var functionKeySource: CFRunLoopSource?
     /// Whether F14 and F15 still mean brightness for the system. Sampled when
     /// the tap goes up, never from the tap thread.
     private var functionKeysAdjustBrightness = true
@@ -1366,98 +1363,57 @@ final class BrightnessService: ObservableObject {
     }
 
     private func installFunctionKeyTap() {
-        let thread = keyThreadLock.withLock { () -> Thread? in
-            guard !inputTapsSuspended else { return nil }
-            if functionKeyThread != nil {
-                if shouldStopFunctionKeyThread { pendingFunctionKeyRestart = true }
-                return nil
-            }
-            shouldStopFunctionKeyThread = false
-            pendingFunctionKeyRestart = false
-            let thread = Thread { [weak self] in self?.runFunctionKeyTap() }
-            thread.name = "Vorssaint Brightness Keys"
-            thread.qualityOfService = .userInteractive
-            functionKeyThread = thread
-            return thread
+        let shouldInstall = keyThreadLock.withLock {
+            !inputTapsSuspended && functionKeyTap == nil
         }
-        thread?.start()
+        guard shouldInstall else { return }
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+            | CGEventMask(1 << CGEventType.keyUp.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let service = Unmanaged<BrightnessService>.fromOpaque(userInfo)
+                    .takeUnretainedValue()
+                return service.routeFunctionKey(type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            return
+        }
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        let accepted = keyThreadLock.withLock { () -> Bool in
+            guard !inputTapsSuspended, functionKeyTap == nil else { return false }
+            functionKeyTap = tap
+            functionKeySource = source
+            return true
+        }
+        guard accepted else {
+            CFMachPortInvalidate(tap)
+            return
+        }
+        if let source {
+            KeyboardTapRunLoop.add(source)
+        }
+        CGEvent.tapEnable(tap: tap, enable: true)
     }
 
     private func removeFunctionKeyTap() {
-        let snapshot = keyThreadLock.withLock {
-            () -> (runLoop: CFRunLoop?, tap: CFMachPort?, threadExists: Bool) in
-            shouldStopFunctionKeyThread = true
-            pendingFunctionKeyRestart = false
-            swallowedKeyCodes.removeAll()
-            return (functionKeyRunLoop, functionKeyTap, functionKeyThread != nil)
-        }
-        if let tap = snapshot.tap { CGEvent.tapEnable(tap: tap, enable: false) }
-        if let runLoop = snapshot.runLoop {
-            CFRunLoopPerformBlock(runLoop, CFRunLoopMode.commonModes.rawValue) {
-                CFRunLoopStop(runLoop)
-            }
-            CFRunLoopWakeUp(runLoop)
-        } else if !snapshot.threadExists {
-            keyThreadLock.withLock {
-                shouldStopFunctionKeyThread = false
-                functionKeyThread = nil
-            }
-        }
-    }
-
-    private func runFunctionKeyTap() {
-        autoreleasepool {
-            let runLoop = CFRunLoopGetCurrent()
-            keyThreadLock.withLock { functionKeyRunLoop = runLoop }
-            let stopBeforeCreating = keyThreadLock.withLock { shouldStopFunctionKeyThread }
-            guard !stopBeforeCreating else {
-                if clearFunctionKeyThread() { installFunctionKeyTap() }
-                return
-            }
-            let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
-                | CGEventMask(1 << CGEventType.keyUp.rawValue)
-            guard let tap = CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
-                place: .headInsertEventTap,
-                options: .defaultTap,
-                eventsOfInterest: mask,
-                callback: { _, type, event, userInfo in
-                    guard let userInfo else { return Unmanaged.passUnretained(event) }
-                    let service = Unmanaged<BrightnessService>.fromOpaque(userInfo)
-                        .takeUnretainedValue()
-                    return service.routeFunctionKey(type: type, event: event)
-                },
-                userInfo: Unmanaged.passUnretained(self).toOpaque()
-            ) else {
-                _ = clearFunctionKeyThread()
-                return
-            }
-            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            keyThreadLock.withLock { functionKeyTap = tap }
-            CFRunLoopAddSource(runLoop, source, .commonModes)
-            CGEvent.tapEnable(tap: tap, enable: true)
-            if keyThreadLock.withLock({ shouldStopFunctionKeyThread }) {
-                CGEvent.tapEnable(tap: tap, enable: false)
-            } else {
-                CFRunLoopRun()
-            }
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFRunLoopRemoveSource(runLoop, source, .commonModes)
-            CFMachPortInvalidate(tap)
-            if clearFunctionKeyThread() { installFunctionKeyTap() }
-        }
-    }
-
-    private func clearFunctionKeyThread() -> Bool {
-        keyThreadLock.withLock {
-            let restart = pendingFunctionKeyRestart
+        let (port, source) = keyThreadLock.withLock { () -> (CFMachPort?, CFRunLoopSource?) in
+            let current = (functionKeyTap, functionKeySource)
             functionKeyTap = nil
-            functionKeyRunLoop = nil
-            functionKeyThread = nil
-            shouldStopFunctionKeyThread = false
-            pendingFunctionKeyRestart = false
+            functionKeySource = nil
             swallowedKeyCodes.removeAll()
-            return restart
+            return current
+        }
+        if let port { CGEvent.tapEnable(tap: port, enable: false) }
+        if let source {
+            KeyboardTapRunLoop.remove(source, invalidating: port)
+        } else if let port {
+            CFMachPortInvalidate(port)
         }
     }
 
@@ -1469,8 +1425,8 @@ final class BrightnessService: ObservableObject {
     private func routeFunctionKey(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             let shouldSync = keyThreadLock.withLock { () -> Bool in
-                guard SessionActivity.shared.isActive, AXIsProcessTrusted(),
-                      !shouldStopFunctionKeyThread, let tap = functionKeyTap else {
+                guard let tap = functionKeyTap else { return false }
+                guard SessionActivity.shared.isActive, AXIsProcessTrusted() else {
                     return true
                 }
                 guard !inputTapsSuspended else { return false }

@@ -3842,7 +3842,8 @@ enum PointerInputFeatureTests {
             // the window server waits on; teardown must invalidate the port,
             // either here or through the pointer thread that owns the source.
             suite.expect(code.contains("CFMachPortInvalidate")
-                    || code.contains("PointerTapRunLoop.remove("),
+                    || code.contains("PointerTapRunLoop.remove(")
+                    || code.contains("KeyboardTapRunLoop.remove("),
                    "\(tapOwner) hands its tap back rather than only disabling it")
         }
 
