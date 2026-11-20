@@ -698,7 +698,7 @@ swiftc "${APP_OPTIMIZATION_FLAGS[@]}" "${RELEASE_LINK_FLAGS[@]}" -incremental -e
     "${BUILD_VARIANT_FLAGS[@]}" -lsqlite3 \
     "${APP_SOURCES[@]}" -o "build/$EXECUTABLE"
 if [[ "${APP_OPTIMIZATION_FLAGS[0]:-}" == "-O" ]]; then
-    strip -S -x "build/$EXECUTABLE"
+    strip "build/$EXECUTABLE"
 fi
 
 echo "▸ Compiling protected fan helper…"
@@ -710,7 +710,7 @@ swiftc -O -Xlinker -dead_strip -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS
     Sources/Vorssaint/Services/FanControl/FanControlHardware.swift \
     Sources/FanControlHelper/main.swift \
     -o "build/$FAN_HELPER_ID"
-strip -S -x "build/$FAN_HELPER_ID"
+strip "build/$FAN_HELPER_ID"
 "build/$FAN_HELPER_ID" --selftest
 
 echo "▸ Compiling Now Playing adapter…"
