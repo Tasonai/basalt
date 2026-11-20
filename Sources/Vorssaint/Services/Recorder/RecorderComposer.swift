@@ -1422,7 +1422,7 @@ private final class RecorderCompositionInstruction: NSObject, AVVideoComposition
 /// Draws each frame through `RecorderComposer.render` with one context shared
 /// by every preview and export.
 private final class RecorderVideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
-    private static let context = MetalDeviceProvider.lowPowerCIContext(options: [.cacheIntermediates: false])
+    private static let context = MetalDeviceProvider.lowPowerCIContext()
 
     /// Frames as the decoder made them, so Core Image does the one colour
     /// conversion.

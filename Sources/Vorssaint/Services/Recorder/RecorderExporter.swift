@@ -464,30 +464,30 @@ final class RecorderExporter {
             let finished = OnceFlag()
             // AVFoundation invokes this callback only on the serial queue above.
             nonisolated(unsafe) let serializedInput = input
+            let finish: @Sendable () -> Void = {
+                if finished.set() {
+                    serializedInput.markAsFinished()
+                    continuation.resume()
+                }
+            }
+            let scheduleFinish: @Sendable () -> Void = { queue.async(execute: finish) }
+            cancelled.onCancel(scheduleFinish)
+            abort.onCancel(scheduleFinish)
             input.requestMediaDataWhenReady(on: queue) {
                 while serializedInput.isReadyForMoreMediaData {
                     if cancelled.isCancelled || abort.isCancelled {
-                        if finished.set() {
-                            serializedInput.markAsFinished()
-                            continuation.resume()
-                        }
+                        finish()
                         return
                     }
                     guard let buffer = next() else {
-                        if finished.set() {
-                            serializedInput.markAsFinished()
-                            continuation.resume()
-                        }
+                        finish()
                         return
                     }
                     if serializedInput.append(buffer) {
                         onAppended()
                     } else {
                         onFailure()
-                        if finished.set() {
-                            serializedInput.markAsFinished()
-                            continuation.resume()
-                        }
+                        finish()
                         return
                     }
                 }
@@ -725,6 +725,7 @@ final class RecorderExporter {
 private final class Cancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var flag = false
+    private var handlers: [@Sendable () -> Void] = []
 
     var isCancelled: Bool {
         lock.lock()
@@ -732,10 +733,27 @@ private final class Cancellation: @unchecked Sendable {
         return flag
     }
 
+    func onCancel(_ handler: @escaping @Sendable () -> Void) {
+        lock.lock()
+        let alreadyCancelled = flag
+        if !alreadyCancelled {
+            handlers.append(handler)
+        }
+        lock.unlock()
+        if alreadyCancelled {
+            handler()
+        }
+    }
+
     func cancel() {
         lock.lock()
         flag = true
+        let pending = handlers
+        handlers.removeAll()
         lock.unlock()
+        for handler in pending {
+            handler()
+        }
     }
 }
 

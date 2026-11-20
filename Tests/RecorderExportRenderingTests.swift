@@ -919,8 +919,10 @@ enum RecorderExportRenderingTests {
         return result
     }
 
+    private static let sharedCIContext = CIContext(options: [.useSoftwareRenderer: true])
+
     private static func contrast(of image: CGImage) -> Double {
-        let context = CIContext()
+        let context = sharedCIContext
         var bytes = [UInt8](repeating: 0, count: 128 * 128 * 4)
         context.render(CIImage(cgImage: image), toBitmap: &bytes, rowBytes: 128 * 4,
                        bounds: CGRect(x: 0, y: 0, width: 128, height: 128),
@@ -995,7 +997,7 @@ enum RecorderExportRenderingTests {
     }
 
     private static func meanRGB(of image: CGImage) -> (red: Double, green: Double, blue: Double) {
-        let context = CIContext()
+        let context = sharedCIContext
         var bytes = [UInt8](repeating: 0, count: 128 * 128 * 4)
         context.render(CIImage(cgImage: image), toBitmap: &bytes, rowBytes: 128 * 4,
                        bounds: CGRect(x: 0, y: 0, width: 128, height: 128),

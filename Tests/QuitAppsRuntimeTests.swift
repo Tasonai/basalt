@@ -172,13 +172,13 @@ enum QuitAppsRuntimeTests {
         first.quitRequests = 0; second.quitRequests = 0; kept.quitRequests = 0
         service.showQuitApps(scope: .allExceptFront)
         controller.handleKey(NSEvent(keyCode: UInt16(kVK_Return)))
-        drain()
+        drain(while: { controller.model != nil })
         suite.expect(first.quitRequests == 0 && second.quitRequests == 1 && kept.quitRequests == 0
                      && own.quitRequests == 0 && controller.model == nil,
                      "confirming all-except-front dispatches only the eligible app, then closes")
         service.showQuitApps(scope: .all)
         controller.handleKey(NSEvent(keyCode: UInt16(kVK_Return), modifierFlags: .command))
-        drain()
+        drain(while: { controller.model != nil })
         suite.expect(first.quitRequests == 1 && second.quitRequests == 2 && kept.quitRequests == 0,
                      "a fresh all-apps confirmation preserves every exception")
 
@@ -221,5 +221,12 @@ enum QuitAppsRuntimeTests {
 
     private static func drain(until deadline: Date = Date(timeIntervalSinceNow: 0.04)) {
         while Date() < deadline { _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) }
+    }
+
+    private static func drain(while condition: () -> Bool, timeout: TimeInterval = 1.0) {
+        let deadline = Date(timeIntervalSinceNow: timeout)
+        while condition() && Date() < deadline {
+            _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+        }
     }
 }
