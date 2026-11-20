@@ -1531,7 +1531,8 @@ final class AppVolumeMixer: ObservableObject {
     }
 
     private var hasActiveGlobalAudioChain: Bool {
-        MixerRealtimeAUChainProcessor.shared.hasActiveSlots
+        MixerAudioUnitHost.hasActiveChainSlots
+            || MixerRealtimeAUChainProcessor.shared.hasActiveSlots
             || !MixerRealtimeAUChainProcessor.shared.isLoudnessBypassed
     }
 
@@ -3477,6 +3478,8 @@ private final class TapGainEngine: GainEngine {
     private var appEQ: MixerParametricEQ?
     private var masterEQ: MixerParametricEQ?
     private var loudnessProcessor: FletcherMunsonLoudness.LoudnessBiquadProcessor?
+    private let auChainID = UUID()
+    private var auChain: MixerRealtimeAUChainProcessor?
     private(set) var sampleRate: Double = 48_000
     var renderCycles: UInt64 { cycleBox.value }
     var currentMeterLevel: Float { appMeter.normalizedLevel }
@@ -3575,10 +3578,15 @@ private final class TapGainEngine: GainEngine {
         self.masterEQ = perEngineMasterEQ
         self.loudnessProcessor = perEngineLoudness
         self.sampleRate = sampleRate
-        let chainProcessor = MixerRealtimeAUChainProcessor.shared
+        let totalOutputChannels = max(2, outputChannels.reduce(0, +))
+        let perEngineAUChain = MixerRealtimeAUChainProcessor(
+            channelCapacity: min(totalOutputChannels, MixerRealtimeAUChainProcessor.maxChannels),
+            deferScratchAllocation: true
+        )
+        self.auChain = perEngineAUChain
         let chainSampleRate = sampleRate
         let postEQProcessor: (UnsafeMutableAudioBufferListPointer, Int) -> Void = { buffers, frames in
-            chainProcessor.processAUChainOnly(buffers, frames: frames, sampleRate: chainSampleRate)
+            perEngineAUChain.processAUChainOnly(buffers, frames: frames, sampleRate: chainSampleRate)
             perEngineLoudness.processAudioBufferList(buffers, frames: frames)
         }
         // A boost pushes loud samples past full scale, and clamping the
@@ -3586,7 +3594,7 @@ private final class TapGainEngine: GainEngine {
         // The limiter turns the whole signal down for just the moment a peak
         // would not fit, so a boosted app gets louder without distorting.
         let limiterBox = LimiterBox(
-            channelCapacity: max(2, outputChannels.reduce(0, +)),
+            channelCapacity: totalOutputChannels,
             appEQ: perAppEQ,
             masterEQ: perEngineMasterEQ,
             appMeter: appMeter,
@@ -3650,6 +3658,13 @@ private final class TapGainEngine: GainEngine {
             stop()
             return nil
         }
+
+        MixerAudioUnitHost.registerEngineChain(
+            id: auChainID,
+            processor: perEngineAUChain,
+            sampleRate: sampleRate,
+            channels: totalOutputChannels
+        )
     }
 
     func refreshLevelCompensation(immediately: Bool) {
@@ -3761,18 +3776,24 @@ private final class TapGainEngine: GainEngine {
         let tapID = self.tapID
         let aggregateID = self.aggregateID
         let ioProc = self.ioProc
-        guard tapID != 0 || aggregateID != 0 || ioProc != nil else {
+        let chain = self.auChain
+        guard tapID != 0 || aggregateID != 0 || ioProc != nil || chain != nil else {
             return
         }
 
         self.tapID = 0
         self.aggregateID = 0
         self.ioProc = nil
+        self.auChain = nil
         appMeter.reset()
         configuration?.stop()
         configuration = nil
         levelWatch?.stop()
         levelWatch = nil
+        if let chain {
+            chain.markStopping()
+            MixerAudioUnitHost.unregisterEngineChain(id: auChainID)
+        }
 
         // `mutedWhenTapped` only suppresses the original output while the tap
         // is being read. Stop that read before returning so audio is handed
@@ -3786,6 +3807,7 @@ private final class TapGainEngine: GainEngine {
             if let ioProc, aggregateID != 0 {
                 AudioDeviceDestroyIOProcID(aggregateID, ioProc)
             }
+            chain?.invalidate()
             if aggregateID != 0 {
                 AudioHardwareDestroyAggregateDevice(aggregateID)
             }
@@ -4381,9 +4403,11 @@ extension AppVolumeMixer {
         let attachObserver = { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.auHostCancellable == nil, !self.stopped else { return }
-                self.auHostCancellable = MixerAudioUnitHost.shared.objectWillChange
+                let host = MixerAudioUnitHost.shared
+                self.auHostCancellable = Publishers.CombineLatest(host.$chainSlots, host.$slotBypassStates)
+                    .dropFirst()
                     .receive(on: RunLoop.main)
-                    .sink { [weak self] _ in
+                    .sink { [weak self] _, _ in
                         DispatchQueue.main.async {
                             self?.reconcileAudioChainChanges()
                         }

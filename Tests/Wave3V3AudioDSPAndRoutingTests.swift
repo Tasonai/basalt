@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import AudioToolbox
+import AVFoundation
 import CoreAudio
 import Foundation
 
@@ -9,6 +11,8 @@ enum Wave3V3AudioDSPAndRoutingContract {
         testAutoEQCatalogPresetsAndSearch(suite)
         testAutoEQProfileParserAPOAndClamping(suite)
         testFletcherMunsonLoudnessAndBiquadDSP(suite)
+        testMixerAUStateStorePersistenceAndSanitization(suite)
+        testPerEngineAUChainIsolationAndDualSampleRate(suite)
         testAudioChainRoutingAndUIContracts(suite)
     }
 
@@ -109,22 +113,319 @@ enum Wave3V3AudioDSPAndRoutingContract {
                      "LoudnessBiquadProcessor sanitizes NaN samples and outputs finite audio")
     }
 
+    private static func testMixerAUStateStorePersistenceAndSanitization(_ suite: TestSuite) {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("basalt-au-state-test-\(UUID().uuidString)",
+                                                                  isDirectory: true)
+        defer { try? fm.removeItem(at: tempDir) }
+
+        let store = MixerAUStateStore(directoryURL: tempDir, containerRootURL: tempDir)
+        let componentID = "aufx:lpft:appl"
+        let customData = Data([0x01, 0x02, 0xAF, 0xFE])
+        let unsafeValue = NSObject()
+        let rawState: [String: Any] = [
+            "name": "Warm Lowpass",
+            "cutoffHz": 1850.5,
+            "decimalVal": NSDecimalNumber(string: "12.5"),
+            "enabled": true,
+            "data": customData,
+            "points": [1.0, 2.0, 3.0],
+            "nested": ["q": 0.707, "nullEntry": NSNull(), "unsafeObj": unsafeValue],
+            "nullTop": NSNull(),
+            "nanVal": Double.nan,
+        ]
+
+        let saved = store.saveState(rawState, componentID: componentID, forSlot: 1)
+        suite.expect(saved, "MixerAUStateStore sanitizes non-plist objects and saves valid binary plist")
+
+        if let slotURL = store.fileURL(forSlot: 1),
+           let attrs = try? fm.attributesOfItem(atPath: slotURL.path),
+           let perms = attrs[.posixPermissions] as? NSNumber {
+            suite.expect((perms.intValue & 0o777) == 0o600,
+                         "Persisted AU fullState file enforces strict owner-only 0o600 permissions")
+        } else {
+            suite.expect(false, "Persisted AU fullState file exists at slot-1.plist")
+        }
+
+        let loaded = store.loadState(forSlot: 1, componentID: componentID)
+        let nested = loaded?["nested"] as? [String: Any]
+        suite.expect(loaded != nil
+                     && (loaded?["name"] as? String) == "Warm Lowpass"
+                     && (loaded?["enabled"] as? Bool) == true
+                     && (loaded?["data"] as? Data) == customData
+                     && loaded?["nullTop"] == nil
+                     && loaded?["nanVal"] == nil
+                     && nested?["nullEntry"] == nil
+                     && nested?["unsafeObj"] == nil
+                     && abs(((loaded?["cutoffHz"] as? Double) ?? 0) - 1850.5) < 0.001
+                     && abs(((loaded?["decimalVal"] as? Double) ?? 0) - 12.5) < 0.001,
+                     "MixerAUStateStore round-trips valid state and drops NSNull/NaN/non-plist objects")
+
+        suite.expect(store.loadState(forSlot: 1, componentID: "aufx:dely:appl") == nil,
+                     "MixerAUStateStore rejects persisted state when slot holds a different componentID")
+
+        if let slotURL = store.fileURL(forSlot: 1) {
+            try? Data("not-a-valid-binary-plist".utf8).write(to: slotURL)
+            suite.expect(store.loadState(forSlot: 1, componentID: componentID) == nil,
+                         "MixerAUStateStore handles corrupt plist payloads gracefully")
+        }
+
+        store.removeState(forSlot: 1)
+        suite.expect(store.loadState(forSlot: 1, componentID: componentID) == nil,
+                     "MixerAUStateStore.removeState clears persisted slot state")
+    }
+
+    private static func instantiateLowPassTestUnit() -> AVAudioUnit? {
+        let desc = AudioComponentDescription(
+            componentType: kAudioUnitType_Effect,
+            componentSubType: kAudioUnitSubType_LowPassFilter,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0,
+            componentFlagsMask: 0
+        )
+        let sem = DispatchSemaphore(value: 0)
+        final class UnitBox: @unchecked Sendable { var unit: AVAudioUnit? }
+        let box = UnitBox()
+        AVAudioUnit.instantiate(with: desc, options: [.loadInProcess]) { unit, _ in
+            box.unit = unit
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 5.0)
+        return box.unit
+    }
+
+    private static func testPerEngineAUChainIsolationAndDualSampleRate(_ suite: TestSuite) {
+        let unitA = instantiateLowPassTestUnit()
+        let unitB = instantiateLowPassTestUnit()
+        suite.expect(unitA != nil && unitB != nil,
+                     "Apple built-in in-process LowPass AU instantiates cleanly for multi-engine isolation tests")
+        guard let unitA, let unitB else { return }
+
+        // Configure 1000 Hz lowpass on both isolated AU instances so 100 Hz passes cleanly and 12 kHz is attenuated.
+        unitA.auAudioUnit.parameterTree?.parameter(withAddress: AUParameterAddress(kLowPassParam_CutoffFrequency))?.value = 1_000
+        unitB.auAudioUnit.parameterTree?.parameter(withAddress: AUParameterAddress(kLowPassParam_CutoffFrequency))?.value = 1_000
+
+        let engineA = MixerRealtimeAUChainProcessor(channelCapacity: 2, deferScratchAllocation: true)
+        let engineB = MixerRealtimeAUChainProcessor(channelCapacity: 2, deferScratchAllocation: true)
+        suite.expect(!engineA.hasActiveSlots && !engineB.hasActiveSlots,
+                     "Lazy per-engine MixerRealtimeAUChainProcessor starts with zero active slots before AU assignment")
+
+        engineA.configureSlot(0, audioUnit: unitA.auAudioUnit, legacyAudioUnit: unitA.audioUnit, bypassed: false, sampleRate: 44_100, channels: 2)
+        engineB.configureSlot(0, audioUnit: unitB.auAudioUnit, legacyAudioUnit: unitB.audioUnit, bypassed: false, sampleRate: 48_000, channels: 2)
+        suite.expect(engineA.hasActiveSlots && engineB.hasActiveSlots,
+                     "Per-engine AU processors activate independently at 44.1 kHz and 48 kHz")
+
+        let frames = 512
+        var stereo44k = [Float](repeating: 0, count: frames * 2)
+        for i in 0..<frames {
+            let s = sinf(Float(i) * 2 * Float.pi * 12_000 / 44_100) * 0.5
+            stereo44k[i * 2] = s
+            stereo44k[i * 2 + 1] = s
+        }
+        let inputPeak44k = stereo44k.map { abs($0) }.max() ?? 0
+        var stereoSilence48k = [Float](repeating: 0, count: frames * 2)
+
+        final class FlagBox: @unchecked Sendable {
+            var okA = true
+            var okB = true
+        }
+        let flags = FlagBox()
+        let group = DispatchGroup()
+        stereo44k.withUnsafeMutableBufferPointer { bufA in
+            stereoSilence48k.withUnsafeMutableBufferPointer { bufB in
+                guard let ptrA = bufA.baseAddress, let ptrB = bufB.baseAddress else { return }
+                let rawA = UnsafeMutablePointer<Float>(OpaquePointer(ptrA))
+                let rawB = UnsafeMutablePointer<Float>(OpaquePointer(ptrB))
+                let qA = DispatchQueue(label: "com.vorssaint.tests.au-chain-44k")
+                let qB = DispatchQueue(label: "com.vorssaint.tests.au-chain-48k")
+                for _ in 0..<4 {
+                    group.enter()
+                    qA.async {
+                        if !engineA.processInterleaved(rawA, frames: frames, channels: 2, sampleRate: 44_100) {
+                            flags.okA = false
+                        }
+                        group.leave()
+                    }
+                    group.enter()
+                    qB.async {
+                        if !engineB.processInterleaved(rawB, frames: frames, channels: 2, sampleRate: 48_000) {
+                            flags.okB = false
+                        }
+                        group.leave()
+                    }
+                }
+                group.wait()
+            }
+        }
+
+        let maxBleedInSilenceB = stereoSilence48k.map { abs($0) }.max() ?? 1
+        let tailPeak44k = stereo44k[(frames * 2 - 128)..<(frames * 2)].map { abs($0) }.max() ?? 1
+        suite.expect(flags.okA && flags.okB,
+                     "Concurrent per-engine AU chains never suffer os_unfair_lock_trylock contention drop-outs")
+        suite.expect(maxBleedInSilenceB == 0 && stereoSilence48k.allSatisfy(\.isFinite),
+                     "Concurrent loud 44.1 kHz stream causes zero DSP bleed into isolated 48 kHz engine")
+        suite.expect(tailPeak44k < inputPeak44k * 0.25 && stereo44k.allSatisfy(\.isFinite),
+                     "44.1 kHz per-engine AU lowpass attenuates 12 kHz stopband without sample-rate bypass")
+
+        // Verify 44.1 kHz passband passes 250 Hz (proving AU actually rendered rather than silencing).
+        var pass44k = [Float](repeating: 0, count: frames * 2)
+        for i in 0..<frames {
+            let s = sinf(Float(i) * 2 * Float.pi * 250 / 44_100) * 0.5
+            pass44k[i * 2] = s
+            pass44k[i * 2 + 1] = s
+        }
+        let passOk44k = pass44k.withUnsafeMutableBufferPointer { buf -> Bool in
+            guard let ptr = buf.baseAddress else { return false }
+            return engineA.processInterleaved(ptr, frames: frames, channels: 2, sampleRate: 44_100)
+        }
+        let passPeak44k = pass44k[frames..<(frames * 2)].map { abs($0) }.max() ?? 0
+        suite.expect(passOk44k && passPeak44k > 0.35 && pass44k.allSatisfy(\.isFinite),
+                     "44.1 kHz per-engine AU lowpass passes 250 Hz passband cleanly")
+
+        // Verify 48 kHz engine also actively processes 48 kHz stopband and passband without bypass.
+        var stereo48k = [Float](repeating: 0, count: frames * 2)
+        for i in 0..<frames {
+            let s = sinf(Float(i) * 2 * Float.pi * 12_000 / 48_000) * 0.5
+            stereo48k[i * 2] = s
+            stereo48k[i * 2 + 1] = s
+        }
+        let inputPeak48k = stereo48k.map { abs($0) }.max() ?? 0
+        let ok48k = stereo48k.withUnsafeMutableBufferPointer { buf -> Bool in
+            guard let ptr = buf.baseAddress else { return false }
+            return engineB.processInterleaved(ptr, frames: frames, channels: 2, sampleRate: 48_000)
+        }
+        let tailPeak48k = stereo48k[(frames * 2 - 128)..<(frames * 2)].map { abs($0) }.max() ?? 1
+        suite.expect(ok48k && tailPeak48k < inputPeak48k * 0.25 && stereo48k.allSatisfy(\.isFinite),
+                     "48 kHz per-engine AU lowpass attenuates 12 kHz stopband at 48 kHz without sample-rate bypass")
+
+        var pass48k = [Float](repeating: 0, count: frames * 2)
+        for i in 0..<frames {
+            let s = sinf(Float(i) * 2 * Float.pi * 250 / 48_000) * 0.5
+            pass48k[i * 2] = s
+            pass48k[i * 2 + 1] = s
+        }
+        let passOk48k = pass48k.withUnsafeMutableBufferPointer { buf -> Bool in
+            guard let ptr = buf.baseAddress else { return false }
+            return engineB.processInterleaved(ptr, frames: frames, channels: 2, sampleRate: 48_000)
+        }
+        let passPeak48k = pass48k[frames..<(frames * 2)].map { abs($0) }.max() ?? 0
+        suite.expect(passOk48k && passPeak48k > 0.35 && pass48k.allSatisfy(\.isFinite),
+                     "48 kHz per-engine AU lowpass passes 250 Hz passband cleanly")
+
+        // Verify live sample-rate reconfiguration on active unitA (44.1 kHz -> 48 kHz) continues DSP cleanly.
+        engineA.configureSlot(0, audioUnit: unitA.auAudioUnit, legacyAudioUnit: unitA.audioUnit, bypassed: false, sampleRate: 48_000, channels: 2)
+        var swapStop48k = [Float](repeating: 0, count: frames * 2)
+        for i in 0..<frames {
+            let s = sinf(Float(i) * 2 * Float.pi * 12_000 / 48_000) * 0.5
+            swapStop48k[i * 2] = s
+            swapStop48k[i * 2 + 1] = s
+        }
+        let swapStopOk = swapStop48k.withUnsafeMutableBufferPointer { buf -> Bool in
+            guard let ptr = buf.baseAddress else { return false }
+            return engineA.processInterleaved(ptr, frames: frames, channels: 2, sampleRate: 48_000)
+        }
+        let swapStopPeak = swapStop48k[(frames * 2 - 128)..<(frames * 2)].map { abs($0) }.max() ?? 1
+        var swapPass48k = [Float](repeating: 0, count: frames * 2)
+        for i in 0..<frames {
+            let s = sinf(Float(i) * 2 * Float.pi * 250 / 48_000) * 0.5
+            swapPass48k[i * 2] = s
+            swapPass48k[i * 2 + 1] = s
+        }
+        let swapPassOk = swapPass48k.withUnsafeMutableBufferPointer { buf -> Bool in
+            guard let ptr = buf.baseAddress else { return false }
+            return engineA.processInterleaved(ptr, frames: frames, channels: 2, sampleRate: 48_000)
+        }
+        let swapPassPeak = swapPass48k[frames..<(frames * 2)].map { abs($0) }.max() ?? 0
+        suite.expect(swapStopOk && swapStopPeak < 0.125 && swapPassOk && swapPassPeak > 0.35,
+                     "Live configureSlot sample-rate swap (44.1 kHz -> 48 kHz) preserves stopband/passband DSP")
+
+        // Verify markStopping() blocks subsequent configuration and config-lock mutations before invalidation.
+        engineA.markStopping()
+        var invokedAfterStopping = false
+        engineA.withActiveConfigLock { invokedAfterStopping = true }
+        engineA.configureSlot(1, audioUnit: unitB.auAudioUnit, legacyAudioUnit: unitB.audioUnit, bypassed: false, sampleRate: 48_000, channels: 2)
+        suite.expect(engineA.isStoppingOrInvalidated && !engineA.hasActiveSlots && !engineA.isSlotActive(1) && !invokedAfterStopping,
+                     "markStopping() blocks configureSlot and withActiveConfigLock before teardown")
+
+        engineA.invalidate()
+        suite.expect(engineA.isInvalidated && !engineA.hasActiveSlots && engineB.hasActiveSlots,
+                     "Invalidating stopped engineA leaves active engineB untouched")
+
+        // Verify mono 1-ch + 1-ch AU preserves 0 dB gain (no -6 dB halving) and stereo 2-ch + 1-ch AU outputs symmetric wet stereo.
+        if let unitMono = instantiateLowPassTestUnit() {
+            unitMono.auAudioUnit.parameterTree?.parameter(withAddress: AUParameterAddress(kLowPassParam_CutoffFrequency))?.value = 1_000
+            let monoEngine = MixerRealtimeAUChainProcessor(channelCapacity: 2, deferScratchAllocation: true)
+            monoEngine.configureSlot(0, audioUnit: unitMono.auAudioUnit, legacyAudioUnit: unitMono.audioUnit, bypassed: false, sampleRate: 48_000, channels: 1)
+
+            var monoPass = [Float](repeating: 0, count: frames)
+            for i in 0..<frames {
+                monoPass[i] = sinf(Float(i) * 2 * Float.pi * 250 / 48_000) * 0.5
+            }
+            let monoOk = monoPass.withUnsafeMutableBufferPointer { buf -> Bool in
+                guard let ptr = buf.baseAddress else { return false }
+                return monoEngine.processInterleaved(ptr, frames: frames, channels: 1, sampleRate: 48_000)
+            }
+            let monoTailPeak = monoPass[(frames / 2)..<frames].map { abs($0) }.max() ?? 0
+            suite.expect(monoOk && monoTailPeak > 0.40 && monoPass.allSatisfy(\.isFinite),
+                         "Mono 1-ch stream through 1-ch AU preserves 0 dB unity gain without -6 dB halving")
+
+            var stereoIntoMono = [Float](repeating: 0, count: frames * 2)
+            for i in 0..<frames {
+                let s = sinf(Float(i) * 2 * Float.pi * 12_000 / 48_000) * 0.5
+                stereoIntoMono[i * 2] = s
+                stereoIntoMono[i * 2 + 1] = s
+            }
+            let stereoIntoMonoOk = stereoIntoMono.withUnsafeMutableBufferPointer { buf -> Bool in
+                guard let ptr = buf.baseAddress else { return false }
+                return monoEngine.processInterleaved(ptr, frames: frames, channels: 2, sampleRate: 48_000)
+            }
+            var leftTailPeak: Float = 0
+            var rightTailPeak: Float = 0
+            for i in (frames - 64)..<frames {
+                leftTailPeak = max(leftTailPeak, abs(stereoIntoMono[i * 2]))
+                rightTailPeak = max(rightTailPeak, abs(stereoIntoMono[i * 2 + 1]))
+            }
+            suite.expect(stereoIntoMonoOk && leftTailPeak < 0.12 && rightTailPeak < 0.12 && abs(leftTailPeak - rightTailPeak) < 0.01,
+                         "Stereo 2-ch stream through 1-ch AU renders symmetric wet output with zero dry right-channel leak")
+            monoEngine.invalidate()
+        } else {
+            suite.expect(false, "Instantiated mono LowPass test AU cleanly")
+        }
+    }
+
     private static func testAudioChainRoutingAndUIContracts(_ suite: TestSuite) {
         let host = (try? String(contentsOfFile: "Sources/Vorssaint/Services/Audio/MixerAudioUnitHost.swift", encoding: .utf8)) ?? ""
         let mixer = (try? String(contentsOfFile: "Sources/Vorssaint/Services/Audio/AppVolumeMixer.swift", encoding: .utf8)) ?? ""
+        let appDelegate = (try? String(contentsOfFile: "Sources/Vorssaint/App/AppDelegate.swift", encoding: .utf8)) ?? ""
         let section = (try? String(contentsOfFile: "Sources/Vorssaint/UI/MenuPanel/MixerSection.swift", encoding: .utf8)) ?? ""
         let notchMixer = (try? String(contentsOfFile: "Sources/Vorssaint/UI/Notch/NotchMixerView.swift", encoding: .utf8)) ?? ""
 
         suite.expect(host.contains("MixerRealtimeAUChainProcessor")
                      && host.contains("chainSlots")
                      && host.contains("os_unfair_lock_trylock")
-                     && host.contains("slotCount = 3"),
-                     "MixerAudioUnitHost implements lock-free 3-slot MixerRealtimeAUChainProcessor")
+                     && host.contains("slotCount = 3")
+                     && host.contains("MixerAUStateStore")
+                     && host.contains("registerEngineChain")
+                     && host.contains("PrivateFileStore.writeStream")
+                     && host.contains("withActiveConfigLock")
+                     && host.contains("markStopping")
+                     && host.contains("fullState"),
+                     "MixerAudioUnitHost implements per-engine 3-slot AU isolation, lifecycle guards, and 0o600 fullState persistence")
 
         suite.expect(mixer.contains("postEQProcessor")
                      && mixer.contains("loudnessEnabled")
-                     && mixer.contains("applyAutoEQPreset"),
-                     "AppVolumeMixer wires postEQProcessor hook, loudness toggle, and AutoEQ preset application")
+                     && mixer.contains("applyAutoEQPreset")
+                     && mixer.contains("deferScratchAllocation: true")
+                     && mixer.contains("registerEngineChain")
+                     && mixer.contains("unregisterEngineChain")
+                     && mixer.contains("markStopping()")
+                     && mixer.contains("Publishers.CombineLatest(host.$chainSlots, host.$slotBypassStates)")
+                     && mixer.contains("MixerAudioUnitHost.hasActiveChainSlots")
+                     && !mixer.contains("MixerRealtimeAUChainProcessor.shared.processAUChainOnly"),
+                     "AppVolumeMixer allocates per-engine isolated AU processors with narrow AU observation and markStopping teardown")
+
+        suite.expect(appDelegate.contains("MixerAudioUnitHost.shared.persistAllSlotStates()"),
+                     "AppDelegate flushes AU fullState on termination")
 
         suite.expect(section.contains("OverhaulV3Strings.audioChainTitle")
                      && section.contains("OverhaulV3Strings.perAppOutputTitle")

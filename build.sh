@@ -628,6 +628,7 @@ if (( TEST )); then
         Sources/Vorssaint/Core/OverhaulV3Strings.swift
         Sources/Vorssaint/Services/Audio/MixerAutoEQCatalog.swift
         Sources/Vorssaint/Services/Audio/MixerParametricEQ.swift
+        Sources/Vorssaint/Services/Audio/MixerAudioUnitHost.swift
         Sources/Vorssaint/Services/Cleaner/SpaceLensSupport.swift
         Sources/Vorssaint/Services/Clipboard/ClipboardSQLiteStore.swift
         Sources/Vorssaint/Services/Clipboard/ClipboardProSupport.swift
