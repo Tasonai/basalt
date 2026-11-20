@@ -301,7 +301,7 @@ final class RecorderSystemAudioTap: @unchecked Sendable {
         } else {
             description = CATapDescription(stereoGlobalTapButExcludeProcesses: [ownProcess])
         }
-        description.name = "Vorssaint Recorder"
+        description.name = "Basalt Recorder"
         description.isPrivate = true
         var tapID = AudioObjectID(0)
         guard AudioHardwareCreateProcessTap(description, &tapID) == noErr, tapID != 0 else {
@@ -390,7 +390,7 @@ final class RecorderSystemAudioTap: @unchecked Sendable {
         guard aggregateID == 0, let clock,
               let hostUID = Self.hostDeviceUID() else { return }
         let aggregate: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Vorssaint Recorder",
+            kAudioAggregateDeviceNameKey: "Basalt Recorder",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceMainSubDeviceKey: hostUID,

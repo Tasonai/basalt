@@ -407,9 +407,10 @@ extension ClipboardVaultSecretStore {
     }
 }
 
-/// Keychain-backed store (`kSecClassGenericPassword`, service `com.vorssaint.utils.vault`) for vault passphrases.
+/// Keychain-backed store (`kSecClassGenericPassword`, service `com.tasonai.basalt.vault`) for vault passphrases.
 struct KeychainClipboardVaultSecretStore: ClipboardVaultSecretStore {
-    static let defaultService = "com.vorssaint.utils.vault"
+    static let defaultService = "com.tasonai.basalt.vault"
+    private static let legacyService = "com.vorssaint.utils.vault"
     static let defaultAccount = "vorssaint.clipboard.vault.passphrase"
     private let service: String
 
@@ -432,6 +433,16 @@ struct KeychainClipboardVaultSecretStore: ClipboardVaultSecretStore {
     }
 
     func loadSecret(account: String) -> String? {
+        if let value = loadSecret(account: account, service: service) {
+            return value
+        }
+        if service == Self.defaultService {
+            return loadSecret(account: account, service: Self.legacyService)
+        }
+        return nil
+    }
+
+    private func loadSecret(account: String, service: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -447,6 +458,15 @@ struct KeychainClipboardVaultSecretStore: ClipboardVaultSecretStore {
 
     @discardableResult
     func deleteSecret(account: String) -> Bool {
+        let primary = deleteSecret(account: account, service: service)
+        if service == Self.defaultService {
+            let legacy = deleteSecret(account: account, service: Self.legacyService)
+            return primary && legacy
+        }
+        return primary
+    }
+
+    private func deleteSecret(account: String, service: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

@@ -903,6 +903,7 @@ struct RecorderInspector: View {
             compactSwitchRow(title: OverhaulV3Strings.recorderMicDuckingToggle,
                              isOn: boolBinding(\.micAutoDuckingEnabled))
 
+            let actionCopy = OverhaulV3ActionCopy.localized(l10n.language)
             Picker(wave2.clickSFXTitle, selection: Binding(
                 get: { model.document.clickSFXStyle },
                 set: { newValue in
@@ -912,10 +913,10 @@ struct RecorderInspector: View {
                     model.document = next
                 }
             )) {
-                Text("Off").tag(RecorderClickSFXStyle.off.rawValue)
-                Text("Soft").tag(RecorderClickSFXStyle.softTap.rawValue)
-                Text("Mechanical").tag(RecorderClickSFXStyle.mechanical.rawValue)
-                Text("Crisp").tag(RecorderClickSFXStyle.crispPop.rawValue)
+                Text(actionCopy.clickSFXOff).tag(RecorderClickSFXStyle.off.rawValue)
+                Text(actionCopy.clickSFXSoft).tag(RecorderClickSFXStyle.softTap.rawValue)
+                Text(actionCopy.clickSFXMechanical).tag(RecorderClickSFXStyle.mechanical.rawValue)
+                Text(actionCopy.clickSFXCrisp).tag(RecorderClickSFXStyle.crispPop.rawValue)
             }
             .pickerStyle(.menu)
 

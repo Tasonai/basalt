@@ -102,7 +102,7 @@ struct NotchExpandedCompanionBadge: View {
                     )
             )
             .contentShape(Capsule())
-            .help("Companion")
+            .help(FeatureStrings.notchMascot(L10n.shared.language).title)
             .onChange(of: music.playback?.track.title) { oldTitle, newTitle in
                 guard newTitle != nil, newTitle != oldTitle else { return }
                 fireCue(.celebrate)

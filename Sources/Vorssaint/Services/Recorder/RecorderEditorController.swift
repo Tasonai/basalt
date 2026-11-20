@@ -2013,6 +2013,7 @@ enum RecorderSpeechTranscriber {
         }
         let home = fm.homeDirectoryForCurrentUser.path
         let directories = [
+            home + "/Library/Application Support/Basalt/Models",
             home + "/Library/Application Support/Vorssaint/Models",
             home + "/.cache/whisper",
             "/opt/homebrew/share/whisper-cpp",

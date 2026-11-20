@@ -128,7 +128,7 @@ struct OverhaulV2Strings {
 
 private extension OverhaulV2Strings {
     static let enUS = OverhaulV2Strings(
-        galleryTitle: "Vorssaint DesignKit Gallery",
+        galleryTitle: "Basalt DesignKit Gallery",
         gallerySubtitle: "Native Light & Dark tactile controls, 4pt/8pt rhythm, and Mascot cameos.",
         galleryLightLabel: "Light Appearance",
         galleryDarkLabel: "Dark Appearance",
@@ -217,7 +217,7 @@ private extension OverhaulV2Strings {
     )
 
     static let ru = OverhaulV2Strings(
-        galleryTitle: "Витрина Vorssaint DesignKit",
+        galleryTitle: "Витрина Basalt DesignKit",
         gallerySubtitle: "Светлые и тёмные тактильные контролы, сетка 4/8pt и камео маскота.",
         galleryLightLabel: "Светлая тема",
         galleryDarkLabel: "Тёмная тема",
@@ -306,7 +306,7 @@ private extension OverhaulV2Strings {
     )
 
     static let ptBR = OverhaulV2Strings(
-        galleryTitle: "Galeria Vorssaint DesignKit",
+        galleryTitle: "Galeria Basalt DesignKit",
         gallerySubtitle: "Controles táteis claros e escuros, grade 4pt/8pt e mascote.",
         galleryLightLabel: "Aparência Clara",
         galleryDarkLabel: "Aparência Escura",
@@ -395,7 +395,7 @@ private extension OverhaulV2Strings {
     )
 
     static let tr = OverhaulV2Strings(
-        galleryTitle: "Vorssaint DesignKit Galerisi",
+        galleryTitle: "Basalt DesignKit Galerisi",
         gallerySubtitle: "Açık ve Koyu dokunsal kontroller, 4pt/8pt ızgara ve Maskot.",
         galleryLightLabel: "Açık Görünüm",
         galleryDarkLabel: "Koyu Görünüm",
@@ -484,7 +484,7 @@ private extension OverhaulV2Strings {
     )
 
     static let es = OverhaulV2Strings(
-        galleryTitle: "Galería Vorssaint DesignKit",
+        galleryTitle: "Galería Basalt DesignKit",
         gallerySubtitle: "Controles táctiles claros y oscuros, rejilla 4pt/8pt y Mascota.",
         galleryLightLabel: "Aspecto Claro",
         galleryDarkLabel: "Aspecto Oscuro",
@@ -573,7 +573,7 @@ private extension OverhaulV2Strings {
     )
 
     static let sk = OverhaulV2Strings(
-        galleryTitle: "Galéria Vorssaint DesignKit",
+        galleryTitle: "Galéria Basalt DesignKit",
         gallerySubtitle: "Svetlé a tmavé dotykové prvky, mriežka 4pt/8pt a Maskot.",
         galleryLightLabel: "Svetlý vzhľad",
         galleryDarkLabel: "Tmavý vzhľad",
@@ -662,7 +662,7 @@ private extension OverhaulV2Strings {
     )
 
     static let de = OverhaulV2Strings(
-        galleryTitle: "Vorssaint DesignKit Galerie",
+        galleryTitle: "Basalt DesignKit Galerie",
         gallerySubtitle: "Taktile Hell-/Dunkel-Steuerelemente, 4pt/8pt-Raster und Maskottchen.",
         galleryLightLabel: "Helles Design",
         galleryDarkLabel: "Dunkles Design",
@@ -751,7 +751,7 @@ private extension OverhaulV2Strings {
     )
 
     static let fr = OverhaulV2Strings(
-        galleryTitle: "Galerie Vorssaint DesignKit",
+        galleryTitle: "Galerie Basalt DesignKit",
         gallerySubtitle: "Contrôles tactiles clairs et sombres, grille 4pt/8pt et Mascotte.",
         galleryLightLabel: "Apparence claire",
         galleryDarkLabel: "Apparence sombre",
@@ -840,7 +840,7 @@ private extension OverhaulV2Strings {
     )
 
     static let it = OverhaulV2Strings(
-        galleryTitle: "Galleria Vorssaint DesignKit",
+        galleryTitle: "Galleria Basalt DesignKit",
         gallerySubtitle: "Controlli tattili chiari e scuri, griglia 4pt/8pt e Mascotte.",
         galleryLightLabel: "Aspetto Chiaro",
         galleryDarkLabel: "Aspetto Scuro",
@@ -929,7 +929,7 @@ private extension OverhaulV2Strings {
     )
 
     static let ja = OverhaulV2Strings(
-        galleryTitle: "Vorssaint DesignKit ギャラリー",
+        galleryTitle: "Basalt DesignKit ギャラリー",
         gallerySubtitle: "ライト/ダーク両対応の触覚コントロール、4pt/8pt リズム、マスコット表示。",
         galleryLightLabel: "ライト外観",
         galleryDarkLabel: "ダーク外観",
@@ -1018,7 +1018,7 @@ private extension OverhaulV2Strings {
     )
 
     static let ko = OverhaulV2Strings(
-        galleryTitle: "Vorssaint DesignKit 갤러리",
+        galleryTitle: "Basalt DesignKit 갤러리",
         gallerySubtitle: "라이트 및 다크 촉각 컨트롤, 4pt/8pt 그리드 및 마스코트 카메오.",
         galleryLightLabel: "라이트 화면",
         galleryDarkLabel: "다크 화면",
@@ -1107,7 +1107,7 @@ private extension OverhaulV2Strings {
     )
 
     static let uk = OverhaulV2Strings(
-        galleryTitle: "Вітрина Vorssaint DesignKit",
+        galleryTitle: "Вітрина Basalt DesignKit",
         gallerySubtitle: "Світлі й темні тактильні контролі, сітка 4pt/8pt і камео маскота.",
         galleryLightLabel: "Світла тема",
         galleryDarkLabel: "Темна тема",
@@ -1196,7 +1196,7 @@ private extension OverhaulV2Strings {
     )
 
     static let zhHans = OverhaulV2Strings(
-        galleryTitle: "Vorssaint DesignKit 展廊",
+        galleryTitle: "Basalt DesignKit 展廊",
         gallerySubtitle: "浅色与深色触感控件、4pt/8pt 网格及吉祥物徽章。",
         galleryLightLabel: "浅色外观",
         galleryDarkLabel: "深色外观",
@@ -1285,7 +1285,7 @@ private extension OverhaulV2Strings {
     )
 
     static let zhTW = OverhaulV2Strings(
-        galleryTitle: "Vorssaint DesignKit 展廳",
+        galleryTitle: "Basalt DesignKit 展廳",
         gallerySubtitle: "淺色與深色觸感控制項、4pt/8pt 格線與吉祥物徽章。",
         galleryLightLabel: "淺色外觀",
         galleryDarkLabel: "深色外觀",
@@ -1374,7 +1374,7 @@ private extension OverhaulV2Strings {
     )
 
     static let zhHK = OverhaulV2Strings(
-        galleryTitle: "Vorssaint DesignKit 展廊",
+        galleryTitle: "Basalt DesignKit 展廊",
         gallerySubtitle: "淺色同深色觸感控制項、4pt/8pt 格線同吉祥物徽章。",
         galleryLightLabel: "淺色外觀",
         galleryDarkLabel: "深色外觀",

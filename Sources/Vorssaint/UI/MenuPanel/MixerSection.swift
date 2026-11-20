@@ -589,8 +589,8 @@ struct MixerOptionsControls: View {
         OverhaulV3Strings.localized(l10n.language)[keyPath: keyPath]
     }
 
-    private var isRussian: Bool {
-        l10n.language == .ru
+    private var actionCopy: OverhaulV3ActionCopy {
+        OverhaulV3ActionCopy.localized(l10n.language)
     }
 
     var body: some View {
@@ -630,7 +630,7 @@ struct MixerOptionsControls: View {
             audioUnitHostControls
 
             VStack(alignment: .leading, spacing: DesignSpace.xs + 2) {
-                Toggle(isRussian ? "Live-монитор DSP микрофона (Запись и тест)" : "Live Mic DSP Monitor (Recorder & Preview)",
+                Toggle(actionCopy.micDSPMonitor,
                        isOn: Binding(get: { inputManager.liveMicDSPEnabled },
                                      set: { inputManager.setLiveMicDSPEnabled($0) }))
                     .toggleStyle(VorssaintPillToggleStyle(tone: .sound))
@@ -681,7 +681,7 @@ struct MixerOptionsControls: View {
                         VorssaintHaptics.generic()
                         mixer.clearAutoEQPreset()
                     } label: {
-                        Label(isRussian ? "Без коррекции (Flat)" : "Off (Flat)",
+                        Label(actionCopy.flatOff,
                               systemImage: mixer.activeAutoEQPresetID == nil ? "checkmark" : "slider.horizontal.3")
                     }
                     Divider()
@@ -714,7 +714,7 @@ struct MixerOptionsControls: View {
                     }
                 } label: {
                     HStack(spacing: DesignSpace.xs) {
-                        Text(mixer.activeAutoEQPreset?.name ?? (isRussian ? "Выкл" : "Off"))
+                        Text(mixer.activeAutoEQPreset?.name ?? actionCopy.offLabel)
                             .font(.system(size: 10.5, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -759,7 +759,7 @@ struct MixerOptionsControls: View {
                             )
                     }
                     .buttonStyle(VorssaintScalePressButtonStyle())
-                    .help(isRussian ? "Удалить импортированный профиль" : "Delete imported AutoEQ profile")
+                    .help(actionCopy.deleteImportedProfile)
                 }
                 Spacer(minLength: 0)
             }
@@ -823,9 +823,7 @@ struct MixerOptionsControls: View {
             autoEQImportError = nil
             VorssaintHaptics.generic()
         } else {
-            autoEQImportError = isRussian
-                ? "Не удалось распознать профиль EqualizerAPO (.txt)"
-                : "Could not parse EqualizerAPO AutoEQ profile (.txt)"
+            autoEQImportError = actionCopy.autoEQParseError
         }
     }
 
@@ -846,7 +844,7 @@ struct MixerOptionsControls: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(VorssaintScalePressButtonStyle())
-                .help(isRussian ? "Обновить список Audio Unit" : "Refresh Audio Units")
+                .help(actionCopy.refreshAudioUnits)
             }
 
             ForEach(0..<MixerAudioUnitHost.slotCount, id: \.self) { slot in
@@ -874,7 +872,7 @@ struct MixerOptionsControls: View {
         let isLoading = auHost.slotLoadingStates.indices.contains(slot) ? auHost.slotLoadingStates[slot] : false
         let effectTitle = slotComponent?.name
             ?? auHost.availableEffects.first(where: { $0.id == selectedID })?.name
-            ?? (isRussian ? "Пусто" : "Empty")
+            ?? actionCopy.emptyLabel
 
         VStack(alignment: .leading, spacing: DesignSpace.xs) {
             HStack(spacing: DesignSpace.sm) {
@@ -890,7 +888,7 @@ struct MixerOptionsControls: View {
                         auHost.clearSlot(slot)
                         mixer.reconcileAudioChainChanges()
                     } label: {
-                        Label(isRussian ? "Нет" : "None",
+                        Label(actionCopy.noneLabel,
                               systemImage: selectedID == nil ? "checkmark" : "nosign")
                     }
                     if !auHost.availableEffects.isEmpty {
@@ -939,7 +937,7 @@ struct MixerOptionsControls: View {
             if slotUnit != nil || selectedID != nil || isLoading {
                 HStack(spacing: DesignSpace.xs + 2) {
                     VorssaintActionChip(
-                        title: isRussian ? (isBypassed ? "Обход" : "Вкл") : (isBypassed ? "Bypassed" : "Active"),
+                        title: isBypassed ? actionCopy.bypassedLabel : actionCopy.activeLabel,
                         symbol: isBypassed ? "pause.circle" : "waveform.path.ecg",
                         tone: .sound,
                         prominent: !isBypassed
@@ -950,7 +948,7 @@ struct MixerOptionsControls: View {
                     .disabled(slotUnit == nil && !isLoading)
 
                     VorssaintActionChip(
-                        title: isRussian ? "Открыть UI" : "Open UI",
+                        title: actionCopy.openUI,
                         symbol: "macwindow",
                         tone: .sound
                     ) {
@@ -959,7 +957,7 @@ struct MixerOptionsControls: View {
                     .disabled(slotUnit == nil || isLoading)
 
                     VorssaintActionChip(
-                        title: isRussian ? "Сброс" : "Clear",
+                        title: l10n.s.actionClear,
                         symbol: "xmark",
                         tone: .sound,
                         destructive: true

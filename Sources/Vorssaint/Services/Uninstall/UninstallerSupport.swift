@@ -790,7 +790,8 @@ enum UninstallerSupport {
     /// Vorssaint's own identifiers, among the protected ones.
     private static func isOwnBundleID(_ id: String) -> Bool {
         let lowered = id.lowercased()
-        return lowered == "com.vorssaint" || lowered.hasPrefix("com.vorssaint.")
+        return lowered == "com.tasonai.basalt" || lowered.hasPrefix("com.tasonai.basalt.")
+            || lowered == "com.vorssaint" || lowered.hasPrefix("com.vorssaint.")
             || lowered.hasPrefix("vorss.")
     }
 

@@ -145,7 +145,8 @@ protocol ScreenshotCloudSecretStore: Sendable {
 }
 
 struct KeychainScreenshotCloudSecretStore: ScreenshotCloudSecretStore {
-    static let service = "com.vorssaint.utils.cloud"
+    static let service = "com.tasonai.basalt.cloud"
+    private static let legacyService = "com.vorssaint.utils.cloud"
 
     func saveSecret(_ value: String, account: String) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }
@@ -162,9 +163,16 @@ struct KeychainScreenshotCloudSecretStore: ScreenshotCloudSecretStore {
     }
 
     func loadSecret(account: String) -> String? {
+        if let value = loadSecret(account: account, service: Self.service) {
+            return value
+        }
+        return loadSecret(account: account, service: Self.legacyService)
+    }
+
+    private func loadSecret(account: String, service: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
@@ -177,9 +185,15 @@ struct KeychainScreenshotCloudSecretStore: ScreenshotCloudSecretStore {
 
     @discardableResult
     func deleteSecret(account: String) -> Bool {
+        let primary = deleteSecret(account: account, service: Self.service)
+        let legacy = deleteSecret(account: account, service: Self.legacyService)
+        return primary && legacy
+    }
+
+    private func deleteSecret(account: String, service: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         let status = SecItemDelete(query as CFDictionary)

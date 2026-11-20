@@ -136,7 +136,7 @@ final class VorssaintAutomationRouter {
 @available(macOS 14.0, *)
 struct CleanSystemCachesIntent: AppIntent {
     static let title: LocalizedStringResource = "Scan System Caches"
-    static let description = IntentDescription("Scans macOS system caches and junk categories with Vorssaint Cleaner.")
+    static let description = IntentDescription("Scans macOS system caches and junk categories with Basalt Cleaner.")
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -148,7 +148,7 @@ struct CleanSystemCachesIntent: AppIntent {
 @available(macOS 14.0, *)
 struct CaptureAreaScreenshotIntent: AppIntent {
     static let title: LocalizedStringResource = "Capture Area Screenshot"
-    static let description = IntentDescription("Starts an interactive area screenshot capture in Vorssaint.")
+    static let description = IntentDescription("Starts an interactive area screenshot capture in Basalt.")
 
     @MainActor
     func perform() async throws -> some IntentResult {

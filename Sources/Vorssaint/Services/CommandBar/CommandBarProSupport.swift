@@ -257,7 +257,8 @@ protocol QuickAISecretStore {
 }
 
 struct KeychainQuickAISecretStore: QuickAISecretStore {
-    private static let service = "com.vorssaint.utils.quickai"
+    private static let service = "com.tasonai.basalt.quickai"
+    private static let legacyService = "com.vorssaint.utils.quickai"
 
     func saveSecret(_ value: String, account: String) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }
@@ -274,9 +275,16 @@ struct KeychainQuickAISecretStore: QuickAISecretStore {
     }
 
     func loadSecret(account: String) -> String? {
+        if let value = loadSecret(account: account, service: Self.service) {
+            return value
+        }
+        return loadSecret(account: account, service: Self.legacyService)
+    }
+
+    private func loadSecret(account: String, service: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
@@ -289,9 +297,15 @@ struct KeychainQuickAISecretStore: QuickAISecretStore {
 
     @discardableResult
     func deleteSecret(account: String) -> Bool {
+        let primary = deleteSecret(account: account, service: Self.service)
+        let legacy = deleteSecret(account: account, service: Self.legacyService)
+        return primary && legacy
+    }
+
+    private func deleteSecret(account: String, service: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         let status = SecItemDelete(query as CFDictionary)
@@ -1510,7 +1524,7 @@ enum ScriptCommandHeaderParser {
             let withoutComment = trimmed
                 .replacingOccurrences(of: #"^(#|//)\s*"#, with: "", options: .regularExpression)
             guard let tagRange = withoutComment.range(
-                of: #"^@(raycast|vorssaint)\.([A-Za-z0-9_]+)\s+(.+)$"#,
+                of: #"^@(raycast|vorssaint|basalt)\.([A-Za-z0-9_]+)\s+(.+)$"#,
                 options: .regularExpression
             ) else { continue }
             let matched = String(withoutComment[tagRange])

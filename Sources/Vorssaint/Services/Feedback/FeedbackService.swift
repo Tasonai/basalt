@@ -77,6 +77,10 @@ final class FeedbackService {
     func submit(kind: FeedbackKind,
                 message: String,
                 diagnostics: FeedbackDiagnostics?) async throws {
+        // Fork builds must not silently send local diagnostics to upstream's feedback backend.
+        if Bundle.main.bundleIdentifier?.hasPrefix("com.tasonai.basalt") == true {
+            throw FeedbackError.unavailable
+        }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.utf16.count >= 10, trimmed.utf16.count <= 2_000 else {
             throw FeedbackError.rejected

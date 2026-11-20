@@ -959,7 +959,7 @@ struct CustomForkAttribution {
         case .fr:
             return CustomForkAttribution(
                 badge: "Fork Custom · Intel Mac",
-                aboutSummary: "Alternative personnalisée et non officielle (vibe-codée) pour Mac Intel (x86_64). L’application officielle Vorssaint ne fonctionne que sur Apple Silicon ; ce fork repose sur l’excellent travail de @vorssaint.",
+                aboutSummary: "Alternative personnalisée et non officielle (vibe-codée) pour Mac Intel (x86_64). L’application officielle Vorssaint ne fonctionne que sur Apple Silicon\u{202F}; ce fork repose sur l’excellent travail de @vorssaint.",
                 donateCreditNote: "Le lien de don soutient directement l’auteur original de Vorssaint (@vorssaint), dont l’excellent travail est à la base de cette version Intel.",
                 originalRepoLabel: "Vorssaint original",
                 customForkRepoLabel: "Fork Intel"
@@ -1694,6 +1694,427 @@ struct NotchPlannerStrings {
                 reminderCreatedToast: "Reminder added",
                 eventCreatedToast: "Event added",
                 saveFailed: "Could not save changes"
+            )
+        }
+    }
+}
+
+/// 15-language localized labels for Wave 3-7 inline actions, mixer DSP/AU controls, and recorder click SFX.
+struct OverhaulV3ActionCopy {
+    let replace: String
+    let ask: String
+    let runScript: String
+    let pngAttached: String
+    let clickSFXOff: String
+    let clickSFXSoft: String
+    let clickSFXMechanical: String
+    let clickSFXCrisp: String
+    let inlineImproveWriting: String
+    let inlineFixGrammar: String
+    let inlineSummarize: String
+    let inlineTranslate: String
+    let inlineExplainCode: String
+    let micDSPMonitor: String
+    let flatOff: String
+    let offLabel: String
+    let noneLabel: String
+    let emptyLabel: String
+    let bypassedLabel: String
+    let activeLabel: String
+    let openUI: String
+    let refreshAudioUnits: String
+    let deleteImportedProfile: String
+    let autoEQParseError: String
+
+    func title(for action: InlineAIRewriteAction) -> String {
+        switch action {
+        case .improveWriting: return inlineImproveWriting
+        case .fixGrammar: return inlineFixGrammar
+        case .summarize: return inlineSummarize
+        case .translate: return inlineTranslate
+        case .explainCode: return inlineExplainCode
+        }
+    }
+
+    static func localized(_ language: AppLanguage) -> OverhaulV3ActionCopy {
+        switch language {
+        case .ru:
+            return OverhaulV3ActionCopy(
+                replace: "Заменить",
+                ask: "Спросить",
+                runScript: "Запустить скрипт",
+                pngAttached: "Прикреплено PNG",
+                clickSFXOff: "Выкл",
+                clickSFXSoft: "Мягкий",
+                clickSFXMechanical: "Механический",
+                clickSFXCrisp: "Чёткий",
+                inlineImproveWriting: "Улучшить текст",
+                inlineFixGrammar: "Исправить ошибки",
+                inlineSummarize: "Кратко",
+                inlineTranslate: "Перевести",
+                inlineExplainCode: "Объяснить код",
+                micDSPMonitor: "Live-монитор DSP микрофона (Запись и тест)",
+                flatOff: "Без коррекции (Flat)",
+                offLabel: "Выкл",
+                noneLabel: "Нет",
+                emptyLabel: "Пусто",
+                bypassedLabel: "Обход",
+                activeLabel: "Вкл",
+                openUI: "Открыть UI",
+                refreshAudioUnits: "Обновить список Audio Unit",
+                deleteImportedProfile: "Удалить импортированный профиль",
+                autoEQParseError: "Не удалось распознать профиль EqualizerAPO (.txt)"
+            )
+        case .uk:
+            return OverhaulV3ActionCopy(
+                replace: "Замінити",
+                ask: "Запитати",
+                runScript: "Запустити скрипт",
+                pngAttached: "Додано PNG",
+                clickSFXOff: "Вимк",
+                clickSFXSoft: "М’який",
+                clickSFXMechanical: "Механічний",
+                clickSFXCrisp: "Чіткий",
+                inlineImproveWriting: "Покращити текст",
+                inlineFixGrammar: "Виправити помилки",
+                inlineSummarize: "Стисло",
+                inlineTranslate: "Перекласти",
+                inlineExplainCode: "Пояснити код",
+                micDSPMonitor: "Live-монітор DSP мікрофона (Запис і тест)",
+                flatOff: "Без корекції (Flat)",
+                offLabel: "Вимк",
+                noneLabel: "Немає",
+                emptyLabel: "Порожньо",
+                bypassedLabel: "Обхід",
+                activeLabel: "Увімк",
+                openUI: "Відкрити UI",
+                refreshAudioUnits: "Оновити список Audio Unit",
+                deleteImportedProfile: "Видалити імпортований профіль",
+                autoEQParseError: "Не вдалося розпізнати профіль EqualizerAPO (.txt)"
+            )
+        case .de:
+            return OverhaulV3ActionCopy(
+                replace: "Ersetzen",
+                ask: "Fragen",
+                runScript: "Skript ausführen",
+                pngAttached: "PNG angehängt",
+                clickSFXOff: "Aus",
+                clickSFXSoft: "Sanft",
+                clickSFXMechanical: "Mechanisch",
+                clickSFXCrisp: "Klar",
+                inlineImproveWriting: "Text verbessern",
+                inlineFixGrammar: "Grammatik prüfen",
+                inlineSummarize: "Zusammenfassen",
+                inlineTranslate: "Übersetzen",
+                inlineExplainCode: "Code erklären",
+                micDSPMonitor: "Live-Mikrofon-DSP-Monitor (Aufnahme & Test)",
+                flatOff: "Aus (Flat)",
+                offLabel: "Aus",
+                noneLabel: "Keine",
+                emptyLabel: "Leer",
+                bypassedLabel: "Bypass",
+                activeLabel: "Aktiv",
+                openUI: "UI öffnen",
+                refreshAudioUnits: "Audio Units aktualisieren",
+                deleteImportedProfile: "Importiertes AutoEQ-Profil löschen",
+                autoEQParseError: "EqualizerAPO-AutoEQ-Profil (.txt) konnte nicht gelesen werden"
+            )
+        case .fr:
+            return OverhaulV3ActionCopy(
+                replace: "Remplacer",
+                ask: "Demander",
+                runScript: "Exécuter le script",
+                pngAttached: "PNG joint",
+                clickSFXOff: "Désactivé",
+                clickSFXSoft: "Doux",
+                clickSFXMechanical: "Mécanique",
+                clickSFXCrisp: "Net",
+                inlineImproveWriting: "Améliorer le style",
+                inlineFixGrammar: "Corriger la grammaire",
+                inlineSummarize: "Résumer",
+                inlineTranslate: "Traduire",
+                inlineExplainCode: "Expliquer le code",
+                micDSPMonitor: "Moniteur DSP micro en direct",
+                flatOff: "Désactivé (Flat)",
+                offLabel: "Désactivé",
+                noneLabel: "Aucun",
+                emptyLabel: "Vide",
+                bypassedLabel: "Contourné",
+                activeLabel: "Actif",
+                openUI: "Ouvrir l’UI",
+                refreshAudioUnits: "Actualiser les Audio Units",
+                deleteImportedProfile: "Supprimer le profil AutoEQ importé",
+                autoEQParseError: "Impossible de lire le profil EqualizerAPO (.txt)"
+            )
+        case .es:
+            return OverhaulV3ActionCopy(
+                replace: "Reemplazar",
+                ask: "Preguntar",
+                runScript: "Ejecutar script",
+                pngAttached: "PNG adjunto",
+                clickSFXOff: "Desactivado",
+                clickSFXSoft: "Suave",
+                clickSFXMechanical: "Mecánico",
+                clickSFXCrisp: "Nítido",
+                inlineImproveWriting: "Mejorar redacción",
+                inlineFixGrammar: "Corregir gramática",
+                inlineSummarize: "Resumir",
+                inlineTranslate: "Traducir",
+                inlineExplainCode: "Explicar código",
+                micDSPMonitor: "Monitor DSP de micrófono en vivo",
+                flatOff: "Desactivado (Flat)",
+                offLabel: "No",
+                noneLabel: "Ninguno",
+                emptyLabel: "Vacío",
+                bypassedLabel: "Omitido",
+                activeLabel: "Activo",
+                openUI: "Abrir UI",
+                refreshAudioUnits: "Actualizar Audio Units",
+                deleteImportedProfile: "Eliminar perfil AutoEQ importado",
+                autoEQParseError: "No se pudo analizar el perfil EqualizerAPO (.txt)"
+            )
+        case .ptBR:
+            return OverhaulV3ActionCopy(
+                replace: "Substituir",
+                ask: "Perguntar",
+                runScript: "Executar script",
+                pngAttached: "PNG anexado",
+                clickSFXOff: "Desativado",
+                clickSFXSoft: "Suave",
+                clickSFXMechanical: "Mecânico",
+                clickSFXCrisp: "Nítido",
+                inlineImproveWriting: "Melhorar texto",
+                inlineFixGrammar: "Corrigir gramática",
+                inlineSummarize: "Resumir",
+                inlineTranslate: "Traduzir",
+                inlineExplainCode: "Explicar código",
+                micDSPMonitor: "Monitor DSP do microfone ao vivo",
+                flatOff: "Desativado (Flat)",
+                offLabel: "Desativado",
+                noneLabel: "Nenhum",
+                emptyLabel: "Vazio",
+                bypassedLabel: "Ignorado",
+                activeLabel: "Ativo",
+                openUI: "Abrir UI",
+                refreshAudioUnits: "Atualizar Audio Units",
+                deleteImportedProfile: "Excluir perfil AutoEQ importado",
+                autoEQParseError: "Não foi possível ler o perfil EqualizerAPO (.txt)"
+            )
+        case .it:
+            return OverhaulV3ActionCopy(
+                replace: "Sostituisci",
+                ask: "Chiedi",
+                runScript: "Esegui script",
+                pngAttached: "PNG allegato",
+                clickSFXOff: "Disattivo",
+                clickSFXSoft: "Morbido",
+                clickSFXMechanical: "Meccanico",
+                clickSFXCrisp: "Nitido",
+                inlineImproveWriting: "Migliora testo",
+                inlineFixGrammar: "Correggi grammatica",
+                inlineSummarize: "Riassumi",
+                inlineTranslate: "Traduci",
+                inlineExplainCode: "Spiega codice",
+                micDSPMonitor: "Monitor DSP microfono dal vivo",
+                flatOff: "Disattivo (Flat)",
+                offLabel: "Disattivo",
+                noneLabel: "Nessuno",
+                emptyLabel: "Vuoto",
+                bypassedLabel: "Bypass",
+                activeLabel: "Attivo",
+                openUI: "Apri UI",
+                refreshAudioUnits: "Aggiorna Audio Unit",
+                deleteImportedProfile: "Elimina profilo AutoEQ importato",
+                autoEQParseError: "Impossibile leggere il profilo EqualizerAPO (.txt)"
+            )
+        case .tr:
+            return OverhaulV3ActionCopy(
+                replace: "Değiştir",
+                ask: "Sor",
+                runScript: "Betiği Çalıştır",
+                pngAttached: "PNG eklendi",
+                clickSFXOff: "Kapalı",
+                clickSFXSoft: "Yumuşak",
+                clickSFXMechanical: "Mekanik",
+                clickSFXCrisp: "Keskin",
+                inlineImproveWriting: "Yazımı İyileştir",
+                inlineFixGrammar: "Dil Bilgisini Düzelt",
+                inlineSummarize: "Özetle",
+                inlineTranslate: "Çevir",
+                inlineExplainCode: "Kodu Açıkla",
+                micDSPMonitor: "Canlı Mikrofon DSP İzleyici",
+                flatOff: "Kapalı (Flat)",
+                offLabel: "Kapalı",
+                noneLabel: "Yok",
+                emptyLabel: "Boş",
+                bypassedLabel: "Atlandı",
+                activeLabel: "Etkin",
+                openUI: "Arayüzü Aç",
+                refreshAudioUnits: "Audio Unit Listesini Yenile",
+                deleteImportedProfile: "İçe aktarılan AutoEQ profilini sil",
+                autoEQParseError: "EqualizerAPO AutoEQ profili (.txt) ayrıştırılamadı"
+            )
+        case .sk:
+            return OverhaulV3ActionCopy(
+                replace: "Nahradiť",
+                ask: "Opýtať sa",
+                runScript: "Spustiť skript",
+                pngAttached: "Priložený PNG",
+                clickSFXOff: "Vypnuté",
+                clickSFXSoft: "Jemný",
+                clickSFXMechanical: "Mechanický",
+                clickSFXCrisp: "Ostrý",
+                inlineImproveWriting: "Zlepšiť text",
+                inlineFixGrammar: "Opraviť gramatiku",
+                inlineSummarize: "Zhrnúť",
+                inlineTranslate: "Preložiť",
+                inlineExplainCode: "Vysvetliť kód",
+                micDSPMonitor: "Živý DSP monitor mikrofónu",
+                flatOff: "Vypnuté (Flat)",
+                offLabel: "Vyp",
+                noneLabel: "Žiadny",
+                emptyLabel: "Prázdne",
+                bypassedLabel: "Obídené",
+                activeLabel: "Aktívne",
+                openUI: "Otvoriť UI",
+                refreshAudioUnits: "Obnoviť zoznam Audio Unit",
+                deleteImportedProfile: "Odstrániť importovaný AutoEQ profil",
+                autoEQParseError: "Nepodarilo sa načítať profil EqualizerAPO (.txt)"
+            )
+        case .ja:
+            return OverhaulV3ActionCopy(
+                replace: "置換",
+                ask: "質問",
+                runScript: "スクリプトを実行",
+                pngAttached: "PNG 添付済み",
+                clickSFXOff: "オフ",
+                clickSFXSoft: "ソフト",
+                clickSFXMechanical: "メカニカル",
+                clickSFXCrisp: "クリスプ",
+                inlineImproveWriting: "文章を改善",
+                inlineFixGrammar: "文法を修正",
+                inlineSummarize: "要約",
+                inlineTranslate: "翻訳",
+                inlineExplainCode: "コードを解説",
+                micDSPMonitor: "マイク DSP ライブモニター",
+                flatOff: "オフ (Flat)",
+                offLabel: "オフ",
+                noneLabel: "なし",
+                emptyLabel: "空",
+                bypassedLabel: "バイパス",
+                activeLabel: "有効",
+                openUI: "UI を開く",
+                refreshAudioUnits: "Audio Unit を更新",
+                deleteImportedProfile: "インポートした AutoEQ プロファイルを削除",
+                autoEQParseError: "EqualizerAPO AutoEQ プロファイル (.txt) を読み込めませんでした"
+            )
+        case .ko:
+            return OverhaulV3ActionCopy(
+                replace: "바꾸기",
+                ask: "질문",
+                runScript: "스크립트 실행",
+                pngAttached: "PNG 첨부됨",
+                clickSFXOff: "끔",
+                clickSFXSoft: "부드럽게",
+                clickSFXMechanical: "기계식",
+                clickSFXCrisp: "선명하게",
+                inlineImproveWriting: "문장 다듬기",
+                inlineFixGrammar: "맞춤법 수정",
+                inlineSummarize: "요약",
+                inlineTranslate: "번역",
+                inlineExplainCode: "코드 설명",
+                micDSPMonitor: "실시간 마이크 DSP 모니터",
+                flatOff: "끔 (Flat)",
+                offLabel: "끔",
+                noneLabel: "없음",
+                emptyLabel: "비어 있음",
+                bypassedLabel: "바이패스",
+                activeLabel: "활성",
+                openUI: "UI 열기",
+                refreshAudioUnits: "Audio Unit 새로고침",
+                deleteImportedProfile: "가져온 AutoEQ 프로필 삭제",
+                autoEQParseError: "EqualizerAPO AutoEQ 프로필(.txt)을 분석할 수 없습니다"
+            )
+        case .zhHans:
+            return OverhaulV3ActionCopy(
+                replace: "替换",
+                ask: "提问",
+                runScript: "运行脚本",
+                pngAttached: "已附加 PNG",
+                clickSFXOff: "关闭",
+                clickSFXSoft: "轻柔",
+                clickSFXMechanical: "机械",
+                clickSFXCrisp: "清脆",
+                inlineImproveWriting: "润色文本",
+                inlineFixGrammar: "修正语法",
+                inlineSummarize: "总结",
+                inlineTranslate: "翻译",
+                inlineExplainCode: "解释代码",
+                micDSPMonitor: "麦克风 DSP 实时监听",
+                flatOff: "关闭 (Flat)",
+                offLabel: "关闭",
+                noneLabel: "无",
+                emptyLabel: "空",
+                bypassedLabel: "旁通",
+                activeLabel: "启用",
+                openUI: "打开界面",
+                refreshAudioUnits: "刷新 Audio Unit 列表",
+                deleteImportedProfile: "删除已导入的 AutoEQ 配置文件",
+                autoEQParseError: "无法解析 EqualizerAPO AutoEQ 配置文件 (.txt)"
+            )
+        case .zhTW, .zhHK:
+            return OverhaulV3ActionCopy(
+                replace: "取代",
+                ask: "提問",
+                runScript: "執行指令碼",
+                pngAttached: "已附加 PNG",
+                clickSFXOff: "關閉",
+                clickSFXSoft: "柔和",
+                clickSFXMechanical: "機械",
+                clickSFXCrisp: "清脆",
+                inlineImproveWriting: "潤飾文字",
+                inlineFixGrammar: "修正語法",
+                inlineSummarize: "摘要",
+                inlineTranslate: "翻譯",
+                inlineExplainCode: "解釋程式碼",
+                micDSPMonitor: "麥克風 DSP 即時監聽",
+                flatOff: "關閉 (Flat)",
+                offLabel: "關閉",
+                noneLabel: "無",
+                emptyLabel: "空",
+                bypassedLabel: "旁通",
+                activeLabel: "啟用",
+                openUI: "開啟介面",
+                refreshAudioUnits: "重新整理 Audio Unit",
+                deleteImportedProfile: "刪除已匯入的 AutoEQ 設定檔",
+                autoEQParseError: "無法解析 EqualizerAPO AutoEQ 設定檔 (.txt)"
+            )
+        case .enUS:
+            return OverhaulV3ActionCopy(
+                replace: "Replace",
+                ask: "Ask",
+                runScript: "Run Script",
+                pngAttached: "PNG attached",
+                clickSFXOff: "Off",
+                clickSFXSoft: "Soft",
+                clickSFXMechanical: "Mechanical",
+                clickSFXCrisp: "Crisp",
+                inlineImproveWriting: "Improve Writing",
+                inlineFixGrammar: "Fix Grammar",
+                inlineSummarize: "Summarize",
+                inlineTranslate: "Translate",
+                inlineExplainCode: "Explain Code",
+                micDSPMonitor: "Live Mic DSP Monitor (Recorder & Preview)",
+                flatOff: "Off (Flat)",
+                offLabel: "Off",
+                noneLabel: "None",
+                emptyLabel: "Empty",
+                bypassedLabel: "Bypassed",
+                activeLabel: "Active",
+                openUI: "Open UI",
+                refreshAudioUnits: "Refresh Audio Units",
+                deleteImportedProfile: "Delete imported AutoEQ profile",
+                autoEQParseError: "Could not parse EqualizerAPO AutoEQ profile (.txt)"
             )
         }
     }

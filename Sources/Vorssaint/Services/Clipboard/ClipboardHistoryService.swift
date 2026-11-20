@@ -2136,6 +2136,7 @@ final class ClipboardHistoryService: ObservableObject {
     private func setupSQLiteStore() {
         guard let dbURL = Self.sqliteStoreURL else { return }
         PrivateFileStore.createDirectory(at: dbURL.deletingLastPathComponent())
+        Self.migrateLegacySQLiteStoreIfNeeded(to: dbURL)
         let store = ClipboardSQLiteStore(databaseURL: dbURL, maxCapacity: maxHistoryItems)
         sqliteStore = store
 
@@ -2152,6 +2153,30 @@ final class ClipboardHistoryService: ObservableObject {
             let count = store.totalCount()
             DispatchQueue.main.async {
                 self?.ftsIndexedCount = count
+            }
+        }
+    }
+
+    private static func migrateLegacySQLiteStoreIfNeeded(to destination: URL) {
+        let sentinelKey = "basaltMigratedLegacyClipboardSQLiteV1"
+        guard !UserDefaults.standard.bool(forKey: sentinelKey) else { return }
+        UserDefaults.standard.set(true, forKey: sentinelKey)
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: destination.path),
+              let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let legacyDB = support
+            .appendingPathComponent("com.vorssaint.utils", isDirectory: true)
+            .appendingPathComponent("ClipboardHistory.sqlite")
+        guard legacyDB.standardizedFileURL != destination.standardizedFileURL,
+              fm.fileExists(atPath: legacyDB.path) else { return }
+        try? fm.copyItem(at: legacyDB, to: destination)
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+        for suffix in ["-wal", "-shm"] {
+            let src = URL(fileURLWithPath: legacyDB.path + suffix)
+            let dst = URL(fileURLWithPath: destination.path + suffix)
+            if fm.fileExists(atPath: src.path), !fm.fileExists(atPath: dst.path) {
+                try? fm.copyItem(at: src, to: dst)
+                try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dst.path)
             }
         }
     }

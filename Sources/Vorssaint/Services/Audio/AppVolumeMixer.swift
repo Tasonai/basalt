@@ -3508,7 +3508,7 @@ private final class TapGainEngine: GainEngine {
         }
 
         let aggregate: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Vorssaint Mixer",
+            kAudioAggregateDeviceNameKey: "Basalt Mixer",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceMainSubDeviceKey: outputDeviceUID,
@@ -3848,7 +3848,7 @@ private final class AirPlayGainEngine: GainEngine {
         let aggregate: [String: Any] = [
             // A fixed name, listed in MicMuteSupport.ownDeviceNames, so no
             // device list ever offers this private aggregate as an output.
-            kAudioAggregateDeviceNameKey: "Vorssaint AirPlay",
+            kAudioAggregateDeviceNameKey: "Basalt AirPlay",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceMainSubDeviceKey: clockDeviceUID,

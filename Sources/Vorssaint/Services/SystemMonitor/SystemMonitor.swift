@@ -316,6 +316,17 @@ final class SystemMonitor: ObservableObject {
     // MARK: - Lifecycle
 
     static var defaultTelemetryStoreURL: URL {
+        if let container = PrivateFileStore.containerURL {
+            return container.appendingPathComponent("telemetry.sqlite")
+        }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+        return base
+            .appendingPathComponent("Basalt", isDirectory: true)
+            .appendingPathComponent("telemetry.sqlite")
+    }
+
+    private static var legacyTelemetryStoreURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
         return base
@@ -323,9 +334,31 @@ final class SystemMonitor: ObservableObject {
             .appendingPathComponent("telemetry.sqlite")
     }
 
+    private static func migrateLegacyTelemetryStoreIfNeeded(to destination: URL) {
+        let fm = FileManager.default
+        guard !fm.fileExists(atPath: destination.path) else { return }
+        let legacy = legacyTelemetryStoreURL
+        guard legacy.standardizedFileURL != destination.standardizedFileURL,
+              fm.fileExists(atPath: legacy.path) else { return }
+        PrivateFileStore.createDirectory(at: destination.deletingLastPathComponent())
+        try? fm.copyItem(at: legacy, to: destination)
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+        for suffix in ["-wal", "-shm"] {
+            let src = URL(fileURLWithPath: legacy.path + suffix)
+            let dst = URL(fileURLWithPath: destination.path + suffix)
+            if fm.fileExists(atPath: src.path), !fm.fileExists(atPath: dst.path) {
+                try? fm.copyItem(at: src, to: dst)
+                try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dst.path)
+            }
+        }
+    }
+
     func attachTelemetryStore(at url: URL = SystemMonitor.defaultTelemetryStoreURL) {
         let dir = url.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        PrivateFileStore.createDirectory(at: dir)
+        if url.standardizedFileURL == Self.defaultTelemetryStoreURL.standardizedFileURL {
+            Self.migrateLegacyTelemetryStoreIfNeeded(to: url)
+        }
         TelemetryHistoryRing.shared.attachSQLiteStore(at: url)
     }
 

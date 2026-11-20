@@ -698,11 +698,11 @@ swiftc "${APP_OPTIMIZATION_FLAGS[@]}" "${RELEASE_LINK_FLAGS[@]}" -incremental -e
     "${BUILD_VARIANT_FLAGS[@]}" -lsqlite3 \
     "${APP_SOURCES[@]}" -o "build/$EXECUTABLE"
 if [[ "${APP_OPTIMIZATION_FLAGS[0]:-}" == "-O" ]]; then
-    strip -x "build/$EXECUTABLE"
+    strip -S -x "build/$EXECUTABLE"
 fi
 
 echo "▸ Compiling protected fan helper…"
-swiftc -O -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${BUILD_VARIANT_FLAGS[@]}" \
+swiftc -O -Xlinker -dead_strip -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${BUILD_VARIANT_FLAGS[@]}" \
     Sources/Vorssaint/Services/FanControl/FanControlSupport.swift \
     Sources/Vorssaint/Services/FanControl/FanControlXPC.swift \
     Sources/Vorssaint/Services/SystemMonitor/SMCClient.swift \
@@ -710,10 +710,11 @@ swiftc -O -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${BUILD_VARIAN
     Sources/Vorssaint/Services/FanControl/FanControlHardware.swift \
     Sources/FanControlHelper/main.swift \
     -o "build/$FAN_HELPER_ID"
+strip -S -x "build/$FAN_HELPER_ID"
 "build/$FAN_HELPER_ID" --selftest
 
 echo "▸ Compiling Now Playing adapter…"
-swiftc -O -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" -emit-library \
+swiftc -O -Xlinker -dead_strip -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" -emit-library \
     -module-name VorssaintNowPlaying \
     Sources/NowPlayingAdapter/NowPlayingAdapter.swift \
     Sources/NowPlayingAdapter/NowPlayingQueue.swift \
@@ -721,6 +722,7 @@ swiftc -O -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" -emit-library \
     Sources/Vorssaint/Services/Notch/NotchPlaybackSource.swift \
     Sources/Vorssaint/Services/Notch/NotchPlaybackCommand.swift \
     -o "build/$NOW_PLAYING_ADAPTER"
+strip -x "build/$NOW_PLAYING_ADAPTER"
 
 echo "▸ Generating app icon…"
 swift Tools/MakeIcon.swift build/AppIcon.iconset
@@ -995,9 +997,9 @@ if (( INSTALL )); then
     # Only an official install replaces the pre-rename official apps. The
     # Developer variant must coexist with them just as it does with Vorssaint.
     if (( ! DEV )); then
-        for legacy in "Vorss:Vorss" "Vorssaint Utils:VorssaintUtils"; do
+        for legacy in "Vorss:Vorss" "Vorssaint Utils:VorssaintUtils" "Vorssaint:Vorssaint"; do
             name="${legacy%%:*}"; proc="${legacy##*:}"
-            if [[ -d "/Applications/$name.app" ]]; then
+            if [[ "$name" != "$APP_NAME" && -d "/Applications/$name.app" ]]; then
                 stop_process "$proc"
                 rm -rf "/Applications/$name.app"
                 echo "  (legacy $name.app removed)"

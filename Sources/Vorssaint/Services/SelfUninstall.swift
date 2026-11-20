@@ -13,7 +13,7 @@ import ServiceManagement
 /// bundle id; and the only thing deleted is the app's own bundle, which is moved
 /// to the Trash (reversible). Nothing leaves the machine.
 enum SelfUninstall {
-    private static var bundleID: String { Bundle.main.bundleIdentifier ?? "com.vorssaint.utils" }
+    private static var bundleID: String { Bundle.main.bundleIdentifier ?? "com.tasonai.basalt" }
 
     /// Resets every TCC permission the app holds, drops the login item and the
     /// optional closed-lid sudoers rule, and leaves the app in place. Calls back
@@ -257,6 +257,7 @@ enum SelfUninstall {
         try? FileManager.default.removeItem(atPath: "\(home)/Library/Saved Application State/\(id).savedState")
         // Clipboard images and any other app-owned data live here.
         try? FileManager.default.removeItem(atPath: "\(home)/Library/Application Support/\(id)")
+        try? FileManager.default.removeItem(atPath: "\(home)/Library/Application Support/Basalt")
         try? FileManager.default.removeItem(atPath: "\(home)/Library/Caches/\(id)")
         // URLSession writes these on our behalf whenever the app talks to the
         // network, so they exist without the app ever choosing the path.

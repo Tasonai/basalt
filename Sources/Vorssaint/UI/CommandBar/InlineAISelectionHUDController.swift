@@ -424,9 +424,10 @@ private struct InlineAISelectionHUDView: View {
             }
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 114), spacing: 6)], spacing: 6) {
+                let copy = OverhaulV3ActionCopy.localized(l10n.language)
                 ForEach(InlineAIRewriteAction.allCases) { action in
                     VorssaintActionChip(
-                        title: action.title,
+                        title: copy.title(for: action),
                         symbol: action.symbolName,
                         tone: .dynamicIsland,
                         prominent: controller.activeAction == action
@@ -497,17 +498,18 @@ private struct InlineAISelectionHUDView: View {
                 )
 
                 if !controller.isStreaming {
+                    let copy = OverhaulV3ActionCopy.localized(l10n.language)
                     HStack(spacing: DesignSpace.sm) {
                         Spacer(minLength: 0)
                         VorssaintActionChip(
-                            title: controller.didCopy ? "Copied" : "Copy",
+                            title: controller.didCopy ? l10n.s.urlCleanerCopied : l10n.s.menuCopy,
                             symbol: controller.didCopy ? "checkmark" : "doc.on.doc",
                             tone: .clipboardFiles
                         ) {
                             controller.copyResult()
                         }
                         VorssaintActionChip(
-                            title: "Replace",
+                            title: copy.replace,
                             symbol: "arrow.uturn.down.circle.fill",
                             tone: .dynamicIsland,
                             prominent: true

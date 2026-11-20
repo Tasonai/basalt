@@ -1689,7 +1689,7 @@ struct CommandBarView: View {
                         HStack(spacing: 5) {
                             Image(systemName: "play.fill")
                                 .font(.system(size: 9.5))
-                            Text("Run Script")
+                            Text(OverhaulV3ActionCopy.localized(l10n.language).runScript)
                                 .font(.system(size: 11, weight: .semibold))
                         }
                         .foregroundStyle(.white)
@@ -2250,7 +2250,7 @@ struct CommandBarView: View {
                             Image(systemName: quickAICopied ? "checkmark" : "doc.on.doc")
                                 .font(.system(size: 9.5, weight: .semibold))
                             if quickAICopied {
-                                Text("Copied")
+                                Text(l10n.s.urlCleanerCopied)
                                     .font(.system(size: 9.5, weight: .semibold))
                             }
                         }
@@ -2362,7 +2362,7 @@ struct CommandBarView: View {
                         .aspectRatio(contentMode: .fill)
                         .frame(width: 28, height: 28)
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    Text("PNG attached")
+                    Text(OverhaulV3ActionCopy.localized(l10n.language).pngAttached)
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -2423,7 +2423,7 @@ struct CommandBarView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "sparkles")
                                 .font(.system(size: 9.5, weight: .semibold))
-                            Text("Ask")
+                            Text(OverhaulV3ActionCopy.localized(l10n.language).ask)
                                 .font(.system(size: 10.5, weight: .semibold))
                         }
                         .foregroundStyle(.white)
