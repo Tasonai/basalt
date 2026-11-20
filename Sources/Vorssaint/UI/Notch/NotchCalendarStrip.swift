@@ -8,7 +8,7 @@ import SwiftUI
 /// two useful wings. Paired with another activity, that activity's mark
 /// takes the title's side and the event keeps its dot and clock.
 struct NotchCalendarStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     /// Where the island draws it: its own strip as of the last update, or
     /// another display's when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil

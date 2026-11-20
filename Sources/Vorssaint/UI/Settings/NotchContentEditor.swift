@@ -10,7 +10,7 @@ struct NotchIslandPreview: View {
     let module: NotchModule
     /// The section is switched off, or the feature behind it is.
     var hidden = false
-    @ObservedObject private var notch = NotchService.shared
+    private var notch: NotchService { .shared }
     @ObservedObject private var l10n = L10n.shared
     @AppStorage(DefaultsKey.notchLiquidGlassEnabled) private var glass = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -147,10 +147,11 @@ struct NotchIslandPreview: View {
 struct NotchPagePreview: View {
     let module: NotchModule
     let size: CGSize
-    @ObservedObject private var notch = NotchService.shared
+    private var notch: NotchService { .shared }
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
+        let _ = notch.preferencesRevision
         switch module {
         case .timer: NotchTimerView(size: size)
         case .camera: camera

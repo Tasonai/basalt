@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Vorssaint
 
 import AppKit
-import Foundation
 import Combine
+import Foundation
+import Observation
 
 /// The production refresh runs against a window double, without showing UI or
 /// starting the island's hardware consumers. Mode changes model AppStorage:
@@ -167,7 +168,11 @@ enum NotchPresentationRefreshContract {
         /// Hidden until hover and set to show activity, as Settings has it.
         var hiddenShowsActivity = false
         var fullscreenCompact: Bool { hiddenInFullscreen && !expanded && !peeking }
-        let objectWillChange = ObservableObjectPublisher()
+        var preferencesRevision: UInt64 = 0
+        var layoutRevision: UInt64 = 0 { didSet { onLayoutInvalidation?() } }
+        var captureControlsRevision: UInt64 = 0
+        var compactActivityRevision: UInt64 = 0
+        var onLayoutInvalidation: (() -> Void)?
         var running = true, suspended = false
         var mode = NotchTimerMode.timer
         var session = NotchTimerSession()
@@ -645,11 +650,11 @@ enum NotchPresentationRefreshContract {
         var contentSize = service.surfaceSize
         service.windowHost?.targetSize = contentSize
         var invalidations = 0
-        let subscription = service.objectWillChange.sink {
+        service.onLayoutInvalidation = {
             invalidations += 1
             contentSize = service.surfaceSize
         }
-        defer { subscription.cancel() }
+        defer { service.onLayoutInvalidation = nil }
         var mismatches = 0
         service.windowHost?.onPresent = { size in
             if contentSize != size { mismatches += 1 }
@@ -1018,5 +1023,91 @@ enum NotchPresentationRefreshContract {
                      && reduced.departingMusic == nil,
                      "Reduce Motion removes the music strip immediately")
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion = false
+
+        testObservableTrackingAndSourceContracts(suite)
+    }
+
+    @Observable
+    final class ObservableRevisionProbe {
+        var trackedCounter = 0
+        var unrelatedCounter = 0
+        var noticeEquatableValue: String? {
+            didSet { noticeSerial &+= 1 }
+        }
+        var noticeSerial: UInt64 = 0
+    }
+
+    private final class TrackingCounter: @unchecked Sendable {
+        var count = 0
+    }
+
+    private static func testObservableTrackingAndSourceContracts(_ suite: TestSuite) {
+        let probe = ObservableRevisionProbe()
+        let invalidations = TrackingCounter()
+        withObservationTracking {
+            _ = probe.trackedCounter
+        } onChange: {
+            invalidations.count += 1
+        }
+        probe.unrelatedCounter += 1
+        suite.expect(invalidations.count == 0,
+                     "@Observable per-property tracking stays quiet when unrelated state changes")
+        probe.trackedCounter += 1
+        suite.expect(invalidations.count == 1,
+                     "@Observable notifies observers when tracked revision state changes")
+
+        let serialInvalidations = TrackingCounter()
+        probe.noticeEquatableValue = "connected"
+        withObservationTracking {
+            _ = probe.noticeSerial
+        } onChange: {
+            serialInvalidations.count += 1
+        }
+        probe.noticeEquatableValue = "connected"
+        suite.expect(serialInvalidations.count == 1 && probe.noticeSerial == 2,
+                     "Reassigning equal notice increments noticePresentationSerial so consecutive notices notify observers")
+
+        let notchService = (try? String(contentsOfFile: "Sources/Vorssaint/Services/Notch/NotchService.swift",
+                                        encoding: .utf8)) ?? ""
+        let notchCodeLines = notchService.components(separatedBy: "\n").filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.hasPrefix("//") && !trimmed.hasPrefix("///")
+        }.joined(separator: "\n")
+
+        suite.expect(notchCodeLines.contains("import Observation")
+                     && notchCodeLines.contains("@Observable\nfinal class NotchService {"),
+                     "NotchService imports Observation and uses @Observable instead of ObservableObject")
+        suite.expect(!notchCodeLines.contains("@Published")
+                     && !notchCodeLines.contains("ObservableObject")
+                     && !notchCodeLines.contains("objectWillChange.send()"),
+                     "NotchService has zero @Published, ObservableObject, or coarse objectWillChange.send() calls")
+
+        let fm = FileManager.default
+        let uiDirectories = ["Sources/Vorssaint/UI/Notch", "Sources/Vorssaint/UI/Settings"]
+        var leakedObservedObject = false
+        for dir in uiDirectories {
+            guard let files = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for file in files where file.hasSuffix(".swift") {
+                let path = "\(dir)/\(file)"
+                guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+                for line in content.components(separatedBy: "\n") {
+                    if line.contains("@ObservedObject") && line.contains("NotchService") {
+                        leakedObservedObject = true
+                    }
+                }
+            }
+        }
+        suite.expect(!leakedObservedObject,
+                     "No UI/Notch or UI/Settings views still wrap NotchService in @ObservedObject")
+
+        let notchView = (try? String(contentsOfFile: "Sources/Vorssaint/UI/Notch/NotchView.swift",
+                                     encoding: .utf8)) ?? ""
+        suite.expect(notchCodeLines.contains("noticePresentationSerial: UInt64")
+                     && notchView.contains(".onChange(of: service.noticePresentationSerial)"),
+                     "NotchService exposes noticePresentationSerial and NotchView observes serial instead of equatable notice")
+        suite.expect(notchCodeLines.contains("var filteredSections: [NotchModule] {\n        _ = preferencesRevision")
+                     && notchCodeLines.contains("func previewSize(for module: NotchModule) -> CGSize {\n        _ = preferencesRevision\n        _ = compactActivityRevision\n        _ = agentsLayoutRevision")
+                     && notchCodeLines.contains("func previewGeometry(for module: NotchModule) -> NotchGeometry {\n        _ = preferencesRevision\n        _ = compactActivityRevision\n        _ = agentsLayoutRevision"),
+                     "NotchService filteredSections and preview helpers read preferencesRevision/compactActivityRevision/agentsLayoutRevision")
     }
 }

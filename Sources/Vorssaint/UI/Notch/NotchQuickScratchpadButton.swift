@@ -5,7 +5,7 @@ import SwiftUI
 
 /// A 1-click header access button for Scratchpad notes directly in Dynamic Island.
 struct NotchQuickScratchpadButton: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var pad = ScratchpadService.shared
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.notchBand) private var band

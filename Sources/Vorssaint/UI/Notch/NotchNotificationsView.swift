@@ -156,7 +156,7 @@ private struct NotchNotificationRow: View {
 struct NotchNotificationPreviewView: View {
     let notice: NotchNotice
     let content: NotchNotificationContent
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var notifications = NotchNotificationService.shared
     @ObservedObject private var l10n = L10n.shared
     @State private var copiedOTP = false

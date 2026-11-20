@@ -240,7 +240,7 @@ struct NotchDownloadsView: View {
 }
 
 struct NotchDownloadStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     /// Where the island draws it: its own strip as of the last update, or
     /// another display's when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil

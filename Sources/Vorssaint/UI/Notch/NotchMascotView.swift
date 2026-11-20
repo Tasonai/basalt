@@ -1322,7 +1322,7 @@ struct NotchMascotTrackView: NSViewRepresentable {
 /// it visits or comes out to react. `track` is nil when the strip has no
 /// room for it.
 struct NotchMascotActivityVisit: ViewModifier {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let track: NotchMascotTrack?
     /// The island's own strip, the only one that names its song.
     var ownStrip = false

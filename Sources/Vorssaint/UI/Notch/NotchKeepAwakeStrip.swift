@@ -8,7 +8,7 @@ import SwiftUI
 /// has left, or infinity for one without an end. Both open Controls, where
 /// the tile is. The wings are as wide as the wider side needs.
 struct NotchKeepAwakeStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     /// Where the island draws it: its own strip as of the last update, or
     /// another display's when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil

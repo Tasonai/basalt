@@ -167,7 +167,7 @@ private struct NotchCapsuleTrackArtwork: View {
 /// the person chose, in its middle. The companion rests in its middle when
 /// nothing else is there, and walks through on its visits.
 struct NotchCapsuleRestingView: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var music = NotchMusicService.shared
     @AppStorage(DefaultsKey.notchLowBatteryTint) private var lowBatteryTint = false
     @AppStorage(DefaultsKey.notchLowBatteryThreshold) private var lowBatteryThreshold = NotchSupport.defaultLowBatteryThreshold
@@ -244,7 +244,7 @@ struct NotchCapsuleRestingView: View {
 /// Playing music: the cover in the round end, concentric with it, the title
 /// in the middle and the bars at the other end.
 struct NotchCapsuleMusicStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     var snapshot: NotchCompactMusicSnapshot? = nil
     /// The surface the strip fills; a departing strip keeps its own.
     var size: CGSize? = nil
@@ -361,7 +361,7 @@ struct NotchCapsuleMusicStrip: View {
 /// A running timer: its mark, or the activity it shares the capsule with,
 /// and its reading.
 struct NotchCapsuleTimerStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let size: CGSize
     /// Another display's capsule, when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil
@@ -489,7 +489,7 @@ private struct NotchCapsuleCompanionMark: View {
 
 /// A working agent: its mark and the reading the person chose.
 struct NotchCapsuleAgentStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let size: CGSize
     /// Another display's capsule, when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil
@@ -560,7 +560,7 @@ struct NotchCapsuleAgentStrip: View {
 
 /// A download: its arrow and name, its progress and the percentage.
 struct NotchCapsuleDownloadStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let size: CGSize
     /// Another display's capsule, when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil
@@ -613,7 +613,7 @@ struct NotchCapsuleDownloadStrip: View {
 /// A watched area: the eye, then what the area reads now, or the area
 /// itself when it holds no text.
 struct NotchCapsuleWatchStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let size: CGSize
     /// Another display's capsule, when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil
@@ -651,7 +651,7 @@ struct NotchCapsuleWatchStrip: View {
 /// The next timed event, or the one under way: its color and title, and
 /// the countdown with the time it starts or ends.
 struct NotchCapsuleCalendarStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let size: CGSize
     /// Another display's capsule, when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil
@@ -743,7 +743,7 @@ struct NotchCapsuleCalendarStrip: View {
 /// left, or infinity for a session without an end. The reading changes once
 /// a minute, so the clock wakes only then.
 struct NotchCapsuleKeepAwakeStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let size: CGSize
     /// Another display's capsule, when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil

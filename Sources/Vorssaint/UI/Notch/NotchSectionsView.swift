@@ -10,7 +10,7 @@ import SwiftUI
 /// resting position shows where it is and that more rows follow. Rows that
 /// have stepped away keep their place for the motion but take no clicks.
 struct NotchSectionsView: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -199,7 +199,7 @@ struct NotchSectionsView: View {
 /// unfolds under the pointer or as soon as something is typed, since the
 /// keyboard already goes to it while the gallery is open.
 struct NotchSectionSearch: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     /// Infinite fills the room its parent gives it, up to the camera.
     var maximumFieldWidth: CGFloat = 150
     @ObservedObject private var l10n = L10n.shared

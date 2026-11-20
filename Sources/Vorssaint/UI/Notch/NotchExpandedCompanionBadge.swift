@@ -7,7 +7,7 @@ import SwiftUI
 /// header without changing its visual rig, reacting to music playback, Keep Awake,
 /// Mic Mute, Recording, active timers, and drag/pointer cues.
 struct NotchExpandedCompanionBadge: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var music = NotchMusicService.shared
     @ObservedObject private var awake = KeepAwakeManager.shared
     @ObservedObject private var mic = MicMuteService.shared

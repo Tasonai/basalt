@@ -62,7 +62,7 @@ final class NotchQuickAccessMotion: ObservableObject {
 }
 
 struct NotchQuickAccessView: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject var motion: NotchQuickAccessMotion
     /// Only the glass surface below follows it; it changes every frame of a resize.
     let backdrop: NotchBackdropPresentation

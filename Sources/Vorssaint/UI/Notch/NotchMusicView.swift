@@ -606,7 +606,7 @@ private enum NotchPlayerApps {
 /// The output the island plays to, at the end of the player's row as on a
 /// phone's island: its glyph opens the list of outputs, and the mixer.
 private struct NotchMusicOutputButton: View {
-    @ObservedObject private var notch = NotchService.shared
+    private var notch: NotchService { .shared }
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var l10n = L10n.shared
 
@@ -901,7 +901,7 @@ struct NotchMusicTimeline: View {
 /// transport at the end of their line, or under the title where a level card
 /// shares the row.
 struct NotchMusicControlsView: View {
-    @ObservedObject var notch: NotchService
+    var notch: NotchService
     var height: CGFloat = NotchLayout.cardHeight
     @ObservedObject private var music = NotchMusicService.shared
     @ObservedObject private var l10n = L10n.shared

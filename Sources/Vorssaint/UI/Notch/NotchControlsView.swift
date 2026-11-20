@@ -5,13 +5,14 @@ import AppKit
 import SwiftUI
 
 struct NotchControlsView: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let size: CGSize
     @ObservedObject private var l10n = L10n.shared
     @AppStorage(DefaultsKey.brightnessControlEnabled) private var brightnessEnabled = false
     @Environment(\.notchBand) private var band
 
     var body: some View {
+        let _ = service.preferencesRevision
         let items = NotchSupport.controls()
         let levels = items.filter(\.isLevel)
         // The levels go to the island's top row with no readout: the slider
@@ -166,7 +167,7 @@ extension NotchControlItem {
 }
 
 struct NotchAudioControls: View {
-    @ObservedObject var notch: NotchService = .shared
+    var notch: NotchService = .shared
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -714,7 +715,7 @@ private struct NotchRecorderButton: View {
 }
 
 private struct NotchSystemPulseBentoCard: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     let height: CGFloat
     @ObservedObject private var monitor = SystemMonitor.shared
     @ObservedObject private var l10n = L10n.shared

@@ -105,6 +105,8 @@ enum NotchHoverTests {
         var departureWork: DispatchWorkItem?
         var trackWork: DispatchWorkItem?
         var awaitsTrackNotice = false
+        var preferencesRevision: UInt64 = 0
+        var compactActivityRevision: UInt64 = 0
         var presentedMusic: NotchCompactMusicSnapshot?
         var heldMusic: NotchCompactMusicSnapshot?
         var musicStripPointer: NotchMusicStripPart?

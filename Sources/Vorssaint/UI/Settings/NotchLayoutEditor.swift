@@ -10,7 +10,7 @@ struct NotchLayoutEditor: View {
     @Binding var height: Double
     var editContents: () -> Void
     @ObservedObject private var l10n = L10n.shared
-    @ObservedObject private var notch = NotchService.shared
+    private var notch: NotchService { .shared }
     /// Redraws when a feature behind a button is installed or removed, which
     /// dims the button or brings it back.
     @ObservedObject private var features = FeatureRuntime.shared
@@ -27,6 +27,7 @@ struct NotchLayoutEditor: View {
     private var editor: NotchEditorStrings { FeatureStrings.notchEditor(l10n.language) }
 
     var body: some View {
+        let _ = notch.preferencesRevision
         let layout = configuration
         VStack(spacing: 12) {
             GeometryReader { proxy in

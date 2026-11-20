@@ -6,7 +6,7 @@ import SwiftUI
 /// What the island shows closed, drawn for another display. It takes no
 /// clicks itself: a click on its window brings the island there, open.
 struct NotchMirrorView: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject var mirror: NotchMirrorModel
 
     var body: some View {

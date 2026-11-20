@@ -7,7 +7,7 @@ import SwiftUI
 /// camera, one reading the person chose on the other. The wings are as wide
 /// as the reading, and both sit at the ends, where the island shows.
 struct NotchAgentStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     /// Where the island draws it: its own strip as of the last update, or
     /// another display's when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil

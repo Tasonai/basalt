@@ -19,7 +19,7 @@ struct NotchView: View {
         let tint: NotchArtworkTint?
     }
 
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var l10n = L10n.shared
     @State private var music = MusicPresence(
         playback: NotchMusicService.shared.playback != nil ? true : nil,
@@ -67,6 +67,28 @@ struct NotchView: View {
     }
 
     var body: some View {
+        observedSurface
+            .onChange(of: service.dragPlaceholder) { wasActive, isActive in
+                guard isActive, !wasActive, hapticFeedback else { return }
+                VorssaintHaptics.alignment()
+            }
+            .onChange(of: service.selected) { oldPage, newPage in
+                guard service.expanded, oldPage != newPage, hapticFeedback else { return }
+                VorssaintHaptics.generic()
+            }
+            .onChange(of: service.showingSections) { wasShowing, isShowing in
+                guard service.expanded, wasShowing != isShowing, hapticFeedback else { return }
+                VorssaintHaptics.generic()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .environment(\.colorScheme, .dark)
+            .environment(\.notchPresentation, true)
+            .environment(\.notchGlassSurface, usesGlassSurface)
+            .tint(.white)
+            .accessibilityIdentifier("notch.surface")
+    }
+
+    private var sizedSurface: some View {
         surface
             // An activity arriving over the resting companion fades in as the
             // companion fades out, and one ending fades back into it, instead
@@ -109,14 +131,18 @@ struct NotchView: View {
             // draws nothing, so it does not hold a click in this window at the
             // window server; the fill above does.
             .onTapGesture { }
+    }
+
+    private var observedSurface: some View {
+        sizedSurface
             .onChange(of: reduceTransparency) {
                 DispatchQueue.main.async { service.refreshPresentation(animated: false) }
             }
             .onChange(of: contrast) {
                 DispatchQueue.main.async { service.refreshPresentation(animated: false) }
             }
-            .onReceive(service.$notice) { incoming in
-                handleNoticeFluidPulse(incoming)
+            .onChange(of: service.noticePresentationSerial) { _, _ in
+                handleNoticeFluidPulse(service.notice)
             }
             .onChange(of: service.expanded) { _, isExpanded in
                 service.syncIslandAmbientTint()
@@ -181,24 +207,6 @@ struct NotchView: View {
                 guard !Task.isCancelled else { return }
                 ambientGlowColor = resolved
             }
-            .onChange(of: service.dragPlaceholder) { wasActive, isActive in
-                guard isActive, !wasActive, hapticFeedback else { return }
-                VorssaintHaptics.alignment()
-            }
-            .onChange(of: service.selected) { oldPage, newPage in
-                guard service.expanded, oldPage != newPage, hapticFeedback else { return }
-                VorssaintHaptics.generic()
-            }
-            .onChange(of: service.showingSections) { wasShowing, isShowing in
-                guard service.expanded, wasShowing != isShowing, hapticFeedback else { return }
-                VorssaintHaptics.generic()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .environment(\.colorScheme, .dark)
-            .environment(\.notchPresentation, true)
-            .environment(\.notchGlassSurface, usesGlassSurface)
-            .tint(.white)
-            .accessibilityIdentifier("notch.surface")
     }
 
     private var usesGlassSurface: Bool {
@@ -982,7 +990,7 @@ enum NotchRestingBattery {
 /// The companion rests in a wing when nothing else is there, and walks
 /// through on its visits.
 struct NotchRestingStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     /// Another display's strip, when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil
     @AppStorage(DefaultsKey.notchLowBatteryTint) private var lowBatteryTint = false

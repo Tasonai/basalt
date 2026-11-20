@@ -96,6 +96,9 @@ enum NotchMusicVisibilityTests {
         var hasAgentActivity = false
         var hasKeepAwakeActivity = false
         var awaitsTrackNotice = false
+        var preferencesRevision: UInt64 = 0
+        var compactActivityRevision: UInt64 = 0
+        var layoutRevision: UInt64 = 0
         var timerStripWing: CGFloat = 44
         func timerStripWing(for companion: NotchCompactActivity?, in geometry: NotchGeometry) -> CGFloat { timerStripWing }
         var agentStripWing: CGFloat = 58

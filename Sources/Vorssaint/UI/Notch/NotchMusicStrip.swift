@@ -19,7 +19,7 @@ struct NotchCompactMusicSnapshot {
 /// Resting on the cover names the song beside it, and resting on the bars
 /// turns them into the song's play or pause button.
 struct NotchMusicStrip: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     var snapshot: NotchCompactMusicSnapshot? = nil
     /// Where the island draws it: its own strip as of the last update, or
     /// another display's when the island shows on every display.

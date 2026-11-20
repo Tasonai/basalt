@@ -8,7 +8,7 @@ import SwiftUI
 /// Displays live animated equalizer bars and current audio source (music or playing application)
 /// with 1-click controls.
 struct NotchExpandedAudioBadge: View {
-    @ObservedObject private var notch = NotchService.shared
+    private var notch: NotchService { .shared }
     @ObservedObject private var music = NotchMusicService.shared
     @ObservedObject private var mixer = AppVolumeMixer.shared
     @ObservedObject private var l10n = L10n.shared

@@ -12,7 +12,7 @@ import SwiftUI
 /// their own cross, Command-T and Command-W work, a new or chosen pad puts
 /// the caret in its text, and a cleared pad comes back with one undo.
 struct NotchScratchpadView: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var pad = ScratchpadService.shared
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.notchBand) private var band

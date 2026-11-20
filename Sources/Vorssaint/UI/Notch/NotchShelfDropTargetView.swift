@@ -5,7 +5,7 @@ import SwiftUI
 
 /// A spring-loaded quick-stash drop target in Dynamic Island for files dragged to the screen top.
 struct NotchShelfDropTargetView: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var shelf = ShelfService.shared
     @ObservedObject private var l10n = L10n.shared
     @AppStorage(DefaultsKey.notchHapticFeedback) private var hapticFeedback = true

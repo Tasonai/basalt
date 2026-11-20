@@ -386,7 +386,7 @@ struct NotchWatchStrip: View {
     /// Softer than the reading, so the mark does not outshine it.
     static let eyeTint = NSColor.systemPurple.withAlphaComponent(0.75)
 
-    @ObservedObject var service: NotchService
+    var service: NotchService
     /// Where the island draws it: its own strip as of the last update, or
     /// another display's when the island shows on every display.
     var displayGeometry: NotchGeometry? = nil

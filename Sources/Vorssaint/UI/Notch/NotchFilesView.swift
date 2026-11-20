@@ -6,7 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct NotchFilesView: View {
-    @ObservedObject var service: NotchService
+    var service: NotchService
     @ObservedObject private var shelf = ShelfService.shared
     @ObservedObject private var l10n = L10n.shared
     @State private var shareAnchor = ShelfSharePickerAnchor.Anchor()

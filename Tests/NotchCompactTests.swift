@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Vorssaint
 
 import AppKit
+import Observation
 import SwiftUI
 
 /// Production rail, editor, and focus bodies with inert services. Windows stay
@@ -29,10 +30,11 @@ enum NotchCompactTests {
                 .onAppear { CameraPreviewService.shared.previewMenu = showsCameraMenu }
         }
     }
-    final class NotchService: ObservableObject {
+    @Observable
+    final class NotchService {
         var presentationWindow: NSWindow?
-        @Published var scratchpadCloseSerial = 0
-        @Published var scratchpadFindSerial = 0
+        var scratchpadCloseSerial = 0
+        var scratchpadFindSerial = 0
         var scratchpadFindAction = NSTextFinder.Action.showFindInterface
         var contentSize = CGSize(width: 304, height: 122)
         var selected = NotchModule.controls

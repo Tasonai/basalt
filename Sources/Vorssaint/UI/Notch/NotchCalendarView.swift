@@ -10,7 +10,7 @@ struct NotchCalendarView: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var calendar = NotchCalendarService.shared
     @ObservedObject private var reminders = NotchRemindersService.shared
-    @ObservedObject private var notch = NotchService.shared
+    private var notch: NotchService { .shared }
     @ObservedObject private var permissions = Permissions.shared
     @AppStorage(DefaultsKey.notchCalendarCountdown) private var countdownForEvery = false
     @AppStorage(DefaultsKey.notchPlannerSplitRatio) private var splitRatioRaw = NotchPlannerSplitRatio.balanced.rawValue
