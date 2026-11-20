@@ -108,36 +108,38 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
         closeSQLiteStore()
     }
 
-    func record(_ sample: TelemetryPoint) {
+    func record(_ sample: TelemetryPoint, persistHistory: Bool = true) {
         let clean = sanitize(sample)
 
         os_unfair_lock_lock(&lock)
         append(clean, to: &minuteRing, capacity: Self.minuteCapacity)
-        enqueuePendingInsertLocked(horizon: .oneMinute, point: clean)
+        if persistHistory {
+            enqueuePendingInsertLocked(horizon: .oneMinute, point: clean)
 
-        let hourBucket = floor(clean.timestamp / 10.0) * 10.0
-        if hourBucket > lastHourBucket || hourRing.isEmpty {
-            lastHourBucket = hourBucket
-            append(clean, to: &hourRing, capacity: Self.hourCapacity)
-            enqueuePendingInsertLocked(horizon: .oneHour, point: clean)
-        }
+            let hourBucket = floor(clean.timestamp / 10.0) * 10.0
+            if hourBucket > lastHourBucket || hourRing.isEmpty {
+                lastHourBucket = hourBucket
+                append(clean, to: &hourRing, capacity: Self.hourCapacity)
+                enqueuePendingInsertLocked(horizon: .oneHour, point: clean)
+            }
 
-        let dayBucket = floor(clean.timestamp / 60.0) * 60.0
-        if dayBucket > lastDayBucket || dayRing.isEmpty {
-            lastDayBucket = dayBucket
-            append(clean, to: &dayRing, capacity: Self.dayCapacity)
-            enqueuePendingInsertLocked(horizon: .twentyFourHours, point: clean)
-        }
+            let dayBucket = floor(clean.timestamp / 60.0) * 60.0
+            if dayBucket > lastDayBucket || dayRing.isEmpty {
+                lastDayBucket = dayBucket
+                append(clean, to: &dayRing, capacity: Self.dayCapacity)
+                enqueuePendingInsertLocked(horizon: .twentyFourHours, point: clean)
+            }
 
-        let sevenDayBucket = floor(clean.timestamp / 300.0) * 300.0
-        if sevenDayBucket > lastSevenDayBucket || sevenDayRing.isEmpty {
-            lastSevenDayBucket = sevenDayBucket
-            append(clean, to: &sevenDayRing, capacity: Self.sevenDayCapacity)
-            enqueuePendingInsertLocked(horizon: .sevenDays, point: clean)
+            let sevenDayBucket = floor(clean.timestamp / 300.0) * 300.0
+            if sevenDayBucket > lastSevenDayBucket || sevenDayRing.isEmpty {
+                lastSevenDayBucket = sevenDayBucket
+                append(clean, to: &sevenDayRing, capacity: Self.sevenDayCapacity)
+                enqueuePendingInsertLocked(horizon: .sevenDays, point: clean)
+            }
         }
 
         var batchToFlush: [(horizon: TelemetryHorizon, point: TelemetryPoint)] = []
-        if sqliteAttached {
+        if persistHistory && sqliteAttached {
             recordsSinceFlush += 1
             if recordsSinceFlush >= Self.autoFlushThreshold || pendingInserts.count >= Self.autoFlushThreshold {
                 batchToFlush = pendingInserts
@@ -165,7 +167,8 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
         netRxBytesPerSec: Double,
         netTxBytesPerSec: Double,
         watts: Double = 0,
-        timestamp: TimeInterval = Date().timeIntervalSince1970
+        timestamp: TimeInterval = Date().timeIntervalSince1970,
+        persistHistory: Bool = true
     ) {
         let rx = netRxBytesPerSec.isFinite ? max(0, netRxBytesPerSec) : 0
         let tx = netTxBytesPerSec.isFinite ? max(0, netTxBytesPerSec) : 0
@@ -178,7 +181,7 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
             netRxBytesPerSec: rx,
             netTxBytesPerSec: tx,
             watts: watts
-        ))
+        ), persistHistory: persistHistory)
     }
 
     func points(for horizon: TelemetryHorizon) -> [TelemetryPoint] {
@@ -585,5 +588,149 @@ enum MenuBarTwoRowFormatter {
         if b >= 1_000_000 { return String(format: "%.1fM", locale: posix, b / 1_000_000) }
         if b >= 1_000 { return String(format: "%.0fK", locale: posix, b / 1_000) }
         return String(format: "%.0fB", locale: posix, b)
+    }
+}
+
+/// Pure policy deciding how `SystemMonitor` resolves Intel SMC fallback watts
+/// and which ticks should record into `TelemetryHistoryRing`'s 1m sparkline vs.
+/// persistent 1h/24h/7d SQLite history.
+enum SystemMonitorTelemetryPolicy {
+    struct WattsReading: Equatable {
+        var systemWatts: Double?
+        var cpuWatts: Double?
+        var gpuWatts: Double?
+
+        var hasAny: Bool {
+            systemWatts != nil || cpuWatts != nil || gpuWatts != nil
+        }
+    }
+
+    struct TelemetrySampleInput {
+        var planNeedsCPU: Bool = false
+        var planNeedsGPU: Bool = false
+        var planNeedsMemory: Bool = false
+        var planNeedsNetwork: Bool = false
+        var planNeedsPower: Bool = false
+
+        var sampledCPU: Bool = false
+        var sampledGPU: Bool = false
+        var sampledMemory: Bool = false
+        var sampledNetwork: Bool = false
+        var sampledPower: Bool = false
+
+        /// Active-plan scalar readings (nil when not in plan or not yet sampled).
+        var cpuFraction: Double? = nil
+        var gpuFraction: Double? = nil
+        var memoryPercent: Double? = nil
+        var netRxBytesPerSec: Double = 0
+        var netTxBytesPerSec: Double = 0
+        var watts: Double? = nil
+        var timestamp: TimeInterval = Date().timeIntervalSince1970
+    }
+
+    struct TelemetryDecision: Equatable {
+        let point: TelemetryPoint
+        /// `true` when both core system dimensions (CPU and Memory) are active
+        /// and measured, making the row safe to persist into shared 1h/24h/7d
+        /// multi-metric SQLite history. `false` updates only the 1m in-memory
+        /// sparkline ring (e.g., Network-only or CPU-only menu bar pins).
+        let persistHistory: Bool
+    }
+
+    /// Resolves an `AppleSiliconPowerSnapshot` by combining IOReport (Apple
+    /// Silicon) with Intel SMC power rails, preserving the last valid reading
+    /// across transient empty SMC reads.
+    static func resolvePowerSnapshot(
+        ioReport: AppleSiliconPowerSnapshot,
+        freshSMC: WattsReading?,
+        cachedSMC: WattsReading?
+    ) -> (snapshot: AppleSiliconPowerSnapshot, updatedCache: WattsReading?) {
+        if ioReport.isHardwareBacked {
+            return (ioReport, cachedSMC)
+        }
+        let chosen: WattsReading?
+        let nextCache: WattsReading?
+        if let fresh = freshSMC, fresh.hasAny {
+            chosen = fresh
+            nextCache = fresh
+        } else if let cached = cachedSMC, cached.hasAny {
+            chosen = cached
+            nextCache = cached
+        } else {
+            chosen = nil
+            nextCache = cachedSMC
+        }
+        guard let smc = chosen else {
+            return (ioReport, nextCache)
+        }
+        let cpuW = max(0, smc.cpuWatts ?? 0)
+        let gpuW = max(0, smc.gpuWatts ?? 0)
+        let pkgW = max(0, smc.systemWatts ?? (cpuW + gpuW))
+        let snapshot = AppleSiliconPowerSnapshot(
+            cpuWatts: cpuW,
+            gpuWatts: gpuW,
+            aneWatts: 0,
+            packageWatts: pkgW,
+            aneActivityPercent: 0,
+            isHardwareBacked: true
+        )
+        return (snapshot, nextCache)
+    }
+
+    /// Returns `nil` when no sparkline/history metric was sampled (e.g.,
+    /// peripheral battery, temperature, disk, fan, USB, or battery-only ticks).
+    /// Returns `persistHistory: true` only when both CPU and Memory are active
+    /// and real (never writing 0% RAM or 0% CPU dips to 1h/24h/7d SQLite).
+    static func decideTelemetrySample(_ input: TelemetrySampleInput) -> TelemetryDecision? {
+        let sampledSparklineMetric = input.sampledCPU
+            || input.sampledGPU
+            || input.sampledMemory
+            || input.sampledNetwork
+
+        let allowPowerOnlyTick = input.sampledPower
+            && input.planNeedsCPU
+            && input.planNeedsMemory
+            && input.cpuFraction != nil
+            && input.memoryPercent != nil
+
+        guard sampledSparklineMetric || allowPowerOnlyTick else { return nil }
+
+        let hasLiveValue = (input.sampledCPU && input.cpuFraction != nil)
+            || (input.sampledGPU && input.gpuFraction != nil)
+            || (input.sampledMemory && input.memoryPercent != nil)
+            || input.sampledNetwork
+            || allowPowerOnlyTick
+
+        guard hasLiveValue else { return nil }
+
+        let cpuPct = input.planNeedsCPU
+            ? min(100.0, max(0.0, (input.cpuFraction ?? 0) * 100.0))
+            : 0
+        let gpuPct = input.planNeedsGPU
+            ? min(100.0, max(0.0, (input.gpuFraction ?? 0) * 100.0))
+            : 0
+        let memPct = input.planNeedsMemory
+            ? min(100.0, max(0.0, input.memoryPercent ?? 0))
+            : 0
+        let rx = input.planNeedsNetwork && input.netRxBytesPerSec.isFinite ? max(0, input.netRxBytesPerSec) : 0
+        let tx = input.planNeedsNetwork && input.netTxBytesPerSec.isFinite ? max(0, input.netTxBytesPerSec) : 0
+        let watts = (input.watts?.isFinite == true) ? max(0, input.watts ?? 0) : 0
+
+        let persistHistory = input.planNeedsCPU
+            && input.planNeedsMemory
+            && input.cpuFraction != nil
+            && input.memoryPercent != nil
+
+        let point = TelemetryPoint(
+            timestamp: input.timestamp,
+            cpu: cpuPct,
+            gpu: gpuPct,
+            memory: memPct,
+            networkBytesPerSec: rx + tx,
+            netRxBytesPerSec: rx,
+            netTxBytesPerSec: tx,
+            watts: watts
+        )
+        return TelemetryDecision(point: point, persistHistory: persistHistory)
     }
 }

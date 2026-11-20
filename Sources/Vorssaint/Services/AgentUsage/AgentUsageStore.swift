@@ -15,6 +15,8 @@ final class AgentUsageStore {
         private var second: UInt32 = AgentStringInterner.emptyID
         private var overflow: [UInt32]? = nil
 
+        init() {}
+
         init(single id: UInt32) {
             self.first = id
         }
@@ -85,6 +87,42 @@ final class AgentUsageStore {
             }
         }
 
+        var count: Int {
+            if first == AgentStringInterner.emptyID { return 0 }
+            if second == AgentStringInterner.emptyID { return 1 }
+            return 2 + (overflow?.count ?? 0)
+        }
+
+        func forEachResolvedPath(_ body: (String) -> Void) {
+            let interner = AgentStringInterner.shared
+            if first != AgentStringInterner.emptyID { body(interner.resolve(first)) }
+            if second != AgentStringInterner.emptyID { body(interner.resolve(second)) }
+            if let overflow {
+                for id in overflow { body(interner.resolve(id)) }
+            }
+        }
+
+        func matchesResolvedPaths(_ paths: [String]) -> Bool {
+            guard paths.count == count else { return false }
+            let interner = AgentStringInterner.shared
+            var i = 0
+            if first != AgentStringInterner.emptyID {
+                guard paths[i] == interner.resolve(first) else { return false }
+                i += 1
+            }
+            if second != AgentStringInterner.emptyID {
+                guard paths[i] == interner.resolve(second) else { return false }
+                i += 1
+            }
+            if let overflow {
+                for id in overflow {
+                    guard paths[i] == interner.resolve(id) else { return false }
+                    i += 1
+                }
+            }
+            return true
+        }
+
         func resolvedPaths() -> [String] {
             let interner = AgentStringInterner.shared
             var result: [String] = []
@@ -106,7 +144,7 @@ final class AgentUsageStore {
     private let summary = AgentUsageSummaryCache()
     private(set) var limits: [AgentProvider: AgentLimits] = [:]
     private(set) var codexPlan: String?
-    private var codexPlanObserved = Date.distantPast
+    private(set) var codexPlanObserved = Date.distantPast
     /// Open turns by log file.
     private(set) var turns: [String: AgentLiveSession] = [:]
     /// Turns gone quiet, by log file: not shown as working, but work that
@@ -351,16 +389,27 @@ final class AgentUsageStore {
     /// Prices every response again, after a newer list arrives. List-derived
     /// rows recalculate against the new prices, while reported provider charges stay intact.
     func reprice() {
+        _ = repriceReturningChanged()
+    }
+
+    @discardableResult
+    func repriceReturningChanged() -> Bool {
         summary.invalidate()
+        var changed = false
         for position in records.indices {
             guard !records[position].reportedCost else { continue }
             let priced = AgentPricing.cost(billables[position], model: records[position].model)
             // A zero OpenCode recorded for a model the list still does not
             // know stays that reply's cost.
             let recordedZero = records[position].provider == .opencode && records[position].cost == 0
-            records[position].cost = priced.cost ?? (recordedZero ? 0 : nil)
-            records[position].savings = priced.savings
+            let nextCost = priced.cost ?? (recordedZero ? 0 : nil)
+            if records[position].cost != nextCost || records[position].savings != priced.savings {
+                changed = true
+                records[position].cost = nextCost
+                records[position].savings = priced.savings
+            }
         }
+        return changed
     }
 
     func setLimits(_ reading: AgentLimits) {
@@ -485,29 +534,127 @@ final class AgentUsageStore {
             Saved.Record(key: keys[$0], record: records[$0], billable: billables[$0], sources: sources[$0].resolvedPaths())
         }
         return Saved(records: kept,
-                     limits: limits.values.sorted { $0.provider.rawValue < $1.provider.rawValue },
+                     limits: archivableLimits,
                      codexPlan: codexPlan, codexPlanObserved: codexPlanObserved,
-                     turns: turns.values.filter { $0.provider != .opencode }.sorted { $0.id < $1.id },
-                     waiting: waiting.values.filter { $0.provider != .opencode }.sorted { $0.id < $1.id })
+                     turns: archivableTurns,
+                     waiting: archivableWaiting)
+    }
+
+    var archivableRecordCount: Int {
+        var count = 0
+        for record in records where record.provider != .opencode { count += 1 }
+        return count
+    }
+
+    var archivableLimits: [AgentLimits] {
+        limits.values.sorted { $0.provider.rawValue < $1.provider.rawValue }
+    }
+
+    var archivableTurns: [AgentLiveSession] {
+        turns.values.filter { $0.provider != .opencode }.sorted { $0.id < $1.id }
+    }
+
+    var archivableWaiting: [AgentLiveSession] {
+        waiting.values.filter { $0.provider != .opencode }.sorted { $0.id < $1.id }
+    }
+
+    /// Streams non-OpenCode records directly from storage without materializing
+    /// an intermediate `[Saved.Record]` array (which crosses libmalloc's large
+    /// zone threshold once history grows past ~40k records) or per-record `[String]`s.
+    func forEachArchivableRecord(_ body: (String, AgentUsageRecord, AgentBillable, SourceList) -> Void) {
+        let count = records.count
+        guard count > 0 else { return }
+        var keys = [String](repeating: "", count: count)
+        for (key, position) in index where position >= 0 && position < count {
+            keys[position] = key
+        }
+        for position in 0..<count where records[position].provider != .opencode {
+            body(keys[position], records[position], billables[position], sources[position])
+        }
+    }
+
+    func reserveArchiveCapacity(_ count: Int) {
+        records.reserveCapacity(count)
+        billables.reserveCapacity(count)
+        sources.reserveCapacity(count)
+        index.reserveCapacity(count)
+    }
+
+    @discardableResult
+    func appendArchivedRecord(key: String, record: AgentUsageRecord, billable: AgentBillable, sourceIDs: SourceList) -> Bool {
+        let position = records.count
+        let wasDuplicateKey = index.updateValue(position, forKey: key) != nil
+        records.append(record)
+        billables.append(billable)
+        sources.append(sourceIDs)
+        return wasDuplicateKey
+    }
+
+    func restoreArchivedMetadata(limits: [AgentLimits], codexPlan: String?, codexPlanObserved: Date,
+                                 turns: [AgentLiveSession], waiting: [AgentLiveSession]) {
+        self.limits = Dictionary(limits.map { ($0.provider, $0) }, uniquingKeysWith: { $1 })
+        self.codexPlan = codexPlan
+        self.codexPlanObserved = codexPlanObserved
+        self.turns = Dictionary(turns.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        self.waiting = Dictionary(waiting.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+    }
+
+    /// Compares this store's archivable state to `saved` without allocating a
+    /// temporary `[Saved.Record]` copy.
+    func matchesSaved(_ saved: Saved) -> Bool {
+        guard codexPlan == saved.codexPlan,
+              codexPlanObserved == saved.codexPlanObserved,
+              archivableRecordCount == saved.records.count,
+              archivableLimits == saved.limits,
+              archivableTurns == saved.turns,
+              archivableWaiting == saved.waiting else { return false }
+        let useDirectKeyLookup = index.count == records.count
+        var fallbackKeys: [String]? = nil
+        if !useDirectKeyLookup {
+            var keys = [String](repeating: "", count: records.count)
+            for (key, position) in index where position >= 0 && position < records.count {
+                keys[position] = key
+            }
+            fallbackKeys = keys
+        }
+        var savedIndex = 0
+        for position in records.indices where records[position].provider != .opencode {
+            let expected = saved.records[savedIndex]
+            savedIndex += 1
+            if useDirectKeyLookup {
+                guard index[expected.key] == position else { return false }
+            } else {
+                guard fallbackKeys?[position] == expected.key else { return false }
+            }
+            guard records[position] == expected.record,
+                  billables[position] == expected.billable,
+                  sources[position].matchesResolvedPaths(expected.sources) else { return false }
+        }
+        return savedIndex == saved.records.count
     }
 
     convenience init(saved: Saved) {
         self.init()
-        records = saved.records.map(\.record)
-        billables = saved.records.map(\.billable)
-        sources = saved.records.map { SourceList($0.sources) }
-        for (position, entry) in saved.records.enumerated() { index[entry.key] = position }
-        limits = Dictionary(saved.limits.map { ($0.provider, $0) }, uniquingKeysWith: { $1 })
-        codexPlan = saved.codexPlan
-        codexPlanObserved = saved.codexPlanObserved
-        turns = Dictionary(saved.turns.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
-        waiting = Dictionary(saved.waiting.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        reserveArchiveCapacity(saved.records.count)
+        for entry in saved.records {
+            appendArchivedRecord(key: entry.key, record: entry.record, billable: entry.billable,
+                                 sourceIDs: SourceList(entry.sources))
+        }
+        restoreArchivedMetadata(limits: saved.limits, codexPlan: saved.codexPlan,
+                                codexPlanObserved: saved.codexPlanObserved,
+                                turns: saved.turns, waiting: saved.waiting)
     }
 
     /// Keeps memory bounded to the history the island can show.
     func dropRecords(before date: Date) {
-        guard records.contains(where: { $0.date < date }) else { return }
+        _ = dropRecordsReturningChanged(before: date)
+    }
+
+    @discardableResult
+    func dropRecordsReturningChanged(before date: Date) -> Bool {
+        guard records.contains(where: { $0.date < date }) else { return false }
         keepRecords { records[$0].date >= date }
+        return true
     }
 
     /// Takes back what logs gone or rewritten since they were read gave, as
@@ -555,10 +702,16 @@ final class AgentUsageStore {
 
     private func keepRecords(where keep: (Int) -> Bool) {
         summary.invalidate()
+        var keptCount = 0
+        for offset in records.indices where keep(offset) { keptCount += 1 }
         var kept: [AgentUsageRecord] = []
         var keptBillables: [AgentBillable] = []
         var keptSources: [SourceList] = []
         var positions: [Int: Int] = [:]
+        kept.reserveCapacity(keptCount)
+        keptBillables.reserveCapacity(keptCount)
+        keptSources.reserveCapacity(keptCount)
+        positions.reserveCapacity(keptCount)
         for offset in records.indices where keep(offset) {
             positions[offset] = kept.count
             kept.append(records[offset])

@@ -51,15 +51,54 @@ enum AgentUsageArchive {
         folder?.appendingPathComponent(fileName, isDirectory: false)
     }
 
+    /// Minimum encoded byte length of one archive record on the wire (1 key,
+    /// 1 provider, 8 date, 3 model/project/session, 1 requests, 5 tokens,
+    /// 1 optional-cost tag, 8 savings, 1 same-billable tag, 5 billable flags/
+    /// counts, 1 sources count = 35 bytes). Bounds `reserveCapacity` on
+    /// malformed files.
+    private static let minimumRecordWireBytes = 35
+
     static func load() -> Contents? {
-        guard let url, let data = try? Data(contentsOf: url) else { return nil }
-        return decode(data, build: build)
+        autoreleasepool {
+            guard let url, let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+            return decode(data, build: build)
+        }
+    }
+
+    static func loadAndResume(expectedProviders: Set<AgentProvider>, logs found: Set<String>, since horizon: Date)
+        -> (store: AgentUsageStore, cursors: [String: AgentLogCursor], unchanged: Bool)? {
+        autoreleasepool {
+            guard let url, let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+            return decodeAndResume(data, build: build, expectedProviders: expectedProviders, logs: found, since: horizon)
+        }
     }
 
     @discardableResult
     static func save(_ contents: Contents) -> Bool {
-        guard let folder, let url, PrivateFileStore.createDirectory(at: folder, container: folder) else { return false }
-        return PrivateFileStore.write(encode(contents, build: build), to: url)
+        autoreleasepool {
+            guard let folder, let url, PrivateFileStore.createDirectory(at: folder, container: folder) else { return false }
+            return PrivateFileStore.write(encode(contents, build: build), to: url)
+        }
+    }
+
+    /// Encodes and streams directly from `AgentUsageStore` to disk via an
+    /// atomic owner-only temp file, avoiding `[Saved.Record]`, `header.bytes`,
+    /// and full-file `Data` allocations.
+    @discardableResult
+    static func save(providers: Set<AgentProvider>, store: AgentUsageStore, cursors: [AgentLogCursor.Saved]) -> Bool {
+        autoreleasepool {
+            guard let folder, let url, PrivateFileStore.createDirectory(at: folder, container: folder) else { return false }
+            return writeStream(providers: providers, store: store, cursors: cursors, build: build, to: url)
+        }
+    }
+
+    @discardableResult
+    static func writeStream(providers: Set<AgentProvider>, store: AgentUsageStore,
+                            cursors: [AgentLogCursor.Saved], build: String, to url: URL) -> Bool {
+        autoreleasepool {
+            let body = encodeBody(providers: providers, store: store, cursors: cursors, build: build)
+            return streamWrite(body: body, to: url)
+        }
     }
 
     /// The store and cursors a launch resumes with, given the logs `found`
@@ -86,7 +125,7 @@ enum AgentUsageArchive {
         // Prices may be newer than the ones the counts were saved with.
         store.reprice()
         store.dropRecords(before: horizon)
-        return (store, cursors, cursors.count == contents.cursors.count && store.saved == contents.store)
+        return (store, cursors, cursors.count == contents.cursors.count && store.matchesSaved(contents.store))
     }
 
     static func remove() {
@@ -128,89 +167,359 @@ enum AgentUsageArchive {
         }
         body.count(contents.cursors.count)
         for cursor in contents.cursors {
-            body.string(cursor.path)
-            body.provider(cursor.provider)
-            body.unsigned(cursor.offset)
-            body.unsigned(cursor.identity)
-            body.bool(cursor.discarding)
-            body.date(cursor.modified)
-            body.state(cursor.state)
-            body.unsigned(cursor.fingerprint)
+            body.cursor(cursor)
         }
-        var data = Data(magic)
-        var header = Writer()
-        header.int(format)
-        header.count(body.strings.count)
+        return finalize(body: body)
+    }
+
+    /// Produces the exact same binary format as `encode(_:build:)` while
+    /// streaming directly from `AgentUsageStore`'s compact internal storage.
+    static func encode(providers: Set<AgentProvider>, store: AgentUsageStore,
+                       cursors: [AgentLogCursor.Saved], build: String) -> Data {
+        let body = encodeBody(providers: providers, store: store, cursors: cursors, build: build)
+        return finalize(body: body)
+    }
+
+    private static func encodeBody(providers: Set<AgentProvider>, store: AgentUsageStore,
+                                   cursors: [AgentLogCursor.Saved], build: String) -> Writer {
+        let recordCount = store.archivableRecordCount
+        var body = Writer()
+        body.reserve(records: recordCount)
+        body.string(build)
+        body.count(providers.count)
+        for provider in providers.sorted(by: { $0.rawValue < $1.rawValue }) { body.provider(provider) }
+        body.count(recordCount)
+        store.forEachArchivableRecord { key, record, billable, sourceList in
+            body.string(key)
+            body.record(record)
+            let same = billable.tokens == record.tokens
+            body.bool(same)
+            if !same { body.tokens(billable.tokens) }
+            body.bool(billable.isAggregate)
+            body.int(billable.longCacheWrite)
+            body.bool(billable.fast)
+            body.bool(billable.domestic)
+            body.int(billable.webSearches)
+            body.count(sourceList.count)
+            sourceList.forEachResolvedPath { body.string($0) }
+        }
+        let limits = store.archivableLimits
+        body.count(limits.count)
+        for limit in limits { body.limits(limit) }
+        body.optional(store.codexPlan) { $0.string($1) }
+        body.date(store.codexPlanObserved)
+        for sessions in [store.archivableTurns, store.archivableWaiting] {
+            body.count(sessions.count)
+            for session in sessions { body.session(session) }
+        }
+        body.count(cursors.count)
+        for cursor in cursors {
+            body.cursor(cursor)
+        }
+        return body
+    }
+
+    private static let fnvOffsetBasis: UInt64 = 0xCBF2_9CE4_8422_2325
+    private static let fnvPrime: UInt64 = 0x100_0000_01B3
+
+    private static func zigzag(_ value: Int) -> UInt64 {
+        UInt64(bitPattern: Int64(value) << 1 ^ Int64(value) >> 63)
+    }
+
+    private static func varintByteCount(_ value: UInt64) -> Int {
+        var v = value
+        var n = 1
+        while v >= 0x80 {
+            v >>= 7
+            n += 1
+        }
+        return n
+    }
+
+    private static func appendVarint(_ value: UInt64, to buffer: inout [UInt8]) {
+        var v = value
+        while v >= 0x80 {
+            buffer.append(UInt8(v & 0x7F) | 0x80)
+            v >>= 7
+        }
+        buffer.append(UInt8(v))
+    }
+
+    private static func appendVarint(_ value: UInt64, to data: inout Data, hash: inout UInt64) {
+        var v = value
+        while v >= 0x80 {
+            let byte = UInt8(v & 0x7F) | 0x80
+            data.append(byte)
+            hash = (hash ^ UInt64(byte)) &* fnvPrime
+            v >>= 7
+        }
+        let byte = UInt8(v)
+        data.append(byte)
+        hash = (hash ^ UInt64(byte)) &* fnvPrime
+    }
+
+    private static func headerByteCount(strings: [String]) -> Int {
+        var total = varintByteCount(zigzag(format)) + varintByteCount(UInt64(strings.count))
+        for string in strings {
+            let utf8Count = string.utf8.count
+            total += varintByteCount(UInt64(utf8Count)) + utf8Count
+        }
+        return total
+    }
+
+    /// Writes `magic` + header + `body.bytes` + FNV-1a checksum into a single
+    /// pre-sized `Data` without allocating an intermediate `header.bytes` array.
+    private static func finalize(body: Writer) -> Data {
+        let headerBytes = headerByteCount(strings: body.strings)
+        var data = Data()
+        data.reserveCapacity(magic.count + headerBytes + body.bytes.count + MemoryLayout<UInt64>.size)
+        data.append(contentsOf: magic)
+        var hash = fnvOffsetBasis
+        appendVarint(zigzag(format), to: &data, hash: &hash)
+        appendVarint(UInt64(body.strings.count), to: &data, hash: &hash)
         for string in body.strings {
-            let bytes = Array(string.utf8)
-            header.count(bytes.count)
-            header.bytes.append(contentsOf: bytes)
+            let utf8 = string.utf8
+            appendVarint(UInt64(utf8.count), to: &data, hash: &hash)
+            for byte in utf8 {
+                hash = (hash ^ UInt64(byte)) &* fnvPrime
+            }
+            data.append(contentsOf: utf8)
         }
-        data.append(contentsOf: header.bytes)
+        for byte in body.bytes {
+            hash = (hash ^ UInt64(byte)) &* fnvPrime
+        }
         data.append(contentsOf: body.bytes)
-        let sum = checksum(header.bytes, body.bytes)
-        withUnsafeBytes(of: sum.littleEndian) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: hash.littleEndian) { data.append(contentsOf: $0) }
         return data
     }
 
-    /// FNV-1a over the header and the body.
-    private static func checksum(_ parts: [UInt8]...) -> UInt64 {
-        var hash: UInt64 = 0xCBF2_9CE4_8422_2325
-        for part in parts {
-            for byte in part { hash = (hash ^ UInt64(byte)) &* 0x100_0000_01B3 }
+    /// Streams `magic` + header + `body.bytes` + FNV-1a checksum in 64 KB
+    /// chunks directly to an atomic owner-only file (eliminating both
+    /// `header.bytes` and the full-file `Data` buffer).
+    private static func streamWrite(body: Writer, to url: URL) -> Bool {
+        let chunkLimit = 64 * 1024
+        return PrivateFileStore.writeStream(to: url) { emit in
+            guard magic.withUnsafeBytes({ emit($0) }) else { return false }
+            var hash = fnvOffsetBasis
+            var staging: [UInt8] = []
+            staging.reserveCapacity(chunkLimit)
+
+            func flushStaging() -> Bool {
+                guard !staging.isEmpty else { return true }
+                for byte in staging {
+                    hash = (hash ^ UInt64(byte)) &* fnvPrime
+                }
+                let ok = staging.withUnsafeBytes { emit($0) }
+                staging.removeAll(keepingCapacity: true)
+                return ok
+            }
+
+            appendVarint(zigzag(format), to: &staging)
+            appendVarint(UInt64(body.strings.count), to: &staging)
+            for string in body.strings {
+                let utf8 = string.utf8
+                if staging.count + 10 + utf8.count > chunkLimit && !staging.isEmpty {
+                    guard flushStaging() else { return false }
+                }
+                appendVarint(UInt64(utf8.count), to: &staging)
+                if staging.count + utf8.count <= chunkLimit {
+                    staging.append(contentsOf: utf8)
+                } else {
+                    guard flushStaging() else { return false }
+                    var chunk: [UInt8] = []
+                    chunk.reserveCapacity(min(chunkLimit, utf8.count))
+                    for byte in utf8 {
+                        chunk.append(byte)
+                        if chunk.count == chunkLimit {
+                            for b in chunk { hash = (hash ^ UInt64(b)) &* fnvPrime }
+                            guard chunk.withUnsafeBytes({ emit($0) }) else { return false }
+                            chunk.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    if !chunk.isEmpty {
+                        for b in chunk { hash = (hash ^ UInt64(b)) &* fnvPrime }
+                        guard chunk.withUnsafeBytes({ emit($0) }) else { return false }
+                    }
+                }
+            }
+            guard flushStaging() else { return false }
+
+            for byte in body.bytes {
+                hash = (hash ^ UInt64(byte)) &* fnvPrime
+            }
+            guard body.bytes.withUnsafeBytes({ emit($0) }) else { return false }
+            return withUnsafeBytes(of: hash.littleEndian) { emit($0) }
         }
+    }
+
+    private static func checksum(_ buffer: UnsafeRawBufferPointer) -> UInt64 {
+        var hash = fnvOffsetBasis
+        for byte in buffer { hash = (hash ^ UInt64(byte)) &* fnvPrime }
         return hash
     }
 
     static func decode(_ data: Data, build: String) -> Contents? {
         let sumSize = MemoryLayout<UInt64>.size
-        guard data.count > magic.count + sumSize, data.prefix(magic.count).elementsEqual(magic) else { return nil }
-        let payload = Array(data.dropFirst(magic.count).dropLast(sumSize))
-        let sum = data.suffix(sumSize).reversed().reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
-        guard checksum(payload) == sum else { return nil }
-        var reader = Reader(bytes: payload)
-        do {
-            guard try reader.int() == format else { return nil }
-            let strings = try reader.count()
-            reader.strings.reserveCapacity(strings)
-            for _ in 0..<strings {
-                let length = try reader.count()
-                reader.strings.append(String(decoding: try reader.take(length), as: UTF8.self))
+        guard data.count > magic.count + sumSize else { return nil }
+        return data.withUnsafeBytes { rawBuffer -> Contents? in
+            guard let base = rawBuffer.baseAddress, rawBuffer.count > magic.count + sumSize else { return nil }
+            for i in 0..<magic.count where rawBuffer[i] != magic[i] { return nil }
+            let payloadCount = rawBuffer.count - magic.count - sumSize
+            let payload = UnsafeRawBufferPointer(start: base.advanced(by: magic.count), count: payloadCount)
+            var sum: UInt64 = 0
+            for i in stride(from: rawBuffer.count - 1, through: rawBuffer.count - sumSize, by: -1) {
+                sum = (sum << 8) | UInt64(rawBuffer[i])
             }
-            guard try reader.string() == build else { return nil }
-            var providers = Set<AgentProvider>()
-            for _ in 0..<(try reader.count()) { providers.insert(try reader.provider()) }
-            var store = AgentUsageStore.Saved()
-            let records = try reader.count()
-            store.records.reserveCapacity(records)
-            for _ in 0..<records {
-                let key = try reader.string()
-                let record = try reader.record()
-                let same = try reader.bool()
-                let billable = AgentBillable(tokens: same ? record.tokens : try reader.tokens(),
-                                             isAggregate: try reader.bool(),
-                                             longCacheWrite: try reader.amount(), fast: try reader.bool(),
-                                             domestic: try reader.bool(), webSearches: try reader.amount())
-                var sources: [String] = []
-                for _ in 0..<(try reader.count()) { sources.append(try reader.string()) }
-                store.records.append(.init(key: key, record: record, billable: billable, sources: sources))
+            guard checksum(payload) == sum else { return nil }
+            var reader = Reader(bytes: payload)
+            do {
+                guard try reader.int() == format else { return nil }
+                let strings = try reader.count()
+                reader.strings.reserveCapacity(strings)
+                for _ in 0..<strings {
+                    let length = try reader.count()
+                    reader.strings.append(String(decoding: try reader.take(length), as: UTF8.self))
+                }
+                guard try reader.string() == build else { return nil }
+                var providers = Set<AgentProvider>()
+                for _ in 0..<(try reader.count()) { providers.insert(try reader.provider()) }
+                var store = AgentUsageStore.Saved()
+                let records = try reader.count()
+                guard records <= reader.remainingBytes / minimumRecordWireBytes else { return nil }
+                store.records.reserveCapacity(records)
+                for _ in 0..<records {
+                    let key = try reader.string()
+                    let record = try reader.record()
+                    let same = try reader.bool()
+                    let billable = AgentBillable(tokens: same ? record.tokens : try reader.tokens(),
+                                                 isAggregate: try reader.bool(),
+                                                 longCacheWrite: try reader.amount(), fast: try reader.bool(),
+                                                 domestic: try reader.bool(), webSearches: try reader.amount())
+                    var sources: [String] = []
+                    for _ in 0..<(try reader.count()) { sources.append(try reader.string()) }
+                    store.records.append(.init(key: key, record: record, billable: billable, sources: sources))
+                }
+                for _ in 0..<(try reader.count()) { store.limits.append(try reader.limits()) }
+                store.codexPlan = try reader.optional { try $0.string() }
+                store.codexPlanObserved = try reader.date()
+                for _ in 0..<(try reader.count()) { store.turns.append(try reader.session()) }
+                for _ in 0..<(try reader.count()) { store.waiting.append(try reader.session()) }
+                var cursors: [AgentLogCursor.Saved] = []
+                for _ in 0..<(try reader.count()) {
+                    cursors.append(try reader.cursor())
+                }
+                guard reader.atEnd else { return nil }
+                return Contents(providers: providers, store: store, cursors: cursors)
+            } catch {
+                return nil
             }
-            for _ in 0..<(try reader.count()) { store.limits.append(try reader.limits()) }
-            store.codexPlan = try reader.optional { try $0.string() }
-            store.codexPlanObserved = try reader.date()
-            for _ in 0..<(try reader.count()) { store.turns.append(try reader.session()) }
-            for _ in 0..<(try reader.count()) { store.waiting.append(try reader.session()) }
-            var cursors: [AgentLogCursor.Saved] = []
-            for _ in 0..<(try reader.count()) {
-                cursors.append(AgentLogCursor.Saved(path: try reader.string(), provider: try reader.provider(),
-                                                    offset: try reader.unsigned(), identity: try reader.unsigned(),
-                                                    discarding: try reader.bool(), modified: try reader.date(),
-                                                    state: try reader.state(), fingerprint: try reader.unsigned()))
+        }
+    }
+
+    /// Decodes directly into `AgentUsageStore` and resumes in a single pass
+    /// without allocating an intermediate `[AgentUsageStore.Saved.Record]` array.
+    static func decodeAndResume(_ data: Data, build: String, expectedProviders: Set<AgentProvider>,
+                                logs found: Set<String>, since horizon: Date)
+        -> (store: AgentUsageStore, cursors: [String: AgentLogCursor], unchanged: Bool)? {
+        let sumSize = MemoryLayout<UInt64>.size
+        guard data.count > magic.count + sumSize else { return nil }
+        return data.withUnsafeBytes { rawBuffer -> (store: AgentUsageStore, cursors: [String: AgentLogCursor], unchanged: Bool)? in
+            guard let base = rawBuffer.baseAddress, rawBuffer.count > magic.count + sumSize else { return nil }
+            for i in 0..<magic.count where rawBuffer[i] != magic[i] { return nil }
+            let payloadCount = rawBuffer.count - magic.count - sumSize
+            let payload = UnsafeRawBufferPointer(start: base.advanced(by: magic.count), count: payloadCount)
+            var sum: UInt64 = 0
+            for i in stride(from: rawBuffer.count - 1, through: rawBuffer.count - sumSize, by: -1) {
+                sum = (sum << 8) | UInt64(rawBuffer[i])
             }
-            guard reader.atEnd else { return nil }
-            return Contents(providers: providers, store: store, cursors: cursors)
-        } catch {
-            return nil
+            guard checksum(payload) == sum else { return nil }
+            var reader = Reader(bytes: payload)
+            do {
+                guard try reader.int() == format else { return nil }
+                let strings = try reader.count()
+                reader.strings.reserveCapacity(strings)
+                for _ in 0..<strings {
+                    let length = try reader.count()
+                    reader.strings.append(String(decoding: try reader.take(length), as: UTF8.self))
+                }
+                guard try reader.string() == build else { return nil }
+                var providers = Set<AgentProvider>()
+                for _ in 0..<(try reader.count()) { providers.insert(try reader.provider()) }
+                guard providers == expectedProviders else { return nil }
+
+                let store = AgentUsageStore()
+                let recordCount = try reader.count()
+                guard recordCount <= reader.remainingBytes / minimumRecordWireBytes else { return nil }
+                store.reserveArchiveCapacity(recordCount)
+                let interner = AgentStringInterner.shared
+                var hadNonArchivableContent = false
+                for _ in 0..<recordCount {
+                    let key = try reader.string()
+                    let record = try reader.record()
+                    if record.provider == .opencode { hadNonArchivableContent = true }
+                    let same = try reader.bool()
+                    let billable = AgentBillable(tokens: same ? record.tokens : try reader.tokens(),
+                                                 isAggregate: try reader.bool(),
+                                                 longCacheWrite: try reader.amount(), fast: try reader.bool(),
+                                                 domestic: try reader.bool(), webSearches: try reader.amount())
+                    var sourceIDs = AgentUsageStore.SourceList()
+                    for _ in 0..<(try reader.count()) {
+                        let path = try reader.string()
+                        if path.isEmpty {
+                            hadNonArchivableContent = true
+                        } else {
+                            let id = interner.intern(path)
+                            if sourceIDs.contains(id) { hadNonArchivableContent = true }
+                            sourceIDs.appendUnique(id)
+                        }
+                    }
+                    if store.appendArchivedRecord(key: key, record: record, billable: billable, sourceIDs: sourceIDs) {
+                        hadNonArchivableContent = true
+                    }
+                }
+                var rawLimits: [AgentLimits] = []
+                for _ in 0..<(try reader.count()) { rawLimits.append(try reader.limits()) }
+                let codexPlan = try reader.optional { try $0.string() }
+                let codexPlanObserved = try reader.date()
+                var rawTurns: [AgentLiveSession] = []
+                for _ in 0..<(try reader.count()) { rawTurns.append(try reader.session()) }
+                var rawWaiting: [AgentLiveSession] = []
+                for _ in 0..<(try reader.count()) { rawWaiting.append(try reader.session()) }
+                store.restoreArchivedMetadata(limits: rawLimits, codexPlan: codexPlan,
+                                              codexPlanObserved: codexPlanObserved,
+                                              turns: rawTurns, waiting: rawWaiting)
+                if store.archivableLimits != rawLimits
+                    || store.archivableTurns != rawTurns
+                    || store.archivableWaiting != rawWaiting {
+                    hadNonArchivableContent = true
+                }
+                let rawCursorCount = try reader.count()
+                var cursors: [String: AgentLogCursor] = [:]
+                cursors.reserveCapacity(min(rawCursorCount, found.count))
+                for _ in 0..<rawCursorCount {
+                    let savedCursor = try reader.cursor()
+                    if found.contains(savedCursor.path) {
+                        cursors[savedCursor.path] = AgentLogCursor(saved: savedCursor)
+                    }
+                }
+                guard reader.atEnd else { return nil }
+
+                var gone = store.files.subtracting(cursors.keys)
+                let sharing = store.files(sharingWith: gone).subtracting(gone)
+                for file in sharing { cursors[file] = nil }
+                gone.formUnion(sharing)
+                store.forget(files: gone)
+                let repriced = store.repriceReturningChanged()
+                let dropped = store.dropRecordsReturningChanged(before: horizon)
+                let unchanged = !hadNonArchivableContent
+                    && cursors.count == rawCursorCount
+                    && gone.isEmpty
+                    && !repriced
+                    && !dropped
+                return (store, cursors, unchanged)
+            } catch {
+                return nil
+            }
         }
     }
 
@@ -220,6 +529,13 @@ enum AgentUsageArchive {
         var bytes: [UInt8] = []
         private(set) var strings: [String] = []
         private var positions: [String: Int] = [:]
+
+        mutating func reserve(records: Int) {
+            guard records > 0 else { return }
+            bytes.reserveCapacity(records * 64)
+            strings.reserveCapacity(records + 1024)
+            positions.reserveCapacity(records + 1024)
+        }
 
         mutating func unsigned(_ value: UInt64) {
             var value = value
@@ -269,7 +585,11 @@ enum AgentUsageArchive {
         mutating func provider(_ value: AgentProvider) { string(value.rawValue) }
 
         mutating func tokens(_ value: AgentTokens) {
-            for part in [value.input, value.cacheWrite, value.cacheRead, value.output, value.reasoning] { int(part) }
+            int(value.input)
+            int(value.cacheWrite)
+            int(value.cacheRead)
+            int(value.output)
+            int(value.reasoning)
         }
 
         mutating func record(_ value: AgentUsageRecord) {
@@ -334,6 +654,17 @@ enum AgentUsageArchive {
             optional(value.copilotTurnID) { $0.string($1) }
             bool(value.copilotFinalResponse)
         }
+
+        mutating func cursor(_ cursor: AgentLogCursor.Saved) {
+            string(cursor.path)
+            provider(cursor.provider)
+            unsigned(cursor.offset)
+            unsigned(cursor.identity)
+            bool(cursor.discarding)
+            date(cursor.modified)
+            state(cursor.state)
+            unsigned(cursor.fingerprint)
+        }
     }
 
     // MARK: Reading
@@ -341,13 +672,14 @@ enum AgentUsageArchive {
     private struct Malformed: Error {}
 
     private struct Reader {
-        let bytes: [UInt8]
+        let bytes: UnsafeRawBufferPointer
         var position = 0
         var strings: [String] = []
 
-        init(bytes: [UInt8]) { self.bytes = bytes }
+        init(bytes: UnsafeRawBufferPointer) { self.bytes = bytes }
 
         var atEnd: Bool { position == bytes.count }
+        var remainingBytes: Int { bytes.count - position }
 
         mutating func byte() throws -> UInt8 {
             guard position < bytes.count else { throw Malformed() }
@@ -355,10 +687,15 @@ enum AgentUsageArchive {
             return bytes[position]
         }
 
-        mutating func take(_ length: Int) throws -> ArraySlice<UInt8> {
-            guard length <= bytes.count - position else { throw Malformed() }
-            defer { position += length }
-            return bytes[position..<position + length]
+        mutating func take(_ length: Int) throws -> UnsafeRawBufferPointer {
+            guard length >= 0, length <= bytes.count - position else { throw Malformed() }
+            guard let base = bytes.baseAddress else {
+                guard length == 0 else { throw Malformed() }
+                return UnsafeRawBufferPointer(start: nil, count: 0)
+            }
+            let slice = UnsafeRawBufferPointer(start: base.advanced(by: position), count: length)
+            position += length
+            return slice
         }
 
         mutating func unsigned() throws -> UInt64 {
@@ -491,6 +828,13 @@ enum AgentUsageArchive {
             value.copilotTurnID = try optional { try $0.string() }
             value.copilotFinalResponse = try bool()
             return value
+        }
+
+        mutating func cursor() throws -> AgentLogCursor.Saved {
+            AgentLogCursor.Saved(path: try string(), provider: try provider(),
+                                 offset: try unsigned(), identity: try unsigned(),
+                                 discarding: try bool(), modified: try date(),
+                                 state: try state(), fingerprint: try unsigned())
         }
     }
 }

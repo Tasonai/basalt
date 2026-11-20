@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import Darwin
 import Foundation
 
 /// The app's Application Support container and the only way its contents are
@@ -51,6 +52,46 @@ enum PrivateFileStore {
         guard (try? data.write(to: url, options: .atomic)) != nil else { return false }
         try? FileManager.default.setAttributes([.posixPermissions: filePermissions],
                                                ofItemAtPath: url.path)
+        return true
+    }
+
+    /// Atomic, owner-only streaming write via a sibling temporary file and
+    /// `rename(2)`, avoiding a full in-memory `Data` copy for multi-megabyte
+    /// caches.
+    @discardableResult
+    static func writeStream(to url: URL, _ produce: ((UnsafeRawBufferPointer) -> Bool) -> Bool) -> Bool {
+        let dir = url.deletingLastPathComponent()
+        let tempURL = dir.appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
+        let tempPath = tempURL.path
+        let fd = open(tempPath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(filePermissions))
+        guard fd >= 0 else { return false }
+        var ok = fchmod(fd, mode_t(filePermissions)) == 0
+        if ok {
+            ok = produce { chunk in
+                guard let base = chunk.baseAddress else { return chunk.isEmpty }
+                var written = 0
+                while written < chunk.count {
+                    let n = Darwin.write(fd, base.advanced(by: written), chunk.count - written)
+                    if n > 0 {
+                        written += n
+                    } else if n < 0 && errno == EINTR {
+                        continue
+                    } else {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
+        let closed = close(fd) == 0
+        guard ok && closed else {
+            unlink(tempPath)
+            return false
+        }
+        guard rename(tempPath, url.path) == 0 else {
+            unlink(tempPath)
+            return false
+        }
         return true
     }
 

@@ -385,6 +385,123 @@ enum AgentUsageArchiveTests {
                         && replies.allSatisfy(\.reportedCost),
                      "the database read again counts each reply once, at the cost OpenCode recorded, as a fresh read does")
         suite.expect(saving(store, again) == contents, "with only OpenCode read again, the next save holds what the last one did")
+
+        // Streaming encode and single-pass decodeAndResume stay byte-for-byte
+        // identical to the legacy Saved-struct path without materializing a
+        // full [Saved.Record] array.
+        let keptCursors = again.filter { $0.provider != .opencode }.map(\.saved)
+        let legacyData = AgentUsageArchive.encode(contents, build: build)
+        let streamedData = AgentUsageArchive.encode(providers: [.codex, .opencode], store: store,
+                                                    cursors: keptCursors, build: build)
+        suite.expect(streamedData == legacyData,
+                     "streaming AgentUsageArchive.encode matches legacy encode byte-for-byte")
+        let directUnchanged = AgentUsageArchive.decodeAndResume(
+            streamedData, build: build, expectedProviders: [.codex, .opencode],
+            logs: [log.path, database], since: .distantPast)
+        suite.expect(directUnchanged?.unchanged == true
+                        && directUnchanged?.cursors.keys.sorted() == [log.path]
+                        && directUnchanged?.store.saved == contents.store,
+                     "decodeAndResume matches decode + resume on unchanged archive")
+        let directDeleted = AgentUsageArchive.decodeAndResume(
+            streamedData, build: build, expectedProviders: [.codex, .opencode],
+            logs: [], since: .distantPast)
+        suite.expect(directDeleted?.unchanged == false
+                        && directDeleted?.cursors.isEmpty == true
+                        && directDeleted?.store.records.isEmpty == true,
+                     "decodeAndResume forgets deleted logs and marks archive changed")
+        let directWrongProviders = AgentUsageArchive.decodeAndResume(
+            streamedData, build: build, expectedProviders: [.claude],
+            logs: [log.path, database], since: .distantPast)
+        suite.expect(directWrongProviders == nil,
+                     "decodeAndResume rejects mismatched provider sets before decoding records")
+
+        // Streaming atomic file write produces an owner-only (0600) file that
+        // matches in-memory encode byte-for-byte.
+        let streamedFile = folder.appending(path: "streamed-agent-usage.bin")
+        let wroteStream = AgentUsageArchive.writeStream(
+            providers: [.codex, .opencode], store: store,
+            cursors: keptCursors, build: build, to: streamedFile)
+        let streamedFileData = try? Data(contentsOf: streamedFile)
+        let streamedMode = (try? FileManager.default.attributesOfItem(atPath: streamedFile.path)[.posixPermissions] as? Int) ?? 0
+        suite.expect(wroteStream && streamedFileData == legacyData && (streamedMode & 0o777) == 0o600,
+                     "AgentUsageArchive.writeStream matches encode byte-for-byte with 0600 permissions")
+
+        // Horizon pruning drops old records and reports unchanged == false.
+        let futureHorizon = now.addingTimeInterval(3600)
+        let directPruned = AgentUsageArchive.decodeAndResume(
+            streamedData, build: build, expectedProviders: [.codex, .opencode],
+            logs: [log.path, database], since: futureHorizon)
+        suite.expect(directPruned?.unchanged == false
+                        && directPruned?.store.records.isEmpty == true,
+                     "decodeAndResume prunes records before horizon and marks archive changed")
+
+        // Corrupted / bit-flipped / truncated data returns nil cleanly.
+        var flippedStream = streamedData
+        flippedStream[flippedStream.count / 2] ^= 0xFF
+        suite.expect(AgentUsageArchive.decodeAndResume(Data(), build: build, expectedProviders: [.codex, .opencode],
+                                                       logs: [log.path], since: .distantPast) == nil
+                        && AgentUsageArchive.decodeAndResume(flippedStream, build: build, expectedProviders: [.codex, .opencode],
+                                                             logs: [log.path], since: .distantPast) == nil,
+                     "decodeAndResume rejects empty and checksum-corrupted payloads")
+
+        // Shared-log deletion evicts sibling cursor and marks unchanged == false.
+        // Create shared-a.jsonl on disk so its cursor passes stat(2) and is
+        // genuinely evicted via the `sharing` sibling-invalidation path.
+        let sharedAURL = folder.appending(path: "shared-a.jsonl")
+        try? Data("{}\n".utf8).write(to: sharedAURL)
+        let cursorA = AgentLogCursor(path: sharedAURL.path, provider: .codex)
+        AgentLogReader.readAppended(cursorA) { _ in }
+        let sharedA = sharedAURL.path
+        let sharedB = folder.appending(path: "shared-b.jsonl").path
+        let sharedRecord = AgentUsageRecord(provider: .codex, date: now, model: "gpt-5", project: "p", session: "s",
+                                            requests: 1, tokens: AgentTokens(input: 100, output: 50), cost: nil, savings: 0)
+        let sharedSaved = AgentUsageArchive.Contents(
+            providers: [.codex],
+            store: AgentUsageStore.Saved(records: [
+                .init(key: "codex:shared", record: sharedRecord,
+                      billable: AgentBillable(tokens: sharedRecord.tokens), sources: [sharedA, sharedB])
+            ]),
+            cursors: [
+                cursorA.saved,
+                AgentLogCursor(path: sharedB, provider: .codex).saved
+            ])
+        let sharedEncoded = AgentUsageArchive.encode(sharedSaved, build: build)
+        let sharedResumed = AgentUsageArchive.decodeAndResume(
+            sharedEncoded, build: build, expectedProviders: [.codex],
+            logs: [sharedA], since: .distantPast)
+        suite.expect(sharedResumed?.unchanged == false
+                        && sharedResumed?.cursors.isEmpty == true
+                        && sharedResumed?.store.records.isEmpty == true,
+                     "decodeAndResume drops sibling cursor and shared records when one shared log disappears")
+
+        // Repricing an outdated saved cost marks unchanged == false and updates cost
+        // while keeping the live cursor and record intact.
+        let staleRecord = AgentUsageRecord(provider: .codex, date: now, model: "gpt-5", project: "p", session: "s",
+                                           requests: 1, tokens: AgentTokens(input: 1_000_000, output: 0),
+                                           cost: 999.0, savings: 0)
+        let staleSaved = AgentUsageArchive.Contents(
+            providers: [.codex],
+            store: AgentUsageStore.Saved(records: [
+                .init(key: "codex:reprice", record: staleRecord,
+                      billable: AgentBillable(tokens: staleRecord.tokens), sources: [sharedA])
+            ]),
+            cursors: [cursorA.saved])
+        let staleResumed = AgentUsageArchive.decodeAndResume(
+            AgentUsageArchive.encode(staleSaved, build: build), build: build,
+            expectedProviders: [.codex], logs: [sharedA], since: .distantPast)
+        suite.expect(staleResumed?.unchanged == false
+                        && staleResumed?.cursors.keys.sorted() == [sharedA]
+                        && staleResumed?.store.records.count == 1
+                        && staleResumed?.store.records.first?.cost != 999.0,
+                     "decodeAndResume reprices outdated costs while preserving the record and cursor")
+
+        // matchesSaved detects both exact matches and subtle field mutations.
+        let matchStore = AgentUsageStore(saved: staleSaved.store)
+        var mutatedSaved = staleSaved.store
+        mutatedSaved.records[0] = .init(key: "codex:reprice", record: staleRecord,
+                                        billable: AgentBillable(tokens: staleRecord.tokens), sources: [sharedB])
+        suite.expect(matchStore.matchesSaved(staleSaved.store) && !matchStore.matchesSaved(mutatedSaved),
+                     "AgentUsageStore.matchesSaved matches identical state and rejects source mutations")
     }
 }
 
@@ -539,6 +656,9 @@ enum AgentUsageArchiveSaveTests {
         static func save(_ contents: Contents) -> Bool {
             saved.append(contents)
             return true
+        }
+        static func save(providers: Set<AgentProvider>, store: AgentUsageStore, cursors: [AgentLogCursor.Saved]) -> Bool {
+            save(Contents(providers: providers, store: store.saved, cursors: cursors))
         }
     }
 

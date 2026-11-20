@@ -84,38 +84,55 @@ final class PowerSampler {
         }
     }
 
+    private func resolveSMCKeysIfNeeded(_ smc: SMCClient) {
+        guard !resolvedKeys else { return }
+        resolvedKeys = true
+        systemKey = smc.key(named: Self.systemPowerKey)
+        cpuRailKey = smc.key(named: Self.cpuRailPowerKey)
+        cpuPackageTotalKey = smc.key(named: Self.cpuPackageTotalPowerKey)
+        cpuPackageKey = smc.key(named: Self.cpuPackagePowerKey)
+        discreteGPUKey = smc.key(named: Self.discreteGPUPowerKey)
+        gpuPackageKey = smc.key(named: Self.gpuPackagePowerKey)
+        adapterKey = smc.key(named: Self.adapterPowerKey)
+        if !Self.hasInternalBattery {
+            dcInRailKey = smc.key(named: Self.dcInRailPowerKey)
+        }
+    }
+
+    /// Lightweight SMC-only wattage read (skips `AppleSmartBattery`,
+    /// `IOPSCopyPowerSourcesInfo`, and `MaxCapacityProbe`) for Intel power
+    /// fallback when only CPU/GPU telemetry is active.
+    func sampleWattsOnly() -> (system: Double?, cpu: Double?, gpu: Double?) {
+        guard let smc else { return (nil, nil, nil) }
+        resolveSMCKeysIfNeeded(smc)
+        let cpuWatts = plausibleWatts(cpuRailKey)
+            ?? plausibleWatts(cpuPackageTotalKey)
+            ?? plausibleWatts(cpuPackageKey)
+        let discreteGPUWatts = plausibleWatts(discreteGPUKey)
+        let integratedGPUWatts = plausibleWatts(gpuPackageKey)
+        let gpuWatts: Double?
+        if let dgpu = discreteGPUWatts, let igpu = integratedGPUWatts {
+            gpuWatts = dgpu + igpu
+        } else {
+            gpuWatts = discreteGPUWatts ?? integratedGPUWatts
+        }
+        var systemWatts = plausibleWatts(systemKey)
+        if systemWatts == nil, let cpuW = cpuWatts {
+            systemWatts = cpuW + (gpuWatts ?? 0)
+        }
+        return (systemWatts, cpuWatts, gpuWatts)
+    }
+
     func sample() -> PowerReading {
         var reading = PowerReading()
         var dcInRailWatts: Double?
 
         if let smc {
-            if !resolvedKeys {
-                resolvedKeys = true
-                systemKey = smc.key(named: Self.systemPowerKey)
-                cpuRailKey = smc.key(named: Self.cpuRailPowerKey)
-                cpuPackageTotalKey = smc.key(named: Self.cpuPackageTotalPowerKey)
-                cpuPackageKey = smc.key(named: Self.cpuPackagePowerKey)
-                discreteGPUKey = smc.key(named: Self.discreteGPUPowerKey)
-                gpuPackageKey = smc.key(named: Self.gpuPackagePowerKey)
-                adapterKey = smc.key(named: Self.adapterPowerKey)
-                if !Self.hasInternalBattery {
-                    dcInRailKey = smc.key(named: Self.dcInRailPowerKey)
-                }
-            }
-            reading.cpuWatts = plausibleWatts(cpuRailKey)
-                ?? plausibleWatts(cpuPackageTotalKey)
-                ?? plausibleWatts(cpuPackageKey)
-            let discreteGPUWatts = plausibleWatts(discreteGPUKey)
-            let integratedGPUWatts = plausibleWatts(gpuPackageKey)
-            if let dgpu = discreteGPUWatts, let igpu = integratedGPUWatts {
-                reading.gpuWatts = dgpu + igpu
-            } else {
-                reading.gpuWatts = discreteGPUWatts ?? integratedGPUWatts
-            }
-            reading.systemWatts = plausibleWatts(systemKey)
-            if reading.systemWatts == nil, let cpuW = reading.cpuWatts {
-                reading.systemWatts = cpuW + (reading.gpuWatts ?? 0)
-            }
+            resolveSMCKeysIfNeeded(smc)
+            let watts = sampleWattsOnly()
+            reading.cpuWatts = watts.cpu
+            reading.gpuWatts = watts.gpu
+            reading.systemWatts = watts.system
             reading.adapterWatts = plausibleWatts(adapterKey)
             if reading.adapterWatts == nil {
                 dcInRailWatts = plausibleWatts(dcInRailKey)

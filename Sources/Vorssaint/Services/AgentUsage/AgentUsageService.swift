@@ -329,8 +329,9 @@ final class AgentUsageService: ObservableObject {
             let roots = AgentLogRoot.all(home: home, claudeProfile: claudeProfile).filter { providers.contains($0.provider) }
             let files = AgentLogReader.discover(roots, since: horizon)
             // Resumes where the last launch stopped, among the logs there now.
-            if let saved = AgentUsageArchive.load(), saved.providers == providers {
-                let resumed = AgentUsageArchive.resume(saved, logs: Set(files.map(\.path)), since: horizon)
+            if let resumed = AgentUsageArchive.loadAndResume(expectedProviders: providers,
+                                                             logs: Set(files.map(\.path)),
+                                                             since: horizon) {
                 (store, cursors) = (resumed.store, resumed.cursors)
                 // What the resume took back leaves the disk at the next save.
                 if resumed.unchanged { savedMark = progressMark }
@@ -386,8 +387,9 @@ final class AgentUsageService: ObservableObject {
         // Nothing from OpenCode's database is saved. Its open replies and
         // sessions live only in memory, so each launch reads it again.
         let kept = cursors.values.filter { !$0.restarted && $0.provider != .opencode }
-        let contents = AgentUsageArchive.Contents(providers: enabled, store: store.saved, cursors: kept.map(\.saved))
-        if AgentUsageArchive.save(contents) { savedMark = mark }
+        if AgentUsageArchive.save(providers: enabled, store: store, cursors: kept.map(\.saved)) {
+            savedMark = mark
+        }
     }
 
     /// Changes whenever a log is read further, replaced or let go. OpenCode,

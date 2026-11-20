@@ -232,6 +232,10 @@ final class SystemMonitor: ObservableObject {
     private var lastNetTxBytesPerSec: Double = 0
     private var lastPowerSnapshot: AppleSiliconPowerSnapshot?
     private var lastPowerSnapshotAt: TimeInterval = -.infinity
+    private var lastSMCFallbackWatts: SystemMonitorTelemetryPolicy.WattsReading?
+    private var lastSMCFallbackWattsAt: TimeInterval = -.infinity
+    private let telemetryObserverLock = NSLock()
+    private var telemetryObserverVisible = false
     private var lastSmartSnapshot: NVMeSMARTHealthSnapshot?
     private var lastSmartSnapshotAt: TimeInterval = -.infinity
     private let smartSampleStrideSeconds: TimeInterval = 30
@@ -273,8 +277,7 @@ final class SystemMonitor: ObservableObject {
         }
         TelemetryHistoryRing.shared.shouldNotifyObservers = { [weak self] in
             guard let self else { return false }
-            return self.fullMonitorVisible || self.menuPanelNeeds.any
-                || self.notchDetailNeeds.any || self.notchVisible
+            return self.telemetryObserverLock.withLock { self.telemetryObserverVisible }
         }
         SessionActivity.shared.onChange { [weak self] active in
             DispatchQueue.main.async {
@@ -850,6 +853,7 @@ final class SystemMonitor: ObservableObject {
         refreshInFlight = true
         let suppressGPUReadsUntil = self.suppressGPUReadsUntil
         let foregroundSampling = fullMonitorVisible || menuPanelNeeds.any || notchDetailNeeds.any || notchVisible
+        telemetryObserverLock.withLock { telemetryObserverVisible = foregroundSampling }
         let intervalSeconds = self.intervalSeconds
         // Ticks advance by the timer's cadence so `tick % stride` keeps
         // measuring base intervals; mutated on main only, read by the queue
@@ -860,7 +864,8 @@ final class SystemMonitor: ObservableObject {
         if forcePeripheralSample { peripheralSampleDue = false }
         queue.async { [weak self] in
             guard let self else { return }
-            self.prepareIfNeeded(needSMC: plan.needSMC,
+            let needSMCForPowerFallback = foregroundSampling && (plan.needCPU || plan.needGPUUsage)
+            self.prepareIfNeeded(needSMC: plan.needSMC || needSMCForPowerFallback,
                                  needTemperature: plan.needTemperature,
                                  needFanSpeed: plan.needFanSpeed)
             let now = ProcessInfo.processInfo.systemUptime
@@ -872,14 +877,58 @@ final class SystemMonitor: ObservableObject {
             // was stride-skipped the values are pure carry-over, so the publish
             // is skipped below to save that work.
             var sampledAnything = false
+            var sampledCPU = false
+            var sampledMemory = false
+            var sampledNetwork = false
+            var sampledPower = false
+            var sampledGPU = false
             func take(_ kind: MonitorSamplingKind) -> Bool {
                 let sample = MonitorSamplingPolicy.shouldSample(kind,
                                                                 tick: tick,
                                                                 intervalSeconds: intervalSeconds,
                                                                 foreground: foregroundSampling,
                                                                 forced: forcing)
-                if sample { sampledAnything = true }
+                if sample {
+                    sampledAnything = true
+                    switch kind {
+                    case .cpu: sampledCPU = true
+                    case .memory: sampledMemory = true
+                    case .network: sampledNetwork = true
+                    case .power, .powerDraw: sampledPower = true
+                    case .gpuUsage, .gpuUsageMenuBar: sampledGPU = true
+                    default: break
+                    }
+                }
                 return sample
+            }
+
+            // Clear cached scalar readings whenever their metric family leaves
+            // the active plan so closing the panel never carries stale spikes
+            // (e.g. a download rate or old CPU/RAM) into subsequent ticks.
+            if !plan.needCPU {
+                self.lastCPUUsage = nil
+                self.lastCPUUsageReadAt = nil
+                self.missedCPUUsageSamples = 0
+            }
+            if !plan.needMemory {
+                self.memoryCache = nil
+            }
+            if !plan.needNetwork {
+                self.lastNetRxBytesPerSec = 0
+                self.lastNetTxBytesPerSec = 0
+                self.lastNetworkBytesPerSec = 0
+            }
+            if !plan.needPower {
+                self.lastPowerReading = nil
+            }
+            if !plan.needGPUUsage {
+                self.lastGPUUsage = nil
+                self.missedGPUUsageSamples = 0
+            }
+            if !(plan.needPower || plan.needCPU || plan.needGPUUsage) {
+                self.lastPowerSnapshot = nil
+                self.lastSMCFallbackWatts = nil
+                self.lastSMCFallbackWattsAt = -.infinity
             }
 
             // Per-core reads that pause restart from a fresh baseline.
@@ -1110,34 +1159,48 @@ final class SystemMonitor: ObservableObject {
             var updatedAuxTelemetry = false
 
             if plan.needPower || plan.needCPU || plan.needGPUUsage {
+                let powerStride = TimeInterval(foregroundSampling ? max(1, intervalSeconds) : max(15, intervalSeconds))
                 if self.lastPowerSnapshot == nil
-                    || now - self.lastPowerSnapshotAt >= TimeInterval(max(1, intervalSeconds)) {
-                    var sampledPower = AppleSiliconIOReportSampler.shared.sample()
-                    if !sampledPower.isHardwareBacked, let smcPower = next.power,
-                       (smcPower.systemWatts != nil || smcPower.cpuWatts != nil || smcPower.gpuWatts != nil) {
-                        let cpuW = max(0, smcPower.cpuWatts ?? 0)
-                        let gpuW = max(0, smcPower.gpuWatts ?? 0)
-                        let pkgW = max(0, smcPower.systemWatts ?? (cpuW + gpuW))
-                        sampledPower = AppleSiliconPowerSnapshot(
-                            cpuWatts: cpuW,
-                            gpuWatts: gpuW,
-                            aneWatts: 0,
-                            packageWatts: pkgW,
-                            aneActivityPercent: 0,
-                            isHardwareBacked: true
-                        )
+                    || now - self.lastPowerSnapshotAt >= powerStride {
+                    let ioReport = AppleSiliconIOReportSampler.shared.sample()
+                    var freshSMC: SystemMonitorTelemetryPolicy.WattsReading? = nil
+                    if !ioReport.isHardwareBacked {
+                        if let power = next.power {
+                            freshSMC = SystemMonitorTelemetryPolicy.WattsReading(
+                                systemWatts: power.systemWatts,
+                                cpuWatts: power.cpuWatts,
+                                gpuWatts: power.gpuWatts
+                            )
+                        } else if !plan.needPower,
+                                  let powerSampler = self.powerSampler,
+                                  now - self.lastSMCFallbackWattsAt >= powerStride {
+                            self.lastSMCFallbackWattsAt = now
+                            let watts = powerSampler.sampleWattsOnly()
+                            freshSMC = SystemMonitorTelemetryPolicy.WattsReading(
+                                systemWatts: watts.system,
+                                cpuWatts: watts.cpu,
+                                gpuWatts: watts.gpu
+                            )
+                        }
                     }
+                    let resolved = SystemMonitorTelemetryPolicy.resolvePowerSnapshot(
+                        ioReport: ioReport,
+                        freshSMC: freshSMC,
+                        cachedSMC: self.lastSMCFallbackWatts
+                    )
+                    self.lastSMCFallbackWatts = resolved.updatedCache
+                    let nextPower = resolved.snapshot
                     let previous = self.lastPowerSnapshot
                     let changed = previous == nil
-                        || previous?.isHardwareBacked != sampledPower.isHardwareBacked
-                        || abs((previous?.packageWatts ?? -1) - sampledPower.packageWatts) >= 0.05
-                        || abs((previous?.cpuWatts ?? -1) - sampledPower.cpuWatts) >= 0.05
-                        || abs((previous?.gpuWatts ?? -1) - sampledPower.gpuWatts) >= 0.05
-                        || abs((previous?.aneWatts ?? -1) - sampledPower.aneWatts) >= 0.05
-                        || abs((previous?.aneActivityPercent ?? -1) - sampledPower.aneActivityPercent) >= 0.5
-                    self.lastPowerSnapshot = sampledPower
+                        || previous?.isHardwareBacked != nextPower.isHardwareBacked
+                        || abs((previous?.packageWatts ?? -1) - nextPower.packageWatts) >= 0.05
+                        || abs((previous?.cpuWatts ?? -1) - nextPower.cpuWatts) >= 0.05
+                        || abs((previous?.gpuWatts ?? -1) - nextPower.gpuWatts) >= 0.05
+                        || abs((previous?.aneWatts ?? -1) - nextPower.aneWatts) >= 0.05
+                        || abs((previous?.aneActivityPercent ?? -1) - nextPower.aneActivityPercent) >= 0.5
+                    self.lastPowerSnapshot = nextPower
                     self.lastPowerSnapshotAt = now
-                    nextPowerSnapshot = sampledPower
+                    nextPowerSnapshot = nextPower
                     if changed {
                         updatedAuxTelemetry = true
                     }
@@ -1157,33 +1220,47 @@ final class SystemMonitor: ObservableObject {
                 }
             }
 
-            if sampledAnything {
-                let cpuPct = min(100.0, max(0.0, (next.cpuUsage ?? self.lastCPUUsage ?? 0) * 100.0))
-                let gpuPct = min(100.0, max(0.0, (next.gpuUsage ?? self.lastGPUUsage ?? 0) * 100.0))
-                let memPct: Double = {
-                    if let used = next.memoryUsed ?? self.memoryCache?.used,
-                       let total = next.memoryTotal ?? self.memoryCache?.total,
-                       total > 0 {
-                        return min(100.0, max(0.0, (Double(used) / Double(total)) * 100.0))
-                    }
-                    switch next.memoryPressure {
-                    case .critical: return 90
-                    case .warning: return 70
-                    case .normal, .unknown: return 40
-                    }
-                }()
-                let hardwarePackageWatts = nextPowerSnapshot?.isHardwareBacked == true
-                    ? nextPowerSnapshot?.packageWatts
-                    : nil
-                let watts = hardwarePackageWatts ?? next.power?.systemWatts ?? 0
-                TelemetryHistoryRing.shared.record(
-                    cpuPercent: cpuPct,
-                    gpuPercent: gpuPct,
-                    memoryPercent: memPct,
-                    netRxBytesPerSec: self.lastNetRxBytesPerSec,
-                    netTxBytesPerSec: self.lastNetTxBytesPerSec,
-                    watts: watts
-                )
+            let resolvedMemoryPercent: Double? = {
+                guard plan.needMemory else { return nil }
+                if let used = next.memoryUsed ?? self.memoryCache?.used,
+                   let total = next.memoryTotal ?? self.memoryCache?.total,
+                   total > 0 {
+                    return min(100.0, max(0.0, (Double(used) / Double(total)) * 100.0))
+                }
+                switch next.memoryPressure {
+                case .critical: return 90
+                case .warning: return 70
+                case .normal: return 40
+                case .unknown: return nil
+                }
+            }()
+            let hardwarePackageWatts = nextPowerSnapshot?.isHardwareBacked == true
+                ? nextPowerSnapshot?.packageWatts
+                : nil
+            let telemetryWatts = hardwarePackageWatts
+                ?? next.power?.systemWatts
+                ?? self.lastPowerReading?.systemWatts
+                ?? self.lastSMCFallbackWatts?.systemWatts
+            let telemetryInput = SystemMonitorTelemetryPolicy.TelemetrySampleInput(
+                planNeedsCPU: plan.needCPU,
+                planNeedsGPU: plan.needGPUUsage,
+                planNeedsMemory: plan.needMemory,
+                planNeedsNetwork: plan.needNetwork,
+                planNeedsPower: plan.needPower,
+                sampledCPU: sampledCPU,
+                sampledGPU: sampledGPU,
+                sampledMemory: sampledMemory,
+                sampledNetwork: sampledNetwork,
+                sampledPower: sampledPower,
+                cpuFraction: plan.needCPU ? (next.cpuUsage ?? self.lastCPUUsage) : nil,
+                gpuFraction: plan.needGPUUsage ? (next.gpuUsage ?? self.lastGPUUsage) : nil,
+                memoryPercent: resolvedMemoryPercent,
+                netRxBytesPerSec: plan.needNetwork ? self.lastNetRxBytesPerSec : 0,
+                netTxBytesPerSec: plan.needNetwork ? self.lastNetTxBytesPerSec : 0,
+                watts: telemetryWatts
+            )
+            if let decision = SystemMonitorTelemetryPolicy.decideTelemetrySample(telemetryInput) {
+                TelemetryHistoryRing.shared.record(decision.point, persistHistory: decision.persistHistory)
             }
 
             DispatchQueue.main.async {

@@ -7,6 +7,7 @@ enum Wave5V3MenuBarAndIOReportContract {
     static func run(_ suite: TestSuite) {
         testIOReportAndSMARTReaders(suite)
         testTelemetrySevenDaySQLiteRoundTrip(suite)
+        testTelemetryRecordingAndIntelPowerPolicy(suite)
         testMenuBarOverflowPanelAndUIContracts(suite)
     }
 
@@ -66,6 +67,129 @@ enum Wave5V3MenuBarAndIOReportContract {
 
         suite.expect(!sevenDaySeries.isEmpty,
                      "TelemetryHistoryRing persists and reloads 7d samples from SQLite WAL store")
+    }
+
+    private static func testTelemetryRecordingAndIntelPowerPolicy(_ suite: TestSuite) {
+        // 1. Non-telemetry ticks (peripheralBattery, disk, temp, fan, USB) never record.
+        let peripheralOnly = SystemMonitorTelemetryPolicy.TelemetrySampleInput()
+        suite.expect(SystemMonitorTelemetryPolicy.decideTelemetrySample(peripheralOnly) == nil,
+                     "peripheralBattery/disk/temp-only ticks never write telemetry samples")
+
+        // 2. Battery/power-only ticks without CPU+Memory never poison SQLite with 0% rows.
+        let batteryOnly = SystemMonitorTelemetryPolicy.TelemetrySampleInput(
+            planNeedsPower: true,
+            sampledPower: true,
+            watts: 18.4
+        )
+        suite.expect(SystemMonitorTelemetryPolicy.decideTelemetrySample(batteryOnly) == nil,
+                     "power-only ticks without CPU and Memory do not write all-zero rows")
+
+        // 3. CPU tick 0 before baseline produces nil cpuFraction -> skipped.
+        let cpuTickZero = SystemMonitorTelemetryPolicy.TelemetrySampleInput(
+            planNeedsCPU: true,
+            sampledCPU: true,
+            cpuFraction: nil
+        )
+        suite.expect(SystemMonitorTelemetryPolicy.decideTelemetrySample(cpuTickZero) == nil,
+                     "initial CPU baseline tick with nil cpuFraction does not record empty sample")
+
+        // 4. CPU-only menu bar pin updates 1m sparkline without writing 0% RAM dips to 1h/24h/7d SQLite.
+        let cpuOnly = SystemMonitorTelemetryPolicy.TelemetrySampleInput(
+            planNeedsCPU: true,
+            sampledCPU: true,
+            cpuFraction: 0.42,
+            netRxBytesPerSec: 20_000_000
+        )
+        let cpuOnlyDecision = SystemMonitorTelemetryPolicy.decideTelemetrySample(cpuOnly)
+        suite.expect(cpuOnlyDecision != nil
+                     && cpuOnlyDecision?.persistHistory == false
+                     && abs((cpuOnlyDecision?.point.cpu ?? 0) - 42.0) < 0.01
+                     && cpuOnlyDecision?.point.netRxBytesPerSec == 0,
+                     "CPU-only pin updates 1m sparkline, omits stale network when !planNeedsNetwork, and does not persist 0% RAM to SQLite")
+
+        // 5. Network-only idle tick at 0 B/s records 1m decay without touching SQLite.
+        let netIdle = SystemMonitorTelemetryPolicy.TelemetrySampleInput(
+            planNeedsNetwork: true,
+            sampledNetwork: true,
+            netRxBytesPerSec: 0,
+            netTxBytesPerSec: 0
+        )
+        let netIdleDecision = SystemMonitorTelemetryPolicy.decideTelemetrySample(netIdle)
+        suite.expect(netIdleDecision != nil
+                     && netIdleDecision?.persistHistory == false
+                     && netIdleDecision?.point.networkBytesPerSec == 0,
+                     "Network-only idle tick at 0 B/s updates 1m sparkline decay without polluting SQLite")
+
+        // 6. Core system tick (CPU + Memory + Intel SMC watts) persists to 1h/24h/7d history.
+        let fullTick = SystemMonitorTelemetryPolicy.TelemetrySampleInput(
+            planNeedsCPU: true,
+            planNeedsGPU: true,
+            planNeedsMemory: true,
+            planNeedsNetwork: true,
+            planNeedsPower: true,
+            sampledCPU: true,
+            sampledMemory: true,
+            cpuFraction: 0.35,
+            gpuFraction: 0.12,
+            memoryPercent: 64.5,
+            netRxBytesPerSec: 1_500,
+            netTxBytesPerSec: 500,
+            watts: 31.2
+        )
+        let fullDecision = SystemMonitorTelemetryPolicy.decideTelemetrySample(fullTick)
+        suite.expect(fullDecision?.persistHistory == true
+                     && abs((fullDecision?.point.cpu ?? 0) - 35.0) < 0.01
+                     && abs((fullDecision?.point.memory ?? 0) - 64.5) < 0.01
+                     && abs((fullDecision?.point.watts ?? 0) - 31.2) < 0.01,
+                     "core CPU+Memory tick persists real CPU, Memory, Network, and SMC Watts")
+
+        // 7. Ring honors persistHistory == false (updates 1m only, leaves 1h/24h/7d empty).
+        let sparkRing = TelemetryHistoryRing()
+        if let decision = cpuOnlyDecision {
+            sparkRing.record(decision.point, persistHistory: decision.persistHistory)
+        }
+        suite.expect(sparkRing.points(for: .oneMinute).count == 1
+                     && sparkRing.points(for: .oneHour).isEmpty
+                     && sparkRing.points(for: .twentyFourHours).isEmpty
+                     && sparkRing.points(for: .sevenDays).isEmpty,
+                     "TelemetryHistoryRing.record(persistHistory: false) updates 1m sparkline only")
+
+        // 8. Intel SMC power resolution falls back cleanly and survives transient empty SMC reads.
+        let unavailableIOReport = AppleSiliconPowerSnapshot.unavailable()
+        let freshIntel = SystemMonitorTelemetryPolicy.WattsReading(systemWatts: 44.5, cpuWatts: 22.0, gpuWatts: 8.5)
+        let firstResolved = SystemMonitorTelemetryPolicy.resolvePowerSnapshot(
+            ioReport: unavailableIOReport,
+            freshSMC: freshIntel,
+            cachedSMC: nil
+        )
+        suite.expect(firstResolved.snapshot.isHardwareBacked
+                     && abs(firstResolved.snapshot.packageWatts - 44.5) < 0.01
+                     && abs(firstResolved.snapshot.cpuWatts - 22.0) < 0.01
+                     && abs(firstResolved.snapshot.gpuWatts - 8.5) < 0.01
+                     && firstResolved.updatedCache == freshIntel,
+                     "resolvePowerSnapshot populates hardware-backed Intel SMC watts when IOReport is unavailable")
+
+        let transientEmpty = SystemMonitorTelemetryPolicy.WattsReading(systemWatts: nil, cpuWatts: nil, gpuWatts: nil)
+        let secondResolved = SystemMonitorTelemetryPolicy.resolvePowerSnapshot(
+            ioReport: unavailableIOReport,
+            freshSMC: transientEmpty,
+            cachedSMC: firstResolved.updatedCache
+        )
+        suite.expect(secondResolved.snapshot.isHardwareBacked
+                     && abs(secondResolved.snapshot.packageWatts - 44.5) < 0.01,
+                     "resolvePowerSnapshot retains last valid Intel SMC watts across transient empty SMC reads")
+
+        let appleSilicon = AppleSiliconPowerSnapshot(
+            cpuWatts: 6.2, gpuWatts: 3.1, aneWatts: 0.4,
+            packageWatts: 9.7, aneActivityPercent: 12, isHardwareBacked: true
+        )
+        let siliconResolved = SystemMonitorTelemetryPolicy.resolvePowerSnapshot(
+            ioReport: appleSilicon,
+            freshSMC: freshIntel,
+            cachedSMC: firstResolved.updatedCache
+        )
+        suite.expect(siliconResolved.snapshot == appleSilicon,
+                     "resolvePowerSnapshot prefers native hardware-backed IOReport on Apple Silicon")
     }
 
     private static func testMenuBarOverflowPanelAndUIContracts(_ suite: TestSuite) {

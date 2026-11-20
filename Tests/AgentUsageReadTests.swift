@@ -38,6 +38,8 @@ enum AgentUsageReadTests {
 
     enum AgentUsageArchive {
         static func load() -> AgentUsageReadProductionArchive.Contents? { nil }
+        static func loadAndResume(expectedProviders: Set<AgentProvider>, logs: Set<String>, since horizon: Date)
+            -> (store: AgentUsageStore, cursors: [String: AgentLogCursor], unchanged: Bool)? { nil }
         static func resume(_ contents: AgentUsageReadProductionArchive.Contents, logs: Set<String>, since horizon: Date)
             -> (store: AgentUsageStore, cursors: [String: AgentLogCursor], unchanged: Bool) {
             AgentUsageReadProductionArchive.resume(contents, logs: logs, since: horizon)
