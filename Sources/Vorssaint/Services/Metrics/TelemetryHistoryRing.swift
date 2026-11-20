@@ -79,10 +79,12 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
     static let dayCapacity = 1440
     static let sevenDayCapacity = 2016
 
-    private static let autoFlushThreshold = 10
+    private static let autoFlushThreshold = 30
+    private static let walCheckpointFlushCadence = 25
     private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     private var lock = os_unfair_lock()
+    private let sqliteQueue = DispatchQueue(label: "com.tasonai.basalt.telemetry.sqlite", qos: .utility)
     private var minuteRing: [TelemetryPoint] = []
     private var hourRing: [TelemetryPoint] = []
     private var dayRing: [TelemetryPoint] = []
@@ -91,9 +93,16 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
     private var lastDayBucket: TimeInterval = -1
     private var lastSevenDayBucket: TimeInterval = -1
 
+    /// Protected exclusively by `sqliteQueue` — never touched under `lock` so
+    /// SQLite disk I/O never blocks readers or the main thread.
     private var sqliteDB: OpaquePointer?
+    private var sqliteAttached = false
+    private var flushesSinceCheckpoint = 0
     private var pendingInserts: [(horizon: TelemetryHorizon, point: TelemetryPoint)] = []
     private var recordsSinceFlush = 0
+    /// Optional predicate gating `objectWillChange` notifications when no UI
+    /// consumer is visible, avoiding idle SwiftUI redraw churn.
+    var shouldNotifyObservers: (() -> Bool)?
 
     deinit {
         closeSQLiteStore()
@@ -127,15 +136,26 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
             enqueuePendingInsertLocked(horizon: .sevenDays, point: clean)
         }
 
-        if sqliteDB != nil {
+        var batchToFlush: [(horizon: TelemetryHorizon, point: TelemetryPoint)] = []
+        if sqliteAttached {
             recordsSinceFlush += 1
             if recordsSinceFlush >= Self.autoFlushThreshold || pendingInserts.count >= Self.autoFlushThreshold {
-                flushSQLiteStoreLocked()
+                batchToFlush = pendingInserts
+                pendingInserts.removeAll(keepingCapacity: true)
+                recordsSinceFlush = 0
             }
         }
         os_unfair_lock_unlock(&lock)
 
-        notifyObservers()
+        if !batchToFlush.isEmpty {
+            sqliteQueue.async { [weak self] in
+                self?.writeBatchOnSQLiteQueue(batchToFlush)
+            }
+        }
+
+        if shouldNotifyObservers?() ?? true {
+            notifyObservers()
+        }
     }
 
     func record(
@@ -204,45 +224,57 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
         let parentDir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
 
-        os_unfair_lock_lock(&lock)
-        closeSQLiteStoreLocked()
-
-        var db: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(url.path, &db, flags, nil) == SQLITE_OK, let db else {
-            if let db {
-                sqlite3_close(db)
+        let loadedAny = sqliteQueue.sync { () -> Bool in
+            let drained = drainPendingInserts()
+            if !drained.isEmpty {
+                writeBatchOnSQLiteQueue(drained)
             }
+            closeSQLiteHandleOnQueue()
+
+            var db: OpaquePointer?
+            let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+            guard sqlite3_open_v2(url.path, &db, flags, nil) == SQLITE_OK, let db else {
+                if let db { sqlite3_close(db) }
+                os_unfair_lock_lock(&lock)
+                sqliteAttached = false
+                os_unfair_lock_unlock(&lock)
+                return false
+            }
+
+            sqlite3_busy_timeout(db, 500)
+            _ = sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", nil, nil, nil)
+
+            let schemaSQL = """
+            CREATE TABLE IF NOT EXISTS telemetry_samples (
+                horizon TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                cpu REAL NOT NULL,
+                gpu REAL NOT NULL,
+                memory REAL NOT NULL,
+                net_rx REAL NOT NULL,
+                net_tx REAL NOT NULL,
+                watts REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_telemetry_samples_horizon_ts
+                ON telemetry_samples (horizon, timestamp DESC);
+            """
+            guard sqlite3_exec(db, schemaSQL, nil, nil, nil) == SQLITE_OK else {
+                sqlite3_close(db)
+                os_unfair_lock_lock(&lock)
+                sqliteAttached = false
+                os_unfair_lock_unlock(&lock)
+                return false
+            }
+
+            sqliteDB = db
+            flushesSinceCheckpoint = 0
+            let loadedByHorizon = readRingsFromSQLiteOnQueue(db: db)
+            os_unfair_lock_lock(&lock)
+            sqliteAttached = true
+            let merged = applyLoadedRingsLocked(loadedByHorizon)
             os_unfair_lock_unlock(&lock)
-            return
+            return merged
         }
-
-        sqlite3_busy_timeout(db, 500)
-        _ = sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", nil, nil, nil)
-
-        let schemaSQL = """
-        CREATE TABLE IF NOT EXISTS telemetry_samples (
-            horizon TEXT NOT NULL,
-            timestamp REAL NOT NULL,
-            cpu REAL NOT NULL,
-            gpu REAL NOT NULL,
-            memory REAL NOT NULL,
-            net_rx REAL NOT NULL,
-            net_tx REAL NOT NULL,
-            watts REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_telemetry_samples_horizon_ts
-            ON telemetry_samples (horizon, timestamp);
-        """
-        guard sqlite3_exec(db, schemaSQL, nil, nil, nil) == SQLITE_OK else {
-            sqlite3_close(db)
-            os_unfair_lock_unlock(&lock)
-            return
-        }
-
-        sqliteDB = db
-        let loadedAny = loadRingsFromSQLiteLocked(db: db)
-        os_unfair_lock_unlock(&lock)
 
         if loadedAny {
             notifyObservers()
@@ -250,40 +282,55 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
     }
 
     func flushSQLiteStore() {
-        os_unfair_lock_lock(&lock)
-        flushSQLiteStoreLocked()
-        os_unfair_lock_unlock(&lock)
+        let batch = drainPendingInserts()
+        sqliteQueue.sync {
+            guard !batch.isEmpty else { return }
+            writeBatchOnSQLiteQueue(batch)
+        }
     }
 
     func closeSQLiteStore() {
+        let batch = drainPendingInserts()
         os_unfair_lock_lock(&lock)
-        closeSQLiteStoreLocked()
+        sqliteAttached = false
+        recordsSinceFlush = 0
         os_unfair_lock_unlock(&lock)
+
+        sqliteQueue.sync {
+            if !batch.isEmpty {
+                writeBatchOnSQLiteQueue(batch)
+            }
+            closeSQLiteHandleOnQueue()
+        }
     }
 
-    private func closeSQLiteStoreLocked() {
-        flushSQLiteStoreLocked()
+    private func drainPendingInserts() -> [(horizon: TelemetryHorizon, point: TelemetryPoint)] {
+        os_unfair_lock_lock(&lock)
+        let batch = pendingInserts
+        pendingInserts.removeAll(keepingCapacity: true)
+        recordsSinceFlush = 0
+        os_unfair_lock_unlock(&lock)
+        return batch
+    }
+
+    private func closeSQLiteHandleOnQueue() {
         if let db = sqliteDB {
+            _ = sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE);", nil, nil, nil)
             sqlite3_close(db)
             sqliteDB = nil
         }
-        pendingInserts.removeAll(keepingCapacity: false)
-        recordsSinceFlush = 0
     }
 
     private func enqueuePendingInsertLocked(horizon: TelemetryHorizon, point: TelemetryPoint) {
-        guard sqliteDB != nil else { return }
+        guard sqliteAttached else { return }
         pendingInserts.append((horizon: horizon, point: point))
         if pendingInserts.count > 8192 {
             pendingInserts.removeFirst(pendingInserts.count - 8192)
         }
     }
 
-    private func flushSQLiteStoreLocked() {
-        guard let db = sqliteDB, !pendingInserts.isEmpty else {
-            recordsSinceFlush = 0
-            return
-        }
+    private func writeBatchOnSQLiteQueue(_ batch: [(horizon: TelemetryHorizon, point: TelemetryPoint)]) {
+        guard let db = sqliteDB, !batch.isEmpty else { return }
 
         guard sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) == SQLITE_OK else {
             return
@@ -301,7 +348,7 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
         defer { sqlite3_finalize(insertStmt) }
 
         var dirtyHorizons: Set<TelemetryHorizon> = []
-        for entry in pendingInserts {
+        for entry in batch {
             sqlite3_reset(insertStmt)
             sqlite3_clear_bindings(insertStmt)
 
@@ -350,14 +397,17 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
         }
 
         if sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK {
-            pendingInserts.removeAll(keepingCapacity: true)
-            recordsSinceFlush = 0
+            flushesSinceCheckpoint += 1
+            if flushesSinceCheckpoint >= Self.walCheckpointFlushCadence {
+                flushesSinceCheckpoint = 0
+                _ = sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE);", nil, nil, nil)
+            }
         } else {
             _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
         }
     }
 
-    private func loadRingsFromSQLiteLocked(db: OpaquePointer) -> Bool {
+    private func readRingsFromSQLiteOnQueue(db: OpaquePointer) -> [TelemetryHorizon: [TelemetryPoint]] {
         let selectSQL = """
         SELECT timestamp, cpu, gpu, memory, net_rx, net_tx, watts
         FROM telemetry_samples
@@ -367,11 +417,11 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, selectSQL, -1, &stmt, nil) == SQLITE_OK, let stmt else {
-            return false
+            return [:]
         }
         defer { sqlite3_finalize(stmt) }
 
-        var loadedAny = false
+        var loaded: [TelemetryHorizon: [TelemetryPoint]] = [:]
         for horizon in TelemetryHorizon.allCases {
             sqlite3_reset(stmt)
             sqlite3_clear_bindings(stmt)
@@ -400,9 +450,16 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
             }
 
             guard !rows.isEmpty else { continue }
-            loadedAny = true
             rows.reverse()
+            loaded[horizon] = rows
+        }
+        return loaded
+    }
 
+    private func applyLoadedRingsLocked(_ loaded: [TelemetryHorizon: [TelemetryPoint]]) -> Bool {
+        var loadedAny = false
+        for (horizon, rows) in loaded where !rows.isEmpty {
+            loadedAny = true
             switch horizon {
             case .oneMinute:
                 mergeLoaded(rows, into: &minuteRing, capacity: Self.minuteCapacity)
@@ -430,7 +487,15 @@ final class TelemetryHistoryRing: ObservableObject, @unchecked Sendable {
         if ring.isEmpty {
             ring = loaded
         } else {
-            ring = loaded + ring
+            var byTimestamp: [TimeInterval: TelemetryPoint] = [:]
+            byTimestamp.reserveCapacity(loaded.count + ring.count)
+            for point in loaded {
+                byTimestamp[point.timestamp] = point
+            }
+            for point in ring {
+                byTimestamp[point.timestamp] = point
+            }
+            ring = byTimestamp.values.sorted { $0.timestamp < $1.timestamp }
         }
         if ring.count > capacity {
             ring.removeFirst(ring.count - capacity)

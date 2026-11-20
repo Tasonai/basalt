@@ -67,6 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var settingsFloatsForWhatsNew = false
     private var telemetrySleepObserver: NSObjectProtocol?
     private var telemetryWakeObserver: NSObjectProtocol?
+    private var cachePurgeSleepObserver: NSObjectProtocol?
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     // MARK: - Lifecycle
 
@@ -189,10 +191,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if AppFeature.monitorPower.isAvailable, PowerSampler.hasInternalBattery {
             MaxCapacityProbe.shared.refreshIfStale()
         }
-        TrashWatcherService.shared.startWatchingTrash()
-        MediaAutoOptimizerService.shared.syncWithPreferences()
+        if AppFeature.cleaner.isAvailable || AppFeature.uninstaller.isAvailable {
+            TrashWatcherService.shared.startWatchingTrash()
+        }
+        if AppFeature.mediaTools.isAvailable,
+           UserDefaults.standard.bool(forKey: MediaAutoOptimizerService.enabledDefaultsKey) {
+            MediaAutoOptimizerService.shared.syncWithPreferences()
+        }
         MenuBarIconManagerService.shared.syncWithPreferences()
         configureTelemetryPersistence()
+        configureMemoryCachePurging()
         UpdateService.shared.startAutomaticChecks()
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
@@ -380,8 +388,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if AppFeature.clipboardHistory.isAvailable {
             ClipboardHistoryService.shared.flushBeforeTermination()
         }
-        TrashWatcherService.shared.stopWatchingTrash()
-        MediaAutoOptimizerService.shared.stop()
+        if AppFeature.cleaner.isAvailable || AppFeature.uninstaller.isAvailable {
+            TrashWatcherService.shared.stopWatchingTrash()
+        }
+        if AppFeature.mediaTools.isAvailable {
+            MediaAutoOptimizerService.shared.stop()
+        }
         MenuBarIconManagerService.shared.stop()
         if let telemetrySleepObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(telemetrySleepObserver)
@@ -391,15 +403,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             NSWorkspace.shared.notificationCenter.removeObserver(telemetryWakeObserver)
             self.telemetryWakeObserver = nil
         }
+        if let cachePurgeSleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(cachePurgeSleepObserver)
+            self.cachePurgeSleepObserver = nil
+        }
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
         TelemetryHistoryRing.shared.flushSQLiteStore()
         TelemetryHistoryRing.shared.closeSQLiteStore()
         KeepAwakeManager.shared.deactivate(reason: .quit)
     }
 
     private func configureTelemetryPersistence() {
-        // Persists 7d telemetry history to ~/Library/Application Support/Vorssaint/telemetry.sqlite.
         let storeURL = SystemMonitor.defaultTelemetryStoreURL
-        SystemMonitor.shared.attachTelemetryStore(at: storeURL)
+        DispatchQueue.global(qos: .utility).async {
+            SystemMonitor.shared.attachTelemetryStore(at: storeURL)
+        }
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         telemetrySleepObserver = workspaceCenter.addObserver(
             forName: NSWorkspace.willSleepNotification,
@@ -414,7 +433,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             object: nil,
             queue: .main
         ) { _ in
-            SystemMonitor.shared.attachTelemetryStore(at: storeURL)
+            DispatchQueue.global(qos: .utility).async {
+                SystemMonitor.shared.attachTelemetryStore(at: storeURL)
+            }
+        }
+    }
+
+    private func configureMemoryCachePurging() {
+        let purgeCaches = {
+            WindowPreviewProvider.shared.purgeCacheForMemoryPressure()
+            URLCache.shared.removeAllCachedResponses()
+        }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler(handler: purgeCaches)
+        source.resume()
+        memoryPressureSource = source
+
+        cachePurgeSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            purgeCaches()
         }
     }
 

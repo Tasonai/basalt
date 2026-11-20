@@ -688,11 +688,18 @@ write_swift_output_file_map "$APP_OUTPUT_FILE_MAP" "$APP_OBJECT_DIR" "${APP_SOUR
 # each file's compiler parses the whole module again: a clean release took a
 # quarter of an hour. Batches share that work and run on every core, and the
 # optimization stays per file, as before.
-swiftc "${APP_OPTIMIZATION_FLAGS[@]}" -incremental -enable-batch-mode -j "$(sysctl -n hw.logicalcpu)" \
+RELEASE_LINK_FLAGS=()
+if [[ "${APP_OPTIMIZATION_FLAGS[0]:-}" == "-O" ]]; then
+    RELEASE_LINK_FLAGS=(-Xlinker -dead_strip)
+fi
+swiftc "${APP_OPTIMIZATION_FLAGS[@]}" "${RELEASE_LINK_FLAGS[@]}" -incremental -enable-batch-mode -j "$(sysctl -n hw.logicalcpu)" \
     -output-file-map "$APP_OUTPUT_FILE_MAP" \
     -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${VM_STATISTICS_COMPAT_FLAGS[@]}" "${HID_EVENT_SYSTEM_FLAGS[@]}" \
     "${BUILD_VARIANT_FLAGS[@]}" -lsqlite3 \
     "${APP_SOURCES[@]}" -o "build/$EXECUTABLE"
+if [[ "${APP_OPTIMIZATION_FLAGS[0]:-}" == "-O" ]]; then
+    strip -x "build/$EXECUTABLE"
+fi
 
 echo "▸ Compiling protected fan helper…"
 swiftc -O -target "$TARGET" -sdk "$SDK" "${SDK_COMPAT_FLAGS[@]}" "${BUILD_VARIANT_FLAGS[@]}" \

@@ -339,8 +339,12 @@ final class TrashWatcherService: ObservableObject, @unchecked Sendable {
         guard let newestApp = added.last else { return }
         let metadata = Self.readAppBundleMetadata(at: newestApp)
         let libraryDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library", isDirectory: true)
+        let leftovers = Self.relatedLeftovers(bundleID: metadata.bundleID,
+                                              appName: metadata.name,
+                                              libraryDirectory: libraryDir)
         DispatchQueue.main.async { [weak self] in
-            self?.recordTrashedApp(name: metadata.name, bundleID: metadata.bundleID, libraryDirectory: libraryDir)
+            self?.detectedAppName = metadata.name
+            self?.detectedLeftovers = leftovers
         }
     }
 

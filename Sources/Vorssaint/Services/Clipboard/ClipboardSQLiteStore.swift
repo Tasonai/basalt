@@ -286,10 +286,32 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
                 db: handle
             )
             self.db = handle
+            syncFTSRowIDsIfNeededLocked(db: handle)
             enforcePrivatePermissionsLocked()
         } catch {
             Self.logger.error("Failed configuring SQLite schema: \(error.localizedDescription, privacy: .public)")
             sqlite3_close_v2(handle)
+        }
+    }
+
+    private var writesSinceCheckpoint = 0
+
+    /// One-time alignment so `clipboard_fts.rowid == clipboard_items.rowid`,
+    /// enabling O(log N) PK-indexed FTS deletes and upserts instead of full
+    /// FTS5 table scans on `UNINDEXED id`.
+    private func syncFTSRowIDsIfNeededLocked(db: OpaquePointer) {
+        let key = "fts_rowid_synced_v1"
+        guard metaValueLocked(forKey: key, db: db) != "1" else { return }
+        _ = executeTransactionLocked(db: db) {
+            try executeSQL("DELETE FROM clipboard_fts;", db: db)
+            try executeSQL(
+                """
+                INSERT INTO clipboard_fts (rowid, id, plain_text, source_app_name, content_kind)
+                SELECT rowid, id, plain_text, source_app_name, content_kind FROM clipboard_items;
+                """,
+                db: db
+            )
+            try setMetaValueLocked("1", forKey: key, db: db)
         }
     }
 
@@ -307,6 +329,11 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
             try executeSQL("BEGIN IMMEDIATE TRANSACTION;", db: db)
             try work()
             try executeSQL("COMMIT TRANSACTION;", db: db)
+            writesSinceCheckpoint += 1
+            if writesSinceCheckpoint >= 100 {
+                writesSinceCheckpoint = 0
+                _ = sqlite3_exec(db, "PRAGMA wal_checkpoint(PASSIVE);", nil, nil, nil)
+            }
             enforcePrivatePermissionsLocked()
             return true
         } catch {
@@ -317,7 +344,8 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
     }
 
     private func upsertRowsLocked(_ rows: [ClipboardSQLiteRow], db: OpaquePointer) throws {
-        let deleteFTSSQL = "DELETE FROM clipboard_fts WHERE id = ?;"
+        let lookupRowIDSQL = "SELECT rowid FROM clipboard_items WHERE id = ? LIMIT 1;"
+        let deleteFTSByRowIDSQL = "DELETE FROM clipboard_fts WHERE rowid = ?;"
         let upsertItemSQL = """
             INSERT OR REPLACE INTO clipboard_items (
                 id, content_kind, plain_text, source_app_bundle_id,
@@ -325,30 +353,39 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """
         let insertFTSSQL = """
-            INSERT INTO clipboard_fts (id, plain_text, source_app_name, content_kind)
-            VALUES (?, ?, ?, ?);
+            INSERT OR REPLACE INTO clipboard_fts (rowid, id, plain_text, source_app_name, content_kind)
+            VALUES (?, ?, ?, ?, ?);
             """
 
+        var lookupStmt: OpaquePointer?
         var deleteFTSStmt: OpaquePointer?
         var upsertItemStmt: OpaquePointer?
         var insertFTSStmt: OpaquePointer?
         defer {
+            if let lookupStmt { sqlite3_finalize(lookupStmt) }
             if let deleteFTSStmt { sqlite3_finalize(deleteFTSStmt) }
             if let upsertItemStmt { sqlite3_finalize(upsertItemStmt) }
             if let insertFTSStmt { sqlite3_finalize(insertFTSStmt) }
         }
 
-        try prepareStatement(deleteFTSSQL, db: db, into: &deleteFTSStmt)
+        try prepareStatement(lookupRowIDSQL, db: db, into: &lookupStmt)
+        try prepareStatement(deleteFTSByRowIDSQL, db: db, into: &deleteFTSStmt)
         try prepareStatement(upsertItemSQL, db: db, into: &upsertItemStmt)
         try prepareStatement(insertFTSSQL, db: db, into: &insertFTSStmt)
 
         for row in rows {
             let idString = row.id.uuidString
 
-            sqlite3_reset(deleteFTSStmt)
-            sqlite3_clear_bindings(deleteFTSStmt)
-            bindText(deleteFTSStmt, index: 1, value: idString)
-            try stepDone(deleteFTSStmt, db: db)
+            sqlite3_reset(lookupStmt)
+            sqlite3_clear_bindings(lookupStmt)
+            bindText(lookupStmt, index: 1, value: idString)
+            if sqlite3_step(lookupStmt) == SQLITE_ROW {
+                let existingRowID = sqlite3_column_int64(lookupStmt, 0)
+                sqlite3_reset(deleteFTSStmt)
+                sqlite3_clear_bindings(deleteFTSStmt)
+                sqlite3_bind_int64(deleteFTSStmt, 1, existingRowID)
+                try stepDone(deleteFTSStmt, db: db)
+            }
 
             sqlite3_reset(upsertItemStmt)
             sqlite3_clear_bindings(upsertItemStmt)
@@ -362,12 +399,14 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
             sqlite3_bind_double(upsertItemStmt, 8, row.createdAt.timeIntervalSince1970)
             try stepDone(upsertItemStmt, db: db)
 
+            let itemRowID = sqlite3_last_insert_rowid(db)
             sqlite3_reset(insertFTSStmt)
             sqlite3_clear_bindings(insertFTSStmt)
-            bindText(insertFTSStmt, index: 1, value: idString)
-            bindText(insertFTSStmt, index: 2, value: row.plainText)
-            bindText(insertFTSStmt, index: 3, value: row.sourceAppName)
-            bindText(insertFTSStmt, index: 4, value: row.contentKind)
+            sqlite3_bind_int64(insertFTSStmt, 1, itemRowID)
+            bindText(insertFTSStmt, index: 2, value: idString)
+            bindText(insertFTSStmt, index: 3, value: row.plainText)
+            bindText(insertFTSStmt, index: 4, value: row.sourceAppName)
+            bindText(insertFTSStmt, index: 5, value: row.contentKind)
             try stepDone(insertFTSStmt, db: db)
         }
     }
@@ -380,23 +419,19 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
                 source_app_name, is_pinned, byte_count, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """
-        let deleteFTSSQL = "DELETE FROM clipboard_fts WHERE id = ?;"
         let insertFTSSQL = """
-            INSERT INTO clipboard_fts (id, plain_text, source_app_name, content_kind)
-            VALUES (?, ?, ?, ?);
+            INSERT OR REPLACE INTO clipboard_fts (rowid, id, plain_text, source_app_name, content_kind)
+            VALUES (?, ?, ?, ?, ?);
             """
 
         var insertItemStmt: OpaquePointer?
-        var deleteFTSStmt: OpaquePointer?
         var insertFTSStmt: OpaquePointer?
         defer {
             if let insertItemStmt { sqlite3_finalize(insertItemStmt) }
-            if let deleteFTSStmt { sqlite3_finalize(deleteFTSStmt) }
             if let insertFTSStmt { sqlite3_finalize(insertFTSStmt) }
         }
 
         try prepareStatement(insertItemSQL, db: db, into: &insertItemStmt)
-        try prepareStatement(deleteFTSSQL, db: db, into: &deleteFTSStmt)
         try prepareStatement(insertFTSSQL, db: db, into: &insertFTSStmt)
 
         var inserted = 0
@@ -417,18 +452,14 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
 
             if sqlite3_changes(db) > 0 {
                 inserted += 1
-
-                sqlite3_reset(deleteFTSStmt)
-                sqlite3_clear_bindings(deleteFTSStmt)
-                bindText(deleteFTSStmt, index: 1, value: idString)
-                try stepDone(deleteFTSStmt, db: db)
-
+                let itemRowID = sqlite3_last_insert_rowid(db)
                 sqlite3_reset(insertFTSStmt)
                 sqlite3_clear_bindings(insertFTSStmt)
-                bindText(insertFTSStmt, index: 1, value: idString)
-                bindText(insertFTSStmt, index: 2, value: row.plainText)
-                bindText(insertFTSStmt, index: 3, value: row.sourceAppName)
-                bindText(insertFTSStmt, index: 4, value: row.contentKind)
+                sqlite3_bind_int64(insertFTSStmt, 1, itemRowID)
+                bindText(insertFTSStmt, index: 2, value: idString)
+                bindText(insertFTSStmt, index: 3, value: row.plainText)
+                bindText(insertFTSStmt, index: 4, value: row.sourceAppName)
+                bindText(insertFTSStmt, index: 5, value: row.contentKind)
                 try stepDone(insertFTSStmt, db: db)
             }
         }
@@ -436,16 +467,23 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
     }
 
     private func deleteByIDLocked(idString: String, db: OpaquePointer) throws {
+        var lookupStmt: OpaquePointer?
         var deleteFTSStmt: OpaquePointer?
         var deleteItemStmt: OpaquePointer?
         defer {
+            if let lookupStmt { sqlite3_finalize(lookupStmt) }
             if let deleteFTSStmt { sqlite3_finalize(deleteFTSStmt) }
             if let deleteItemStmt { sqlite3_finalize(deleteItemStmt) }
         }
 
-        try prepareStatement("DELETE FROM clipboard_fts WHERE id = ?;", db: db, into: &deleteFTSStmt)
-        bindText(deleteFTSStmt, index: 1, value: idString)
-        try stepDone(deleteFTSStmt, db: db)
+        try prepareStatement("SELECT rowid FROM clipboard_items WHERE id = ? LIMIT 1;", db: db, into: &lookupStmt)
+        bindText(lookupStmt, index: 1, value: idString)
+        if sqlite3_step(lookupStmt) == SQLITE_ROW {
+            let rowID = sqlite3_column_int64(lookupStmt, 0)
+            try prepareStatement("DELETE FROM clipboard_fts WHERE rowid = ?;", db: db, into: &deleteFTSStmt)
+            sqlite3_bind_int64(deleteFTSStmt, 1, rowID)
+            try stepDone(deleteFTSStmt, db: db)
+        }
 
         try prepareStatement("DELETE FROM clipboard_items WHERE id = ?;", db: db, into: &deleteItemStmt)
         bindText(deleteItemStmt, index: 1, value: idString)
@@ -458,15 +496,15 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
         let excess = total - maxCapacity
 
         let deleteFTSExcessSQL = """
-            DELETE FROM clipboard_fts WHERE id IN (
-                SELECT id FROM clipboard_items
+            DELETE FROM clipboard_fts WHERE rowid IN (
+                SELECT rowid FROM clipboard_items
                 ORDER BY is_pinned ASC, created_at ASC
                 LIMIT ?
             );
             """
         let deleteItemsExcessSQL = """
-            DELETE FROM clipboard_items WHERE id IN (
-                SELECT id FROM clipboard_items
+            DELETE FROM clipboard_items WHERE rowid IN (
+                SELECT rowid FROM clipboard_items
                 ORDER BY is_pinned ASC, created_at ASC
                 LIMIT ?
             );
@@ -534,7 +572,8 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
             SELECT id, content_kind, plain_text, source_app_bundle_id,
                    source_app_name, is_pinned, byte_count, created_at
             FROM clipboard_items
-            ORDER BY created_at DESC;
+            ORDER BY created_at DESC
+            LIMIT 2000;
             """
         var stmt: OpaquePointer?
         defer { if let stmt { sqlite3_finalize(stmt) } }
@@ -542,8 +581,10 @@ final class ClipboardSQLiteStore: @unchecked Sendable {
             return []
         }
 
+        let deadline = CFAbsoluteTimeGetCurrent() + 0.15
         var results: [ClipboardSQLiteRow] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
+            if CFAbsoluteTimeGetCurrent() >= deadline { break }
             guard let row = readRow(from: stmt) else { continue }
             let matched: Bool
             if let regex {

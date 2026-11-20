@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Vorssaint
 
+import AppKit
 import Combine
 import Darwin
 import Foundation
@@ -159,6 +160,9 @@ final class SystemMonitor: ObservableObject {
     private var notchAccessoryMonitoring = false
     private var menuBarActive = false
     private var alertsActive = false
+    private var displaysAsleep = false
+    private var sessionActive = SessionActivity.shared.isActive
+    private var screenSleepObservers: [NSObjectProtocol] = []
     private var refreshInFlight = false
     private var pendingRefresh = false
     private var pendingRefreshSuppressesGPU = false
@@ -267,11 +271,45 @@ final class SystemMonitor: ObservableObject {
                 self.refresh(suppressImmediateGPU: true)
             }
         }
+        TelemetryHistoryRing.shared.shouldNotifyObservers = { [weak self] in
+            guard let self else { return false }
+            return self.fullMonitorVisible || self.menuPanelNeeds.any
+                || self.notchDetailNeeds.any || self.notchVisible
+        }
+        SessionActivity.shared.onChange { [weak self] active in
+            DispatchQueue.main.async {
+                guard let self, self.sessionActive != active else { return }
+                self.sessionActive = active
+                if active && !self.displaysAsleep {
+                    self.ensureTimer()
+                    if self.shouldSample() { self.refresh(suppressImmediateGPU: true) }
+                } else {
+                    self.stopTimerIfIdle()
+                }
+            }
+        }
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        screenSleepObservers = [
+            wsCenter.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.displaysAsleep = true
+                self.stopTimerIfIdle()
+            },
+            wsCenter.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.displaysAsleep = false
+                self.ensureTimer()
+                if self.shouldSample() { self.refresh(suppressImmediateGPU: true) }
+            },
+        ]
     }
 
     deinit {
         if let powerSourceRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), powerSourceRunLoopSource, .defaultMode)
+        }
+        for observer in screenSleepObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
     }
 
@@ -305,7 +343,7 @@ final class SystemMonitor: ObservableObject {
             guard let context else { return }
             let monitor = Unmanaged<SystemMonitor>.fromOpaque(context).takeUnretainedValue()
             DispatchQueue.main.async {
-                guard monitor.shouldRun,
+                guard monitor.shouldSample(),
                       monitor.currentPlan(defaults: .standard).needPower else { return }
                 monitor.refresh(forcing: [.power, .powerDraw])
             }
@@ -521,7 +559,7 @@ final class SystemMonitor: ObservableObject {
     private var shouldRun: Bool { fullMonitorVisible || menuPanelNeeds.any || notchDetailNeeds.any || notchVisible || notchAccessoryMonitoring || menuBarActive || alertsActive }
 
     private func shouldSample(defaults: UserDefaults = .standard) -> Bool {
-        shouldRun && currentPlan(defaults: defaults).any
+        sessionActive && !displaysAsleep && shouldRun && currentPlan(defaults: defaults).any
     }
 
     private struct SamplingPlan: Equatable {
@@ -685,7 +723,7 @@ final class SystemMonitor: ObservableObject {
     }
 
     private func syncPeripheralBatterySampling() {
-        let enabled = shouldRun && currentPlan(defaults: .standard).needPeripheralBattery
+        let enabled = sessionActive && !displaysAsleep && shouldRun && currentPlan(defaults: .standard).needPeripheralBattery
         if enabled != peripheralSamplingEnabled { peripheralSampleDue = enabled }
         peripheralSamplingEnabled = enabled
         peripheralBatterySampler.setEnabled(enabled)
@@ -765,7 +803,7 @@ final class SystemMonitor: ObservableObject {
         let defaults = UserDefaults.standard
         let plan = currentPlan(defaults: defaults)
         syncPeripheralBatterySampling()
-        guard plan.any else {
+        guard sessionActive, !displaysAsleep, plan.any else {
             stopTimerIfIdle()
             return
         }

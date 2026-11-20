@@ -41,8 +41,28 @@ final class URLCleanerService: ObservableObject {
     private var lastChangeCount = 0
     private var pollInFlight = false
     private var pollToken: PollToken?
+    private var displaysAsleep = false
+    private var displaySleepObservers: [NSObjectProtocol] = []
 
-    private init() {}
+    private init() {
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        displaySleepObservers = [
+            wsCenter.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.displaysAsleep = true
+            },
+            wsCenter.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.displaysAsleep = false
+                if self.isRunning { self.cleanClipboardIfNeeded() }
+            },
+        ]
+    }
+
+    deinit {
+        for observer in displaySleepObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+    }
 
     func syncWithPreferences() {
         if AppFeature.urlCleaner.isAvailable, UserDefaults.standard.bool(forKey: DefaultsKey.urlCleanerEnabled) {
@@ -118,7 +138,7 @@ final class URLCleanerService: ObservableObject {
     }
 
     private func cleanClipboardIfNeeded() {
-        guard !pollInFlight else { return }
+        guard !pollInFlight, !displaysAsleep, SessionActivity.shared.isActive else { return }
         let sinceChangeCount = lastChangeCount
         let token = PollToken()
         pollToken = token

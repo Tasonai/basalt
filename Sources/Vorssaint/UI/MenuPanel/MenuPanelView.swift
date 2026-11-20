@@ -344,7 +344,9 @@ struct MenuPanelView: View {
     @ViewBuilder
     private func section(for id: PanelSectionID, collapsible: Bool = true) -> some View {
         switch id {
-        case .keepAwake: KeepAwakeCard(collapsible: collapsible)
+        case .keepAwake:
+            KeepAwakeCard(collapsible: collapsible,
+                          panelVisible: notchSize != nil || panelFocus.popoverIsVisible)
         case .brightness: if showBrightness { BrightnessSection(collapsible: collapsible) }
         case .mixer: if showMixer { mixerOrPrioritySection(collapsible: collapsible) }
         case .system:
@@ -3386,6 +3388,7 @@ struct KeepAwakeCard: View {
         )
     }
     var collapsible = true
+    var panelVisible = true
 
     var body: some View {
         // The collapsible header supplies the "Keep awake" title, so the card's
@@ -3444,12 +3447,18 @@ struct KeepAwakeCard: View {
 
                 // Battery protection ends a session the moment it starts, so say why a chip
                 // seems to do nothing.
-                TimelineView(.periodic(from: .now, by: 30)) { _ in
-                    if let percent = awake.batteryProtectionPercent() {
-                        Label(batteryNote(percent), systemImage: "battery.25percent")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.orange)
+                if panelVisible {
+                    TimelineView(.periodic(from: .now, by: 30)) { _ in
+                        if let percent = awake.batteryProtectionPercent() {
+                            Label(batteryNote(percent), systemImage: "battery.25percent")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.orange)
+                        }
                     }
+                } else if let percent = awake.batteryProtectionPercent() {
+                    Label(batteryNote(percent), systemImage: "battery.25percent")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
                 }
 
                 optionsDisclosure
@@ -3664,7 +3673,11 @@ struct KeepAwakeCard: View {
                 if awake.sessionTrigger == .automation {
                     Text(automationStrings.activeStatus(for: awake.activeAutomationConditions))
                 } else if let end = awake.endDate {
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    if panelVisible {
+                        TimelineView(.periodic(from: .now, by: 1)) { _ in
+                            Text("\(l10n.s.keepAwakeEndsIn) \(Self.remainingText(until: end))")
+                        }
+                    } else {
                         Text("\(l10n.s.keepAwakeEndsIn) \(Self.remainingText(until: end))")
                     }
                 } else {
@@ -3699,7 +3712,12 @@ struct KeepAwakeCard: View {
                 .opacity(selected && awake.endDate != nil ? 0 : 1)
                 .overlay {
                     if selected, let end = awake.endDate {
-                        TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        if panelVisible {
+                            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                                Text(Self.countdownText(until: end))
+                                    .fixedSize()
+                            }
+                        } else {
                             Text(Self.countdownText(until: end))
                                 .fixedSize()
                         }

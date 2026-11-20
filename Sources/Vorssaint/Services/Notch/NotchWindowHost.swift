@@ -34,7 +34,10 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
     private var targetUsesGlass = false
     private var mouseEventsBeforeHide: Bool?
     private var frameProbe: NotchFrameProbe?
+    private static let missionControlQueue = DispatchQueue(label: "com.tasonai.basalt.notch.mission-control", qos: .utility)
     private var missionControlTimer: Timer?
+    private var missionControlCheckInFlight = false
+    private var activeSpaceObserver: NSObjectProtocol?
     private var concealedForMissionControl = false
     private var missionControlAlpha: CGFloat = 1
     private var missionControlMouseEvents = false
@@ -101,6 +104,21 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
         appliedFrame = panel.frame
         overlaySpace?.add(panel)
         panel.visibilityDidChange = { [weak self] in self?.syncMissionControlMonitoring() }
+        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.panel.isVisible || self.concealedForMissionControl else { return }
+            self.lastMissionControlCheck = -.infinity
+            self.handleMissionControlTimerTick()
+        }
+    }
+
+    deinit {
+        if let activeSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
+        }
     }
 
     /// Whether leaving content is fading out with the shape rather than hidden at once.
@@ -662,7 +680,7 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
     }
 
     private var missionControlCheckInterval: TimeInterval {
-        overviewWasVisible || concealedForMissionControl ? 0.08 : 0.25
+        overviewWasVisible || concealedForMissionControl ? 0.08 : 0.75
     }
 
     private func updateMissionControlTimer() {
@@ -675,11 +693,37 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
         if missionControlTimer?.timeInterval != interval {
             missionControlTimer?.invalidate()
             let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-                self?.refreshMissionControlState()
+                self?.handleMissionControlTimerTick()
             }
             timer.tolerance = interval / 2
             missionControlTimer = timer
             RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    private func handleMissionControlTimerTick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastMissionControlCheck >= missionControlCheckInterval else { return }
+        guard !missionControlCheckInFlight else { return }
+        lastMissionControlCheck = now
+        missionControlCheckInFlight = true
+        let screen = currentGeometry.screen
+        Self.missionControlQueue.async { [weak self] in
+            let overview = NotchFrameProbe.overviewIsVisible(on: screen)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.missionControlCheckInFlight = false
+                guard self.panel.isVisible || self.concealedForMissionControl else { return }
+                let tickNow = ProcessInfo.processInfo.systemUptime
+                defer { self.updateMissionControlTimer() }
+                let appeared = overview && !self.overviewWasVisible
+                self.overviewWasVisible = overview
+                guard overview || self.concealedForMissionControl else { return }
+                let interval = self.concealedForMissionControl && !overview ? 0.08 : 0.5
+                guard appeared || tickNow - self.lastMissionControlProbe >= interval else { return }
+                self.lastMissionControlProbe = tickNow
+                self.sampleMissionControl()
+            }
         }
     }
 
@@ -872,6 +916,11 @@ final class NotchWindowHost: NSObject, CAAnimationDelegate {
     func close() {
         missionControlTimer?.invalidate()
         missionControlTimer = nil
+        missionControlCheckInFlight = false
+        if let activeSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
+            self.activeSpaceObserver = nil
+        }
         panel.visibilityDidChange = nil
         cancelRelocation()
         animationGeneration += 1

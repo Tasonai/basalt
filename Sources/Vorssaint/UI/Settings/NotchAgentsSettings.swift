@@ -8,6 +8,7 @@ import SwiftUI
 struct NotchAgentsSettingsControls: View {
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var usage = AgentUsageService.shared
+    @ObservedObject private var settingsWindow = SettingsWindowVisibility.shared
     @AppStorage(DefaultsKey.notchAgentsAntigravity) private var antigravity = true
     @AppStorage(DefaultsKey.notchAgentsClaude) private var claude = true
     @AppStorage(DefaultsKey.notchAgentsClaudeProfile) private var claudeProfile = ""
@@ -141,8 +142,12 @@ struct NotchAgentsSettingsControls: View {
             if claude {
                 Divider()
                 Text(text.claudeLimitsTitle).font(.subheadline.weight(.medium))
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    claudeLimitsStatus(now: context.date)
+                if settingsWindow.isVisible {
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        claudeLimitsStatus(now: context.date)
+                    }
+                } else {
+                    claudeLimitsStatus(now: Date())
                 }
                 if usage.claudeAccountChecking { ProgressView().controlSize(.small) }
                 if claudeProfile.isEmpty {

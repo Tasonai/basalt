@@ -134,12 +134,31 @@ final class ClipboardHistoryService: ObservableObject {
     private var migrateLegacyBlob = false
     private var sqliteStore: ClipboardSQLiteStore?
     private static let appDisplayNameCache = NSCache<NSString, NSString>()
+    private var displaysAsleep = false
+    private var displaySleepObservers: [NSObjectProtocol] = []
 
     private init() {
         load()
         setupSQLiteStore()
         setupProObservers()
         syncLiveVaultWatcher()
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        displaySleepObservers = [
+            wsCenter.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.displaysAsleep = true
+            },
+            wsCenter.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.displaysAsleep = false
+                if self.isRunning { self.captureIfChanged() }
+            },
+        ]
+    }
+
+    deinit {
+        for observer in displaySleepObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
     }
 
     func syncWithPreferences() {
@@ -704,7 +723,8 @@ final class ClipboardHistoryService: ObservableObject {
             return
         }
         let timer = Timer(timeInterval: 0.8, repeats: true) { [weak self] _ in
-            self?.captureIfChanged()
+            guard let self, !self.displaysAsleep, SessionActivity.shared.isActive else { return }
+            self.captureIfChanged()
         }
         timer.tolerance = 0.25
         RunLoop.main.add(timer, forMode: .common)
@@ -1237,14 +1257,9 @@ final class ClipboardHistoryService: ObservableObject {
             // Only a write that really landed retires the legacy blob, so a
             // failed save leaves the history readable from somewhere.
             guard PrivateFileStore.write(data, to: url) else { return }
-            if let store = self?.sqliteStore {
-                let rows = snapshot.map(Self.sqliteRow(from:))
-                store.upsertBatch(rows)
-                let indexedCount = store.totalCount()
-                DispatchQueue.main.async {
-                    self?.ftsIndexedCount = indexedCount
-                }
-            }
+            // SQLite is updated incrementally on capture (`indexAndSyncCapturedEntry`)
+            // and deletion (`syncSQLiteRemoval`), avoiding O(N) full-table rewrites
+            // on every clipboard mutation.
             finishPersist()
             if retireLegacyBlob {
                 UserDefaults.standard.removeObject(forKey: DefaultsKey.clipboardHistoryEntries)

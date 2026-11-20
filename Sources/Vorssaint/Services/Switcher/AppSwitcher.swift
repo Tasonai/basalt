@@ -280,9 +280,11 @@ final class AppSwitcher: ObservableObject {
         windowInventory.stop()
         secureInputWatch.stop()
         restoreNativeHotkeys()
+        stopObservingKeyboardLayout()
         stopObservingWake()
         routeLock.withLock { routeCanStartSession = false }
         removeTap()
+        WindowPreviewProvider.shared.stopWarming()
     }
 
     /// While a shortcut field is listening, every key has to reach it, even

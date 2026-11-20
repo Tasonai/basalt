@@ -165,8 +165,10 @@ final class FeatureRuntime: ObservableObject {
         // for the ones handled above costs nothing. A selected feature the
         // gate refused is not installed, so it is skipped like any other
         // unavailable one and its service never comes to life.
-        for feature in selected where feature.isAvailable {
-            Self.bindings[feature]?()
+        Self.withSyncBatch {
+            for feature in selected where feature.isAvailable {
+                Self.runBinding(for: feature)
+            }
         }
         if selected.contains(.notch) && AppFeature.notch.isAvailable {
             UserDefaults.standard.set(true, forKey: DefaultsKey.notchInitialExtensionsInstalled)
@@ -209,19 +211,65 @@ final class FeatureRuntime: ObservableObject {
         return UserDefaults.standard.persistentDomain(forName: domain) ?? [:]
     }
 
+    /// Tracks shared service sync keys already executed in the active batch so
+    /// multi-feature launches and permission updates never call the same service's
+    /// `syncWithPreferences()` repeatedly in a row. Main-thread only.
+    private static var activeBatchKeys: Set<String>?
+
+    private static func syncOnce(_ key: String, _ work: () -> Void) {
+        if activeBatchKeys != nil {
+            guard activeBatchKeys!.insert(key).inserted else { return }
+        }
+        work()
+    }
+
+    private static func withSyncBatch(_ work: () -> Void) {
+        let owned = activeBatchKeys == nil
+        if owned { activeBatchKeys = [] }
+        defer { if owned { activeBatchKeys = nil } }
+        work()
+    }
+
+    private static func batchDedupeKey(for feature: AppFeature) -> String? {
+        switch feature {
+        case .scrollInverter, .scrollHorizontal, .scrollZoom, .linearScroll:
+            return "scrollInverter"
+        case .monitorCPU, .monitorGPU, .monitorMemory, .monitorNetwork, .monitorDisk, .monitorPower:
+            return "monitor"
+        case .quickToggles, .quitApps:
+            return "quickToggles"
+        case .notch, .notchGestures, .notchTimer, .notchAccessories, .notchNotifications,
+             .notchDownloads, .notchCalendar, .notchAgents, .notchWatch, .notchMascot:
+            return AppFeature.notch.isAvailable ? "notch" : nil
+        default:
+            return nil
+        }
+    }
+
+    private static func runBinding(for feature: AppFeature) {
+        if activeBatchKeys != nil, let key = batchDedupeKey(for: feature) {
+            guard activeBatchKeys!.insert(key).inserted else { return }
+        }
+        bindings[feature]?()
+    }
+
     /// Launch path: replaces the old unconditional sync block. Only available
     /// features get their binding run, so nothing else even instantiates.
     func syncAtLaunch() {
-        for feature in AppFeature.allCases where feature.isAvailable {
-            Self.bindings[feature]?()
+        Self.withSyncBatch {
+            for feature in AppFeature.allCases where feature.isAvailable {
+                Self.runBinding(for: feature)
+            }
         }
     }
 
     /// Re-syncs a set of features (used by the permission sinks); skips
     /// unavailable ones so their singletons never come to life.
     func sync(_ features: [AppFeature]) {
-        for feature in features where feature.isAvailable {
-            Self.bindings[feature]?()
+        Self.withSyncBatch {
+            for feature in features where feature.isAvailable {
+                Self.runBinding(for: feature)
+            }
         }
     }
 
@@ -238,14 +286,14 @@ final class FeatureRuntime: ObservableObject {
     /// Media only binds so uninstalling it can cancel work already in flight.
     private static let bindings: [AppFeature: () -> Void] = [
         .switcher: {
-            WindowUseTracker.shared.syncWithFeatures()
+            FeatureRuntime.syncOnce("windowUseTracker") { WindowUseTracker.shared.syncWithFeatures() }
             AppSwitcher.shared.syncWithPreferences()
         },
         .dockPreview: { DockPreviewService.shared.syncWithPreferences() },
         .dockClick: { DockClickService.shared.syncWithPreferences() },
         .windowMaximizer: { WindowMaximizer.shared.syncWithPreferences() },
         .windowLayout: {
-            WindowUseTracker.shared.syncWithFeatures()
+            FeatureRuntime.syncOnce("windowUseTracker") { WindowUseTracker.shared.syncWithFeatures() }
             WindowLayoutService.shared.syncWithPreferences()
             PointerDisplayService.shared.syncWithPreferences()
         },
@@ -277,7 +325,7 @@ final class FeatureRuntime: ObservableObject {
             ClipboardAutoClearService.shared.syncWithPreferences()
         },
         .mediaTools: {
-            NotchFileToolsService.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("notchFileTools") { NotchFileToolsService.shared.syncWithPreferences() }
             guard !AppFeature.mediaTools.isAvailable else { return }
             MediaService.shared.cancel()
             ScreenRecorderService.shared.closeEditors(ownedBy: .mediaTools)
@@ -287,25 +335,25 @@ final class FeatureRuntime: ObservableObject {
         .finderRename: { FinderRenameService.shared.syncWithPreferences() },
         .shelf: {
             ShelfService.shared.syncWithPreferences()
-            NotchFileToolsService.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("notchFileTools") { NotchFileToolsService.shared.syncWithPreferences() }
         },
         .urlCleaner: { URLCleanerService.shared.syncWithPreferences() },
         .diskImageInstaller: { DiskImageInstallerService.shared.syncWithPreferences() },
         .mixer: {
             PreciseVolumeRollerService.shared.syncWithPreferences()
-            AppVolumeMixer.shared.syncWithPreferences()
-            AudioInputDeviceManager.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("appVolumeMixer") { AppVolumeMixer.shared.syncWithPreferences() }
+            FeatureRuntime.syncOnce("audioInputDeviceManager") { AudioInputDeviceManager.shared.syncWithPreferences() }
         },
         .soundOutputSwitcher: {
-            AppVolumeMixer.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("appVolumeMixer") { AppVolumeMixer.shared.syncWithPreferences() }
             SoundOutputSwitcher.shared.syncWithPreferences()
         },
         .audioPriority: {
             // Priority owns no sibling CoreAudio listener stack. Keep the
             // shared system-device observers alive even when Volume mixer is
             // not installed, then start/stop the policy that consumes them.
-            AppVolumeMixer.shared.syncWithPreferences()
-            AudioInputDeviceManager.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("appVolumeMixer") { AppVolumeMixer.shared.syncWithPreferences() }
+            FeatureRuntime.syncOnce("audioInputDeviceManager") { AudioInputDeviceManager.shared.syncWithPreferences() }
             AudioPriorityService.shared.syncWithPreferences()
         },
         .micMute: { MicMuteService.shared.syncWithPreferences() },
@@ -321,21 +369,21 @@ final class FeatureRuntime: ObservableObject {
         .bluetoothSleep: { BluetoothSleepService.shared.syncWithPreferences() },
         .quickLauncher: { QuickLauncherService.shared.syncWithPreferences() },
         .colorPicker: {
-            ScreenCaptureService.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("screenCapture") { ScreenCaptureService.shared.syncWithPreferences() }
         },
         .screenOCR: {
-            ScreenCaptureService.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("screenCapture") { ScreenCaptureService.shared.syncWithPreferences() }
             ScreenTextService.shared.syncWithPreferences()
         },
         .screenshot: {
-            ScreenCaptureService.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("screenCapture") { ScreenCaptureService.shared.syncWithPreferences() }
             ScreenshotService.shared.syncWithPreferences()
-            RecentCaptureService.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("recentCapture") { RecentCaptureService.shared.syncWithPreferences() }
         },
         .screenRecorder: {
-            ScreenCaptureService.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("screenCapture") { ScreenCaptureService.shared.syncWithPreferences() }
             ScreenRecorderService.shared.syncWithPreferences()
-            RecentCaptureService.shared.syncWithPreferences()
+            FeatureRuntime.syncOnce("recentCapture") { RecentCaptureService.shared.syncWithPreferences() }
         },
         .cameraPreview: { CameraPreviewService.shared.syncWithPreferences() },
         .wallpaper: { WallpaperService.shared.syncWithPreferences() },
@@ -403,7 +451,7 @@ final class FeatureRuntime: ObservableObject {
         .monitorDisk: { FeatureRuntime.syncMonitor() },
         .monitorPower: { FeatureRuntime.syncMonitor() },
         .fanControl: {
-            SystemMonitor.shared.planDidChange()
+            FeatureRuntime.syncOnce("systemMonitorPlan") { SystemMonitor.shared.planDidChange() }
             let defaults = UserDefaults.standard
             let needsRecovery = defaults.bool(forKey: DefaultsKey.fanControlRecoveryNeeded)
             let hasRegisteredHelper = !(defaults.string(forKey: DefaultsKey.fanControlHelperVersion) ?? "").isEmpty
@@ -414,8 +462,8 @@ final class FeatureRuntime: ObservableObject {
     ]
 
     private static func syncMonitor() {
-        SystemMonitor.shared.planDidChange()
-        MonitorAlertService.shared.syncWithPreferences()
+        syncOnce("systemMonitorPlan") { SystemMonitor.shared.planDidChange() }
+        syncOnce("monitorAlerts") { MonitorAlertService.shared.syncWithPreferences() }
     }
 }
 

@@ -38,10 +38,9 @@ final class WindowPreviewProvider {
         // they are the first thing this app sheds. They re-capture on the next
         // invocation (Stage Manager parked windows fall back to app icons
         // until their window becomes active again).
-        let source = DispatchSource.makeMemoryPressureSource(eventMask: .critical, queue: .main)
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
-            self?.cache.removeAll()
-            self?.lastTouched.removeAll()
+            self?.purgeCacheForMemoryPressure()
         }
         source.resume()
         pressureSource = source
@@ -49,6 +48,11 @@ final class WindowPreviewProvider {
 
     deinit {
         pressureSource?.cancel()
+    }
+
+    func purgeCacheForMemoryPressure() {
+        cache.removeAll(keepingCapacity: false)
+        lastTouched.removeAll(keepingCapacity: false)
     }
 
     func cachedPreview(for windowID: CGWindowID) -> CGImage? {

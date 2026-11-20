@@ -3829,9 +3829,27 @@ extension CommandBarService {
     }
 
     func attachAIImageFromClipboardOrPicker() {
-        if !attachClipboardImageForAI() {
-            attachImageFromFilePickerForAI()
-        }
+        GeneralPasteboardAccess.shared.async({ () -> (base64: String, thumbnail: NSImage)? in
+            let pasteboard = NSPasteboard.general
+            if let pngData = pasteboard.data(forType: .png),
+               let image = NSImage(data: pngData),
+               let encoded = Self.encodePNGDataBase64(from: image) {
+                return encoded
+            }
+            if let image = NSImage(pasteboard: pasteboard),
+               let encoded = Self.encodePNGDataBase64(from: image) {
+                return encoded
+            }
+            return nil
+        }, then: { [weak self] encoded in
+            guard let self else { return }
+            if let encoded {
+                self.pendingAIImageBase64 = encoded.base64
+                self.pendingAIImageThumbnail = encoded.thumbnail
+            } else {
+                self.attachImageFromFilePickerForAI()
+            }
+        })
     }
 
     func clearPendingAIImage() {
@@ -3868,6 +3886,7 @@ extension CommandBarService {
         }
         aiThreads[idx].messages.append(userMessage)
         aiThreads[idx].updatedAt = Date()
+        pruneAIThreadRetention(threadIndex: idx)
         let conversation = aiThreads[idx].messages
 
         CommandBarQuickAIService.shared.sendConversation(
@@ -3888,7 +3907,38 @@ extension CommandBarService {
                 )
                 self.aiThreads[threadIndex].messages.append(reply)
                 self.aiThreads[threadIndex].updatedAt = Date()
+                self.pruneAIThreadRetention(threadIndex: threadIndex)
             }
+        }
+    }
+
+    private func pruneAIThreadRetention(threadIndex: Int) {
+        guard aiThreads.indices.contains(threadIndex) else { return }
+        let maxMessagesPerThread = 40
+        if aiThreads[threadIndex].messages.count > maxMessagesPerThread {
+            let overflow = aiThreads[threadIndex].messages.count - maxMessagesPerThread
+            aiThreads[threadIndex].messages.removeFirst(overflow)
+        }
+        // Keep base64 Vision PNG payloads only on the 3 most recent messages to bound RAM.
+        var keptImages = 0
+        for msgIndex in stride(from: aiThreads[threadIndex].messages.count - 1, through: 0, by: -1) {
+            if aiThreads[threadIndex].messages[msgIndex].imagePNGDataBase64 != nil {
+                keptImages += 1
+                if keptImages > 3 {
+                    let old = aiThreads[threadIndex].messages[msgIndex]
+                    aiThreads[threadIndex].messages[msgIndex] = AIChatMessage(
+                        id: old.id,
+                        role: old.role,
+                        text: old.text,
+                        imagePNGDataBase64: nil,
+                        createdAt: old.createdAt
+                    )
+                }
+            }
+        }
+        let maxThreads = 20
+        if aiThreads.count > maxThreads {
+            aiThreads = Array(aiThreads.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxThreads))
         }
     }
 

@@ -35,11 +35,37 @@ final class ClipboardAutoClearService {
     private var sleepObserver: NSObjectProtocol?
     private var displaySleepObserver: NSObjectProtocol?
     private var screenLockObserver: NSObjectProtocol?
+    private var displaysAsleep = false
+    private var pollPauseObservers: [NSObjectProtocol] = []
     /// The app is not sandboxed, so the lock notification is delivered. There is
     /// no AppKit constant for it.
     private static let screenLockNotification = Notification.Name("com.apple.screenIsLocked")
 
-    private init() {}
+    private init() {
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        pollPauseObservers = [
+            wsCenter.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.displaysAsleep = true
+            },
+            wsCenter.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.displaysAsleep = false
+                if self.timer != nil { self.tick() }
+            },
+        ]
+        SessionActivity.shared.onChange { [weak self] active in
+            DispatchQueue.main.async {
+                guard let self, active, !self.displaysAsleep, self.timer != nil else { return }
+                self.tick()
+            }
+        }
+    }
+
+    deinit {
+        for observer in pollPauseObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+    }
 
     func syncWithPreferences() {
         configurationLock.lock()
@@ -117,6 +143,7 @@ final class ClipboardAutoClearService {
     }
 
     private func tick() {
+        guard !displaysAsleep, SessionActivity.shared.isActive else { return }
         let delay = Defaults.sanitizedClipboardAutoClearDelay(
             UserDefaults.standard.integer(forKey: DefaultsKey.clipboardAutoClearDelay))
         readChangeCount { [weak self] count in
