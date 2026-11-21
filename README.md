@@ -198,8 +198,8 @@ Reorder or hide panel sections, choose a compact layout, and export settings to 
 Build and install locally from this repository (Xcode Command Line Tools required):
 
 ```sh
-git clone https://github.com/Tasonai/vorssaint-utils.git
-cd vorssaint-utils
+git clone https://github.com/Tasonai/basalt.git
+cd basalt
 ./build.sh --install
 ```
 
@@ -247,8 +247,8 @@ See the [permissions guide](docs/PERMISSIONS.md) for which features need access 
 ### Build this custom Intel fork yourself
 
 ```sh
-git clone https://github.com/Tasonai/vorssaint-utils.git
-cd vorssaint-utils
+git clone https://github.com/Tasonai/basalt.git
+cd basalt
 ./build.sh --dev            # build the separate Developer variant
 ./build.sh --install        # build and install locally to /Applications
 ```

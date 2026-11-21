@@ -9,8 +9,8 @@ enum AppInfo {
     static let copyright = "Basalt · Based on Vorssaint © 2026 Vorssaint"
     static let websiteURL = URL(string: "https://vorssaint.com")!
     static let repositoryURL = URL(string: "https://github.com/vorssaint/vorssaint-utils")!
-    static let customForkRepositoryURL = URL(string: "https://github.com/Tasonai/vorssaint-utils")!
-    static let updateRepository = "Tasonai/vorssaint-utils"
+    static let customForkRepositoryURL = URL(string: "https://github.com/Tasonai/basalt")!
+    static let updateRepository = "Tasonai/basalt"
     static let coffeeURL = URL(string: "https://buymeacoffee.com/vorssaint")!
     static let discordURL = URL(string: "https://discord.gg/M6BwWH4BJp")!
     static let socialURL = URL(string: "https://x.com/vorssaint")!
